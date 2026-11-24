@@ -30,6 +30,7 @@ import type { BooleanOp } from '../engine/booleans';
 import { hasAnyEffects, hasVectorEffects } from '../engine/effects';
 import type { EffectModalTarget } from './EffectModal';
 import { AlignSection, HexColorRow, NumberField } from './InspectorControls';
+import { ColorField, Slider } from './controls';
 import {
   collectDocumentColors,
   DocumentColorSwatches,
@@ -51,6 +52,7 @@ interface InspectorProps {
   onUpdateArtboard: (
     patch: Partial<Pick<Scene, 'width' | 'height' | 'dpi' | 'background'>>
   ) => void;
+  onImportBackgroundImage: () => void;
   onUpdateLayers: (
     layerIds: string[],
     patch: Partial<Layer> | ((layer: Layer) => Layer)
@@ -197,6 +199,7 @@ export function Inspector({
   smartShapeOptions,
   onChangeSmartShapeOptions,
   onUpdateArtboard,
+  onImportBackgroundImage,
   onUpdateLayers,
   onSmoothLayers,
   onWobbleLayers,
@@ -304,18 +307,13 @@ export function Inspector({
                 <span>Точки / лучи</span>
                 <span className="font-mono text-paper-ink">{smartShapeOptions.points}</span>
               </div>
-              <input
-                type="range"
+              <Slider
+                value={smartShapeOptions.points}
                 min={3}
                 max={24}
                 step={1}
-                value={smartShapeOptions.points}
-                onChange={(e) =>
-                  onChangeSmartShapeOptions({
-                    points: Number.parseInt(e.target.value, 10),
-                  })
-                }
-                className="accent-paper-accent"
+                ariaLabel="Точки и лучи"
+                onChange={(points) => onChangeSmartShapeOptions({ points })}
               />
             </label>
           )}
@@ -328,18 +326,13 @@ export function Inspector({
                   {smartShapeOptions.wobble.toFixed(2)}
                 </span>
               </div>
-              <input
-                type="range"
+              <Slider
+                value={smartShapeOptions.wobble}
                 min={0}
                 max={1}
                 step={0.05}
-                value={smartShapeOptions.wobble}
-                onChange={(e) =>
-                  onChangeSmartShapeOptions({
-                    wobble: Number.parseFloat(e.target.value),
-                  })
-                }
-                className="accent-paper-accent"
+                ariaLabel="Неровность"
+                onChange={(wobble) => onChangeSmartShapeOptions({ wobble })}
               />
             </label>
           )}
@@ -362,18 +355,15 @@ export function Inspector({
                   {smartShapeOptions.innerRadiusRatio.toFixed(2)}
                 </span>
               </div>
-              <input
-                type="range"
+              <Slider
+                value={smartShapeOptions.innerRadiusRatio}
                 min={0.1}
                 max={0.9}
                 step={0.05}
-                value={smartShapeOptions.innerRadiusRatio}
-                onChange={(e) =>
-                  onChangeSmartShapeOptions({
-                    innerRadiusRatio: Number.parseFloat(e.target.value),
-                  })
+                ariaLabel="Внутренний радиус"
+                onChange={(innerRadiusRatio) =>
+                  onChangeSmartShapeOptions({ innerRadiusRatio })
                 }
-                className="accent-paper-accent"
               />
             </label>
           )}
@@ -430,6 +420,14 @@ export function Inspector({
               value={scene.background}
               onChange={(background) => onUpdateArtboard({ background })}
             />
+            <button
+              type="button"
+              onClick={onImportBackgroundImage}
+              className="flex h-7 items-center justify-center gap-1.5 rounded border border-paper-border bg-paper-bg text-[12px] text-paper-ink hover:bg-paper-hover"
+            >
+              <ImagePlus className="h-3.5 w-3.5 text-paper-accent" strokeWidth={1.75} />
+              <span>Фон из изображения</span>
+            </button>
           </div>
         </div>
       ) : singleLayer ? (
@@ -784,17 +782,14 @@ export function Inspector({
                 Общая заливка ({selectedPathIds.length})
               </span>
               <div className="flex items-center gap-2">
-                <input
-                  type="color"
+                <ColorField
                   value={
                     selectedLayers.find(
                       (l): l is PathLayer => l.type === 'path' && l.fill !== null
                     )?.fill ?? '#da7756'
                   }
-                  onChange={(e) =>
-                    onUpdateLayers(selectedPathIds, { fill: e.target.value })
-                  }
-                  className="h-7 w-9 cursor-pointer rounded border border-paper-border bg-paper-bg p-0.5"
+                  ariaLabel="Общая заливка"
+                  onChange={(fill) => onUpdateLayers(selectedPathIds, { fill })}
                 />
                 <button
                   type="button"

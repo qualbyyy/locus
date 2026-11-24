@@ -17,6 +17,7 @@ import type { AlignMode } from '../core/commands';
 import { BUILTIN_FONTS } from '../core/fonts';
 import { clamp } from '../core/math';
 import type { BuiltinFontFamily } from '../core/types';
+import { ColorField } from './controls';
 
 export function NumberField({
   label,
@@ -64,10 +65,8 @@ export function NumberField({
 
   const inputEl = (
     <input
-      type="number"
-      min={min}
-      max={max}
-      step={step}
+      type="text"
+      inputMode="decimal"
       value={draft}
       onFocus={(e) => {
         setFocused(true);
@@ -93,6 +92,12 @@ export function NumberField({
         } else if (e.key === 'Escape') {
           setDraft(format(value));
           e.currentTarget.blur();
+        } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          e.preventDefault();
+          const base = Number.parseFloat(draft);
+          if (!Number.isFinite(base)) return;
+          const delta = (e.key === 'ArrowUp' ? step : -step) * (e.shiftKey ? 10 : 1);
+          commit(String(base + delta));
         }
       }}
       className={
@@ -132,12 +137,7 @@ export function HexColorRow({
 
   return (
     <div className="flex items-center gap-2">
-      <input
-        type="color"
-        value={/^#[0-9a-fA-F]{6}$/.test(value) ? value : '#1c1b1a'}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-7 w-9 cursor-pointer rounded border border-paper-border bg-paper-bg p-0.5"
-      />
+      <ColorField value={value} onChange={onChange} />
       <input
         type="text"
         value={draft}

@@ -135,51 +135,34 @@
     user-select: text;
   }
 
-  input[type="number"]::-webkit-inner-spin-button,
-  input[type="number"]::-webkit-outer-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-paper-border) transparent;
   }
 
-  input[type="number"] {
-    -moz-appearance: textfield;
-    appearance: textfield;
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
   }
 
-  input[type="color"]::-webkit-color-swatch-wrapper {
-    padding: 2px;
+  ::-webkit-scrollbar-track {
+    background: transparent;
   }
 
-  input[type="color"]::-webkit-color-swatch {
-    border: none;
-    border-radius: 2px;
-  }
-
-  input[type="range"] {
-    -webkit-appearance: none;
-    appearance: none;
-    height: 4px;
+  ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
     border-radius: 9999px;
     background: var(--color-paper-border);
-    cursor: pointer;
+    background-clip: padding-box;
   }
 
-  input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 9999px;
-    background: var(--color-paper-accent);
-    border: 2px solid var(--color-paper-panel);
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-paper-muted);
+    background-clip: padding-box;
   }
 
-  input[type="range"]::-moz-range-thumb {
-    width: 12px;
-    height: 12px;
-    border-radius: 9999px;
-    background: var(--color-paper-accent);
-    border: 2px solid var(--color-paper-panel);
+  ::-webkit-scrollbar-corner {
+    background: transparent;
   }
 
   html[data-ui-scale="compact"],

@@ -21,12 +21,14 @@ import {
   type ContextMenuArea,
 } from './core/contextMenu';
 import {
+  addLayer,
   alignLayers,
   booleanLayers,
   combineCompoundPathLayers,
   convertTextLayersToOutlines,
   createClipMaskFromSelection,
   createImageLayer,
+  createLayerId,
   deleteAnchor,
   deleteLayers,
   deselectAllLayers,
@@ -69,7 +71,7 @@ import {
 import { openLocusFromBytes } from './export/projectFile';
 import { matchShortcut } from './core/shortcuts';
 import { useCanRedo, useCanUndo, useEditorStore } from './core/store';
-import type { Scene } from './core/types';
+import type { ImageLayer, Scene } from './core/types';
 import type { BooleanOp } from './engine/booleans';
 import { isCanvasZoomWheel } from './engine/zoom';
 import { hasAnyEffects } from './engine/effects';
@@ -91,6 +93,8 @@ import { SettingsModal } from './ui/SettingsModal';
 import { StartModal } from './ui/StartModal';
 import { Toolbar } from './ui/Toolbar';
 import { TopBar } from './ui/TopBar';
+
+const BACKGROUND_LAYER_NAME = 'Фон артборда';
 
 function stripFileExtension(fileName: string): string {
   const cleaned = fileName.replace(/\.[^.]+$/, '').trim();
@@ -302,6 +306,63 @@ export function App() {
     },
     [setActiveTool, setSelectedIds]
   );
+
+  const handleImportBackgroundImage = useCallback(async () => {
+    try {
+      const file = await pickOpenFile({
+        title: 'Фон артборда из изображения',
+        filters: [
+          { name: 'Изображения', extensions: ['png', 'jpg', 'jpeg', 'webp', 'svg'] },
+        ],
+      });
+      if (!file) return;
+
+      const asset = await registerAssetFromBytes({
+        bytes: file.bytes,
+        name: file.name,
+        mimeType: inferImageMimeType(file.name, file.bytes),
+      });
+
+      const scene = useEditorStore.getState().scene;
+      const previous = scene.layers.find(
+        (layer) => layer.type === 'image' && layer.name === BACKGROUND_LAYER_NAME
+      );
+      const coverScale = Math.max(
+        scene.width / Math.max(1, asset.naturalWidth),
+        scene.height / Math.max(1, asset.naturalHeight)
+      );
+
+      runCommandBatch(() => {
+        if (previous) {
+          deleteLayers([previous.id]);
+        }
+        const layer: ImageLayer = {
+          id: createLayerId('img'),
+          name: BACKGROUND_LAYER_NAME,
+          type: 'image',
+          visible: true,
+          locked: true,
+          x: scene.width / 2,
+          y: scene.height / 2,
+          rotation: 0,
+          scaleX: coverScale,
+          scaleY: coverScale,
+          opacity: 1,
+          assetId: asset.id,
+          width: asset.naturalWidth,
+          height: asset.naturalHeight,
+        };
+        const created = addLayer(layer, { select: false });
+        reorderLayer(created.id, 'back');
+      });
+
+      showNotice('Фон артборда заменён изображением');
+    } catch (err) {
+      showNotice(
+        err instanceof Error ? err.message : 'Не удалось загрузить фон артборда'
+      );
+    }
+  }, [showNotice]);
 
   const handlePlaceImage = useCallback(async () => {
     const file = await pickOpenFile({
@@ -1362,6 +1423,7 @@ export function App() {
                 smartShapeOptions={smartShapeOptions}
                 onChangeSmartShapeOptions={setSmartShapeOptions}
                 onUpdateArtboard={updateArtboard}
+                onImportBackgroundImage={() => void handleImportBackgroundImage()}
                 onUpdateLayers={updateLayers}
                 onSmoothLayers={(ids) => smoothLayers(ids, 1)}
                 onWobbleLayers={(ids, intensity) => wobbleLayers(ids, intensity)}

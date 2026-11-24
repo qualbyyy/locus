@@ -16,6 +16,7 @@ import type {
   WarpStyle,
 } from '../core/types';
 import { HexColorRow } from './InspectorControls';
+import { Checkbox, Select, Slider } from './controls';
 
 export type EffectModalTarget =
   | { kind: 'warp'; initialWarpStyle?: WarpStyle }
@@ -85,14 +86,13 @@ function SliderRow({
           {unit}
         </span>
       </div>
-      <input
-        type="range"
+      <Slider
+        value={value}
         min={min}
         max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="accent-paper-accent"
+        step={step ?? 1}
+        ariaLabel={label}
+        onChange={onChange}
       />
     </div>
   );
@@ -388,19 +388,14 @@ export function EffectModal({
             <>
               <div className="flex flex-col gap-1">
                 <span className="text-[11px] text-paper-muted">Стиль деформации</span>
-                <select
+                <Select
                   value={warp.style}
-                  onChange={(e) =>
-                    setWarp({ ...warp, style: e.target.value as WarpStyle })
+                  options={WARP_STYLES}
+                  ariaLabel="Стиль деформации"
+                  onChange={(value) =>
+                    setWarp({ ...warp, style: value as WarpStyle })
                   }
-                  className="h-7 rounded border border-paper-border bg-paper-bg px-2 text-[12px] text-paper-ink outline-none"
-                >
-                  {WARP_STYLES.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
+                />
               </div>
               <SliderRow
                 label="Изгиб"
@@ -446,15 +441,11 @@ export function EffectModal({
                 max={20}
                 onChange={(ridges) => setZigzag({ ...zigzag, ridges })}
               />
-              <label className="flex cursor-pointer items-center gap-2 text-[12px]">
-                <input
-                  type="checkbox"
-                  checked={zigzag.smooth}
-                  onChange={(e) => setZigzag({ ...zigzag, smooth: e.target.checked })}
-                  className="accent-paper-accent"
-                />
-                <span>Сглаженные волны</span>
-              </label>
+              <Checkbox
+                checked={zigzag.smooth}
+                onChange={(smooth) => setZigzag({ ...zigzag, smooth })}
+                label="Сглаженные волны"
+              />
             </>
           )}
 

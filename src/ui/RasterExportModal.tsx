@@ -5,6 +5,7 @@ import { clamp, computeCombinedWorldBBox } from '../core/math';
 import type { Scene } from '../core/types';
 import { rasterizeSceneToBytes } from '../export/rasterize';
 import { HexColorRow, NumberField, SegmentedButton } from './InspectorControls';
+import { Checkbox, Slider } from './controls';
 
 interface RasterExportModalProps {
   isOpen: boolean;
@@ -289,26 +290,21 @@ export function RasterExportModal({
                   <span className="font-medium text-paper-muted">Качество JPEG</span>
                   <span className="font-mono text-paper-ink">{quality}%</span>
                 </div>
-                <input
-                  type="range"
+                <Slider
+                  value={quality}
                   min={10}
                   max={100}
                   step={1}
-                  value={quality}
-                  onChange={(e) => setQuality(Number(e.target.value))}
-                  className="accent-paper-accent"
+                  ariaLabel="Качество JPEG"
+                  onChange={setQuality}
                 />
               </div>
             ) : (
-              <label className="flex cursor-pointer items-center gap-2 text-[12px] text-paper-ink">
-                <input
-                  type="checkbox"
-                  checked={transparent}
-                  onChange={(e) => setTransparent(e.target.checked)}
-                  className="accent-paper-accent"
-                />
-                <span>Прозрачный фон</span>
-              </label>
+              <Checkbox
+                checked={transparent}
+                onChange={setTransparent}
+                label="Прозрачный фон"
+              />
             )}
 
             {(format === 'jpg' || !transparent) && (

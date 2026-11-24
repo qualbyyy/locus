@@ -93,6 +93,24 @@ function readStringValue(raw: unknown, what: string, maxLength = 4000): string {
   return value;
 }
 
+function readFontWeight(raw: unknown, what: string): 400 | 700 {
+  const value =
+    typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : raw;
+  if (value !== 400 && value !== 700) {
+    fail(`${what}: допустимо 400 или 700`);
+  }
+  return value;
+}
+
+function optionalFontWeight(
+  args: Record<string, unknown>,
+  key: string
+): 400 | 700 | undefined {
+  const raw = args[key];
+  if (raw === undefined || raw === null) return undefined;
+  return readFontWeight(raw, key);
+}
+
 function optionalString(
   args: Record<string, unknown>,
   key: string,
@@ -360,7 +378,7 @@ function createText(args: Record<string, unknown>): Record<string, unknown> {
     content: requiredString(args, 'content', 5000),
     fontSize: optionalNumber(args, 'fontSize', 6, 1000, 48),
     fontFamily: optionalEnum(args, 'fontFamily', FONT_FAMILIES),
-    fontWeight: optionalEnum(args, 'fontWeight', [400, 700] as const),
+    fontWeight: optionalFontWeight(args, 'fontWeight'),
     lineHeight: optionalNumber(args, 'lineHeight', 0.6, 4, 1.2),
     letterSpacing: optionalNumber(args, 'letterSpacing', -20, 200, 0),
     align: optionalEnum(args, 'align', ['left', 'center', 'right'] as const),
@@ -451,7 +469,7 @@ function parseLayerPatch(raw: unknown): LayerPatch {
     patch.fontFamily = requiredEnum(obj, 'fontFamily', FONT_FAMILIES);
   }
   if (obj.fontWeight !== undefined) {
-    patch.fontWeight = requiredEnum(obj, 'fontWeight', [400, 700] as const);
+    patch.fontWeight = readFontWeight(obj.fontWeight, 'patch.fontWeight');
   }
   if (obj.lineHeight !== undefined) {
     patch.lineHeight = readNumberValue(obj.lineHeight, 'patch.lineHeight', 0.6, 4);
@@ -810,7 +828,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'string',
           enum: FONT_FAMILIES,
         },
-        fontWeight: { type: 'integer', enum: [400, 700] },
+        fontWeight: { type: 'integer', description: 'Жирность: 400 или 700' },
         lineHeight: { type: 'number', description: 'Межстрочный интервал, 0.6..4' },
         letterSpacing: { type: 'number', description: 'Трекинг, px' },
         align: { type: 'string', enum: ['left', 'center', 'right'] },
@@ -846,7 +864,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             content: { type: 'string', description: 'Текст для TextLayer' },
             fontSize: { type: 'number' },
             fontFamily: { type: 'string', enum: FONT_FAMILIES },
-            fontWeight: { type: 'integer', enum: [400, 700] },
+            fontWeight: { type: 'integer', description: 'Жирность: 400 или 700' },
             lineHeight: { type: 'number' },
             letterSpacing: { type: 'number' },
             align: { type: 'string', enum: ['left', 'center', 'right'] },

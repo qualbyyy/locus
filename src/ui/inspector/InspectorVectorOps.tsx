@@ -15,6 +15,7 @@ import {
 import type { PathLayer } from '../../core/types';
 import type { BooleanOp } from '../../engine/booleans';
 import { NumberField } from '../InspectorControls';
+import { Slider } from '../controls';
 
 interface InspectorVectorOpsProps {
   layer: PathLayer;
@@ -75,16 +76,14 @@ export function InspectorVectorOps({
       </div>
 
       <div className="flex items-center gap-2">
-        <input
-          type="range"
+        <Slider
+          value={wobbleIntensity}
           min={1}
           max={25}
           step={1}
-          value={wobbleIntensity}
-          onChange={(e) =>
-            setWobbleIntensity(Number.parseInt(e.target.value, 10))
-          }
-          className="min-w-0 flex-1 accent-paper-accent"
+          ariaLabel="Интенсивность искажения"
+          onChange={setWobbleIntensity}
+          className="min-w-0 flex-1"
         />
         <button
           type="button"

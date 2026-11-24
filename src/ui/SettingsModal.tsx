@@ -49,6 +49,7 @@ import {
   NumberField,
   SegmentedButton,
 } from './InspectorControls';
+import { Slider } from './controls';
 
 type SettingsTabId =
   | 'appearance'
@@ -750,18 +751,13 @@ export function SettingsModal({
                         {Math.round(settings.gridOpacity * 100)}%
                       </span>
                     </div>
-                    <input
-                      type="range"
+                    <Slider
+                      value={settings.gridOpacity}
                       min={0.05}
                       max={0.6}
                       step={0.01}
-                      value={settings.gridOpacity}
-                      onChange={(e) =>
-                        updateSettings({
-                          gridOpacity: Number.parseFloat(e.target.value),
-                        })
-                      }
-                      className="accent-paper-accent"
+                      ariaLabel="Прозрачность сетки"
+                      onChange={(gridOpacity) => updateSettings({ gridOpacity })}
                     />
                   </label>
                 </div>

@@ -15,14 +15,6 @@ export interface CommandBarProps {
 
 type CommandStatus = 'idle' | 'running' | 'done' | 'error';
 
-const EXAMPLES = [
-  'Создай постер в тёплой бумажной палитре',
-  'Добавь заголовок «Locus» сверху по центру',
-  'Выровняй выделенные слои по центру артборда',
-  'Добавь кляксу за заголовком',
-  'Перекрась фигуры в палитру #da7756, #2f5d62, #e9c46a',
-];
-
 interface StepInfo {
   step: number;
   maxSteps: number;
@@ -147,8 +139,6 @@ export function CommandBar({
 
   if (!isOpen) return null;
 
-  const showExamples = status === 'idle' && log.length === 0 && !answer && !error;
-
   return (
     <div
       onMouseDown={(event) => {
@@ -190,7 +180,6 @@ export function CommandBar({
             ref={textareaRef}
             value={prompt}
             rows={3}
-            placeholder="Опишите, что нужно сделать: «сделай заголовок крупнее и перекрась фигуры в тёплую палитру»"
             onChange={(event) => setPrompt(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
@@ -200,24 +189,6 @@ export function CommandBar({
             }}
             className="resize-none rounded border border-paper-border bg-paper-bg px-3 py-2 text-[13px] leading-relaxed text-paper-ink outline-none placeholder:text-paper-muted focus:border-paper-accent"
           />
-
-          {showExamples && (
-            <div className="flex flex-wrap gap-1.5">
-              {EXAMPLES.map((example) => (
-                <button
-                  key={example}
-                  type="button"
-                  onClick={() => {
-                    setPrompt(example);
-                    textareaRef.current?.focus();
-                  }}
-                  className="rounded border border-paper-border bg-paper-bg px-2 py-1 text-[11px] text-paper-muted hover:border-paper-accent hover:text-paper-ink"
-                >
-                  {example}
-                </button>
-              ))}
-            </div>
-          )}
 
           {log.length > 0 && (
             <ul className="flex max-h-44 flex-col gap-1 overflow-y-auto rounded border border-paper-border bg-paper-bg px-2.5 py-2">
@@ -280,10 +251,7 @@ export function CommandBar({
           )}
         </div>
 
-        <div className="flex items-center justify-between gap-3 border-t border-paper-border px-4 py-2.5">
-          <span className="text-[11px] text-paper-muted">
-            Enter — выполнить · Shift+Enter — новая строка · Ctrl+K — закрыть
-          </span>
+        <div className="flex items-center justify-end gap-3 border-t border-paper-border px-4 py-2.5">
           <div className="flex items-center gap-2">
             {isRunning ? (
               <button

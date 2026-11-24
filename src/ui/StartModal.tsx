@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ArrowLeftRight, FolderOpen, X } from 'lucide-react';
 import { DOCUMENT_PRESETS, type DocumentPreset } from '../core/types';
 import { NumberField } from './InspectorControls';
+import { ColorField } from './controls';
 
 function PresetRatioPreview({
   width,
@@ -226,11 +227,10 @@ export function StartModal({
                 <label className="flex flex-col gap-1">
                   <span className="text-[11px] text-paper-muted">Фон</span>
                   <div className="flex items-center gap-1.5">
-                    <input
-                      type="color"
+                    <ColorField
                       value={background}
-                      onChange={(e) => setBackground(e.target.value)}
-                      className="h-8 w-9 cursor-pointer rounded border border-paper-border bg-paper-bg p-0.5"
+                      ariaLabel="Цвет фона документа"
+                      onChange={setBackground}
                     />
                     <input
                       type="text"
