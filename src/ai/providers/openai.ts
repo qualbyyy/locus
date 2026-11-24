@@ -85,7 +85,7 @@ export function createOpenAISend(
 ): AiSendChat {
   return async ({ system, messages, tools, signal }: AiChatRequest) => {
     const baseUrl = normalizeBaseUrl(ai.openaiBaseUrl, 'https://api.openai.com/v1');
-    const model = ai.openaiModel.trim() || 'gpt-4o-mini';
+    const model = ai.openaiModel.trim() || 'gpt-6-luna';
     const apiKey = ai.openaiApiKey.trim();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',

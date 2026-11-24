@@ -64,7 +64,7 @@ export function createOllamaSend(
 ): AiSendChat {
   return async ({ system, messages, tools, signal }: AiChatRequest) => {
     const baseUrl = normalizeOllamaBaseUrl(ai.ollamaBaseUrl);
-    const model = ai.ollamaModel.trim() || 'qwen2.5-coder:7b';
+    const model = ai.ollamaModel.trim() || 'qwen3.8';
 
     const response = await fetchImpl(`${baseUrl}/api/chat`, {
       method: 'POST',

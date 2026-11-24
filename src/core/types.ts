@@ -178,14 +178,14 @@ export type AIProviderType = 'gemini' | 'anthropic' | 'ollama' | 'openai';
 export interface AIConfig {
   provider: AIProviderType;
   geminiApiKey: string;
-  geminiModel: string;     // по умолчанию 'gemini-2.5-flash'
+  geminiModel: string;     // по умолчанию 'gemini-4-neon'
   anthropicApiKey: string;
-  anthropicModel: string;  // по умолчанию 'claude-sonnet-4-5'
+  anthropicModel: string;  // по умолчанию 'claude-sonnet-5-5'
   ollamaBaseUrl: string;   // по умолчанию 'http://localhost:11434'
-  ollamaModel: string;     // по умолчанию 'qwen2.5-coder:7b'
+  ollamaModel: string;     // по умолчанию 'qwen3.8'
   openaiBaseUrl: string;   // например 'https://api.openai.com/v1' или 'https://api.deepseek.com/v1'
   openaiApiKey: string;
-  openaiModel: string;
+  openaiModel: string;     // по умолчанию 'gpt-6-luna'
 }
 
 export interface BBox {

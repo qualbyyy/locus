@@ -50,14 +50,14 @@ export interface AppSettings {
 export const DEFAULT_AI_CONFIG: AIConfig = {
   provider: 'openai',
   geminiApiKey: '',
-  geminiModel: 'gemini-2.5-flash',
+  geminiModel: 'gemini-4-neon',
   anthropicApiKey: '',
-  anthropicModel: 'claude-sonnet-4-5',
+  anthropicModel: 'claude-sonnet-5-5',
   ollamaBaseUrl: 'http://localhost:11434',
-  ollamaModel: 'qwen2.5-coder:7b',
+  ollamaModel: 'qwen3.8',
   openaiBaseUrl: 'https://api.openai.com/v1',
   openaiApiKey: '',
-  openaiModel: 'gpt-4o-mini',
+  openaiModel: 'gpt-6-luna',
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {

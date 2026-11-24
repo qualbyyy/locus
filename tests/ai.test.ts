@@ -283,7 +283,7 @@ describe('AI provider adapters', () => {
     expect(reply.toolCalls[0].args.width).toBe(30);
 
     const body = JSON.parse(String(calls[0].init?.body));
-    expect(calls[0].url).toContain('gemini-2.5-flash:generateContent');
+    expect(calls[0].url).toContain('gemini-4-neon:generateContent');
     expect((calls[0].init?.headers as Record<string, string>)['x-goog-api-key']).toBe(
       'gem-key'
     );

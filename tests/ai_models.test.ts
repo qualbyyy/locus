@@ -37,7 +37,7 @@ describe('AI providers and model fetching', () => {
     const deepseek = OPENAI_COMPATIBLE_PRESETS.find((p) => p.id === 'deepseek');
     expect(deepseek).toBeDefined();
     expect(deepseek?.baseUrl).toBe('https://api.deepseek.com/v1');
-    expect(deepseek?.defaultModel).toBe('deepseek-chat');
+    expect(deepseek?.defaultModel).toBe('deepseek-flash');
   });
 
   it('parses provider payloads and normalizes Ollama URL', () => {

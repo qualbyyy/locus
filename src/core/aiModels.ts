@@ -14,29 +14,39 @@ export const OPENAI_COMPATIBLE_PRESETS: OpenAICompatiblePreset[] = [
     id: 'openai',
     label: 'OpenAI',
     baseUrl: 'https://api.openai.com/v1',
-    defaultModel: 'gpt-4o-mini',
-    models: ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4.1'],
+    defaultModel: 'gpt-6-luna',
+    models: ['gpt-6-luna', 'gpt-6.2-sol', 'gpt-6.2-astra'],
   },
   {
     id: 'deepseek',
     label: 'DeepSeek',
     baseUrl: 'https://api.deepseek.com/v1',
-    defaultModel: 'deepseek-chat',
-    models: ['deepseek-chat', 'deepseek-reasoner'],
+    defaultModel: 'deepseek-flash',
+    models: ['deepseek-flash', 'deepseek-v4-pro'],
   },
   {
     id: 'openrouter',
     label: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1',
-    defaultModel: 'openai/gpt-4o-mini',
-    models: ['openai/gpt-4o-mini', 'anthropic/claude-sonnet-4', 'deepseek/deepseek-chat'],
+    defaultModel: 'openai/gpt-6.2-sol',
+    models: [
+      'openai/gpt-6.2-sol',
+      'anthropic/claude-sonnet-5.5',
+      'google/gemini-4-neon',
+      'deepseek/deepseek-v4.1-flash',
+    ],
   },
   {
     id: 'groq',
     label: 'Groq',
     baseUrl: 'https://api.groq.com/openai/v1',
-    defaultModel: 'llama-3.3-70b-versatile',
-    models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
+    defaultModel: 'openai/gpt-oss-120b',
+    models: [
+      'openai/gpt-oss-120b',
+      'qwen/qwen3.8-27b',
+      'moonshotai/kimi-k2-instruct',
+      'llama-3.3-70b-versatile',
+    ],
   },
   {
     id: 'lmstudio',
@@ -48,10 +58,15 @@ export const OPENAI_COMPATIBLE_PRESETS: OpenAICompatiblePreset[] = [
 ];
 
 export const PROVIDER_QUICK_MODELS: Record<AIProviderType, string[]> = {
-  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
-  anthropic: ['claude-sonnet-4-5', 'claude-haiku-4-5', 'claude-opus-4-1'],
-  ollama: ['qwen2.5-coder:7b', 'llama3.2', 'gemma3:4b'],
-  openai: ['gpt-4o-mini', 'deepseek-chat', 'gpt-4.1'],
+  gemini: ['gemini-4-carbon', 'gemini-4-neon', 'gemini-4-argon', 'gemini-3.8-flash'],
+  anthropic: [
+    'claude-sonnet-5-5',
+    'claude-opus-5-5',
+    'claude-haiku-5-5',
+    'claude-fable-5-2',
+  ],
+  ollama: ['qwen3.8', 'gpt-oss:20b', 'deepseek-v4.1-flash', 'gemma4'],
+  openai: ['gpt-6-luna', 'gpt-6.2-sol', 'gpt-6.2-astra'],
 };
 
 export function normalizeBaseUrl(raw: string, fallback: string): string {

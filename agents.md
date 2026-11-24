@@ -519,7 +519,7 @@ export type AIProviderType = 'gemini' | 'openai';
 export interface AIConfig {
   provider: AIProviderType;
   geminiApiKey: string;
-  geminiModel: string;     // по умолчанию 'gemini-2.5-flash'
+  geminiModel: string;     // по умолчанию 'gemini-4-neon'
   openaiBaseUrl: string;   // например 'https://api.openai.com/v1' или 'http://localhost:11434/v1'
   openaiApiKey: string;
   openaiModel: string;
@@ -587,7 +587,7 @@ export interface BBox {
 
 ### Хранение настроек (`src/ai/config.ts`)
 * Настройки хранятся в `$APPCONFIG/locus/settings.json` через `src/platform/io.ts` (никогда не записываются в `.locus` и не попадают в репозиторий).
-* Провайдер по умолчанию — OpenAI-compatible (`gpt-4o-mini`); порядок в настройках: OpenAI / API → Anthropic → Google Gemini → Ollama. Для OpenAI-compatible поддерживаются облачные эндпоинты и локальные серверы (Ollama `http://localhost:11434/v1`, LM Studio и т.п.).
+* Провайдер по умолчанию — OpenAI-compatible (`gpt-6-luna`); порядок в настройках: OpenAI / API → Anthropic → Google Gemini → Ollama. Быстрые модели актуализированы в `src/core/aiModels.ts`: OpenAI `gpt-6-luna` / `gpt-6.2-sol` / `gpt-6.2-astra`, Anthropic `claude-sonnet-5-5` / `claude-opus-5-5` / `claude-haiku-5-5`, Gemini `gemini-4-carbon` / `gemini-4-neon` / `gemini-4-argon` / `gemini-3.8-flash`, DeepSeek `deepseek-flash` / `deepseek-v4-pro`, Ollama `qwen3.8` / `gpt-oss:20b` / `deepseek-v4.1-flash` / `gemma4`. Для OpenAI-compatible поддерживаются облачные эндпоинты и локальные серверы (Ollama `http://localhost:11434/v1`, LM Studio и т.п.).
 * Если API-ключ не задан, окно ИИ показывает ошибку и открывает вкладку «ИИ» настроек (`initialTab` у `SettingsModal`).
 * Возможности vision не определяются эвристикой приложения: изображения отправляются модели всегда, а сообщение о неподдержке приходит от провайдера и показывается как «Модель не приняла изображение: …».
 

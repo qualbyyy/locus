@@ -82,7 +82,7 @@ export function createGeminiSend(
     if (!apiKey) {
       throw new Error('Нет API-ключа — укажите его в настройках (Ctrl+,)');
     }
-    const model = (ai.geminiModel.trim() || 'gemini-2.5-flash').replace(/^models\//, '');
+    const model = (ai.geminiModel.trim() || 'gemini-4-neon').replace(/^models\//, '');
     const response = await fetchImpl(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
       {

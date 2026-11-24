@@ -92,7 +92,7 @@ export function createAnthropicSend(
     if (!apiKey) {
       throw new Error('Нет API-ключа — укажите его в настройках (Ctrl+,)');
     }
-    const model = ai.anthropicModel.trim() || 'claude-sonnet-4-5';
+    const model = ai.anthropicModel.trim() || 'claude-sonnet-5-5';
 
     const response = await fetchImpl('https://api.anthropic.com/v1/messages', {
       method: 'POST',
