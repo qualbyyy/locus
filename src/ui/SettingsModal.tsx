@@ -1301,13 +1301,20 @@ export function SettingsModal({
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
                     О приложении
                   </span>
-                  <div className="rounded border border-paper-border bg-paper-bg/50 p-3">
-                    <div className="text-[14px] font-semibold text-paper-ink">
-                      {APP_INFO.name}
+                  <div className="flex items-center gap-3 rounded border border-paper-border bg-paper-bg/50 p-3">
+                    <img
+                      src="/icon.svg"
+                      alt={`Логотип ${APP_INFO.name}`}
+                      className="h-12 w-12 shrink-0 rounded-[10px] border border-paper-border"
+                    />
+                    <div className="min-w-0">
+                      <div className="text-[14px] font-semibold text-paper-ink">
+                        {APP_INFO.name}
+                      </div>
+                      <p className="mt-1 text-[12px] text-paper-muted">
+                        {APP_INFO.description}
+                      </p>
                     </div>
-                    <p className="mt-1 text-[12px] text-paper-muted">
-                      {APP_INFO.description}
-                    </p>
                   </div>
                   <dl className="grid grid-cols-[150px_1fr] gap-x-3 gap-y-1.5 text-[12px]">
                     <AboutRow label="Версия" value={APP_INFO.version} />
