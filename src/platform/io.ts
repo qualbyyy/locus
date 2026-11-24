@@ -155,6 +155,63 @@ export async function saveFileBytes(
 }
 
 const MEMORY_CONFIG_FALLBACK = new Map<string, string>();
+const MEMORY_BYTES_FALLBACK = new Map<string, Uint8Array>();
+
+function bytesToBase64(bytes: Uint8Array): string {
+  const chunkSize = 8192;
+  const parts: string[] = [];
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const slice = bytes.subarray(i, Math.min(bytes.length, i + chunkSize));
+    parts.push(String.fromCharCode(...slice));
+  }
+  return btoa(parts.join(''));
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+export async function readAppConfigBytes(relPath: string): Promise<Uint8Array | null> {
+  if (isTauri()) {
+    const { BaseDirectory, exists, readFile } = await import('@tauri-apps/plugin-fs');
+    const found = await exists(relPath, { baseDir: BaseDirectory.AppConfig });
+    if (!found) return null;
+    return readFile(relPath, { baseDir: BaseDirectory.AppConfig });
+  }
+
+  if (typeof localStorage !== 'undefined') {
+    const raw = localStorage.getItem(`locus-bytes:${relPath}`);
+    return raw ? base64ToBytes(raw) : null;
+  }
+  return MEMORY_BYTES_FALLBACK.get(relPath) ?? null;
+}
+
+export async function writeAppConfigBytes(
+  relPath: string,
+  data: Uint8Array
+): Promise<void> {
+  if (isTauri()) {
+    const { BaseDirectory, mkdir, writeFile } = await import('@tauri-apps/plugin-fs');
+    const parts = relPath.split('/').filter(Boolean);
+    if (parts.length > 1) {
+      const dir = parts.slice(0, -1).join('/');
+      await mkdir(dir, { baseDir: BaseDirectory.AppConfig, recursive: true });
+    }
+    await writeFile(relPath, data, { baseDir: BaseDirectory.AppConfig });
+    return;
+  }
+
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(`locus-bytes:${relPath}`, bytesToBase64(data));
+    return;
+  }
+  MEMORY_BYTES_FALLBACK.set(relPath, data);
+}
 
 export async function readAppConfigText(relPath: string): Promise<string | null> {
   if (isTauri()) {

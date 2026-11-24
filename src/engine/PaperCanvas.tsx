@@ -140,7 +140,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     const gridOpacity = useSettingsStore((s) => s.settings.gridOpacity);
     const accentColor = useSettingsStore((s) => s.settings.accentColor);
     const showPerfStats = useSettingsStore((s) => s.settings.showPerfStats);
-    const canvasBackdrop = useCanvasBackdropStore((s) => s.meta?.dataUrl ?? null);
+    const canvasBackdrop = useCanvasBackdropStore((s) => s.meta?.url ?? null);
 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);

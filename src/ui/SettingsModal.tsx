@@ -558,7 +558,9 @@ export function SettingsModal({
       setCanvasStatus('Фон рабочей области обновлён');
     } catch (err) {
       setCanvasStatus(
-        err instanceof Error ? err.message : 'Не удалось загрузить изображение'
+        err instanceof Error
+          ? `Не удалось загрузить изображение: ${err.message}`
+          : 'Не удалось загрузить изображение'
       );
     } finally {
       setIsCanvasImageLoading(false);

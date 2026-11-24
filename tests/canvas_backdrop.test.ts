@@ -14,7 +14,7 @@ describe('workspace canvas backdrop', () => {
       mimeType: 'image/png',
       bytes,
     });
-    expect(saved.dataUrl.startsWith('data:image/png;base64,')).toBe(true);
+    expect(saved.url).toMatch(/^(blob:|data:image\/png)/);
 
     useCanvasBackdropStore.setState({ meta: null });
     const loaded = await useCanvasBackdropStore.getState().load();
@@ -24,13 +24,13 @@ describe('workspace canvas backdrop', () => {
     expect(useCanvasBackdropStore.getState().meta).toBeNull();
   });
 
-  it('rejects images larger than 8 MB', async () => {
+  it('rejects images larger than 24 MB', async () => {
     await expect(
       useCanvasBackdropStore.getState().save({
         name: 'huge.png',
         mimeType: 'image/png',
-        bytes: new Uint8Array(8 * 1024 * 1024 + 1),
+        bytes: new Uint8Array(24 * 1024 * 1024 + 1),
       })
-    ).rejects.toThrow('8 МБ');
+    ).rejects.toThrow('24 МБ');
   });
 });
