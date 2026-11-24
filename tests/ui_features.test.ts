@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   APP_INFO,
   formatDiagnostics,
+  getRuntimeDiagnostics,
 } from '../src/core/appInfo';
 import {
   getWheelZoomFactor,
@@ -123,6 +124,26 @@ describe('UI features: context menu and canvas zoom', () => {
     expect(diagnostics).toContain('0.1.0');
     expect(diagnostics).toContain('Linux x86_64');
     expect(diagnostics).toContain('Browser');
+    expect(diagnostics).not.toContain('fake-api-key');
+  });
+
+  it('exposes identity-only about data without a capabilities list', () => {
+    expect(APP_INFO.name).toBe('Locus');
+    expect(APP_INFO.version.length).toBeGreaterThan(0);
+    expect(Object.keys(APP_INFO)).not.toContain('capabilities');
+    expect(Object.keys(APP_INFO)).not.toContain('features');
+  });
+
+  it('never copies API keys into diagnostics', () => {
+    const runtime = {
+      ...getRuntimeDiagnostics(),
+      ai: {
+        geminiApiKey: 'fake-api-key',
+        openaiApiKey: 'fake-api-key',
+      },
+    };
+    const diagnostics = formatDiagnostics(runtime);
+
     expect(diagnostics).not.toContain('fake-api-key');
   });
 

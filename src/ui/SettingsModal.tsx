@@ -5,6 +5,7 @@ import {
   Eye,
   EyeOff,
   Grid3x3,
+  Info,
   Keyboard,
   Palette,
   RefreshCw,
@@ -34,6 +35,11 @@ import {
   type ShortcutActionId,
   type ShortcutCategory,
 } from '../core/shortcuts';
+import {
+  APP_INFO,
+  formatDiagnostics,
+  getRuntimeDiagnostics,
+} from '../core/appInfo';
 import { ACCENT_PRESETS, getThemePreset, THEME_PRESETS } from '../core/themes';
 import type { AIProviderType, Scene } from '../core/types';
 import {
@@ -42,7 +48,13 @@ import {
   SegmentedButton,
 } from './InspectorControls';
 
-type SettingsTabId = 'appearance' | 'canvas' | 'tech' | 'shortcuts' | 'ai';
+type SettingsTabId =
+  | 'appearance'
+  | 'canvas'
+  | 'tech'
+  | 'shortcuts'
+  | 'ai'
+  | 'about';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -60,6 +72,7 @@ const TABS: Array<{
   { id: 'tech', label: 'Технические', Icon: Wrench },
   { id: 'shortcuts', label: 'Горячие клавиши', Icon: Keyboard },
   { id: 'ai', label: 'ИИ', Icon: Sparkles },
+  { id: 'about', label: 'О приложении', Icon: Info },
 ];
 
 const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
@@ -303,6 +316,15 @@ function AIModelField({
   );
 }
 
+function AboutRow({ label, value }: { label: string; value: string }) {
+  return (
+    <>
+      <dt className="text-paper-muted">{label}</dt>
+      <dd className="text-paper-ink">{value}</dd>
+    </>
+  );
+}
+
 export function SettingsModal({
   isOpen,
   onClose,
@@ -329,6 +351,7 @@ export function SettingsModal({
   >({});
   const [isFetchingModels, setIsFetchingModels] = useState(false);
   const [modelsFetchError, setModelsFetchError] = useState<string | null>(null);
+  const [aboutStatus, setAboutStatus] = useState<string | null>(null);
   const [draftState, setDraftState] = useState<{
     savedAt: number;
     scene: Scene;
@@ -402,6 +425,17 @@ export function SettingsModal({
     window.addEventListener('keydown', handleCloseKeyDown);
     return () => window.removeEventListener('keydown', handleCloseKeyDown);
   }, [isOpen, onClose, recordingAction]);
+
+  const handleCopyDiagnostics = async () => {
+    try {
+      await navigator.clipboard.writeText(
+        formatDiagnostics(getRuntimeDiagnostics())
+      );
+      setAboutStatus('Сведения скопированы');
+    } catch {
+      setAboutStatus('Не удалось скопировать сведения');
+    }
+  };
 
   const handleFetchModels = async () => {
     const provider = settings.ai.provider;
@@ -1260,7 +1294,79 @@ export function SettingsModal({
                 })()}
               </div>
             )}
+
+            {activeTab === 'about' && (
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+                    О приложении
+                  </span>
+                  <div className="rounded border border-paper-border bg-paper-bg/50 p-3">
+                    <div className="text-[14px] font-semibold text-paper-ink">
+                      {APP_INFO.name}
+                    </div>
+                    <p className="mt-1 text-[12px] text-paper-muted">
+                      {APP_INFO.description}
+                    </p>
+                  </div>
+                  <dl className="grid grid-cols-[150px_1fr] gap-x-3 gap-y-1.5 text-[12px]">
+                    <AboutRow label="Версия" value={APP_INFO.version} />
+                    <AboutRow label="Сборка" value={APP_INFO.build} />
+                    <AboutRow label="Лицензия" value={APP_INFO.license} />
+                    <AboutRow label="Создатель" value={APP_INFO.creator} />
+                    <AboutRow label="Контакты" value={APP_INFO.contacts} />
+                    <AboutRow label="Документация" value={APP_INFO.documentation} />
+                    <AboutRow label="Репозиторий" value={APP_INFO.repository} />
+                    <AboutRow label="Сообщить о проблеме" value={APP_INFO.issues} />
+                  </dl>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+                    Сторонние компоненты
+                  </span>
+                  <p className="text-[12px] text-paper-ink">{APP_INFO.thirdParty}</p>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+                    Диагностика
+                  </span>
+                  <p className="text-[12px] text-paper-muted">
+                    Сведения о системе не содержат API-ключей, файлов проекта и изображений.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleCopyDiagnostics()}
+                      className="h-7 rounded border border-paper-border bg-paper-panel px-2.5 text-[12px] text-paper-ink hover:bg-paper-hover"
+                    >
+                      Скопировать сведения о системе
+                    </button>
+                    {aboutStatus && (
+                      <span className="text-[11px] text-paper-muted">
+                        {aboutStatus}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
+        </div>
+
+        <div className="flex h-10 shrink-0 items-center justify-between border-t border-paper-border px-4">
+          <span className="text-[11px] text-paper-muted">
+            Обучающие материалы появятся позже
+          </span>
+          <button
+            type="button"
+            disabled
+            title="Раздел будет добавлен позже"
+            className="h-7 cursor-not-allowed rounded border border-paper-border bg-paper-bg px-2.5 text-[12px] text-paper-muted opacity-60"
+          >
+            Обучение
+          </button>
         </div>
       </div>
     </div>
