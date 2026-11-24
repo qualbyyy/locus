@@ -50,9 +50,9 @@ export interface AppSettings {
 export const DEFAULT_AI_CONFIG: AIConfig = {
   provider: 'openai',
   geminiApiKey: '',
-  geminiModel: 'gemini-4-neon',
+  geminiModel: 'gemini-4-hydrogen',
   anthropicApiKey: '',
-  anthropicModel: 'claude-sonnet-5-5',
+  anthropicModel: 'claude-haiku-5-5',
   ollamaBaseUrl: 'http://localhost:11434',
   ollamaModel: 'qwen3.8',
   openaiBaseUrl: 'https://api.openai.com/v1',

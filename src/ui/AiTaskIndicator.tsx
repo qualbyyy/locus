@@ -1,21 +1,7 @@
-import { useEffect, useState, type CSSProperties } from 'react';
 import { Loader2, Sparkles, Square, X } from 'lucide-react';
 import { useAiTaskStore } from '../ai/taskStore';
 
-export interface ArtboardScreenRect {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
-export function AiTaskIndicator({
-  onOpen,
-  getArtboardRect,
-}: {
-  onOpen: () => void;
-  getArtboardRect?: () => ArtboardScreenRect | null;
-}) {
+export function AiTaskIndicator({ onOpen }: { onOpen: () => void }) {
   const minimized = useAiTaskStore((s) => s.minimized);
   const status = useAiTaskStore((s) => s.status);
   const step = useAiTaskStore((s) => s.step);
@@ -26,31 +12,7 @@ export function AiTaskIndicator({
   const restore = useAiTaskStore((s) => s.restore);
   const reset = useAiTaskStore((s) => s.reset);
 
-  const [artboardRect, setArtboardRect] = useState<ArtboardScreenRect | null>(null);
   const isVisible = minimized && status !== 'idle';
-
-  useEffect(() => {
-    if (!isVisible || !getArtboardRect) {
-      setArtboardRect(null);
-      return;
-    }
-    let frame = 0;
-    let lastKey = '';
-    const tick = () => {
-      const next = getArtboardRect();
-      const key = next
-        ? `${Math.round(next.left)}:${Math.round(next.top)}:${Math.round(next.width)}:${Math.round(next.height)}`
-        : 'none';
-      if (key !== lastKey) {
-        lastKey = key;
-        setArtboardRect(next);
-      }
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [getArtboardRect, isVisible]);
-
   if (!isVisible) return null;
 
   const isRunning = status === 'running';
@@ -74,35 +36,8 @@ export function AiTaskIndicator({
         ? 'Нажмите, чтобы открыть командную строку'
         : error ?? 'Нажмите, чтобы открыть командную строку';
 
-  const panelWidth = artboardRect
-    ? Math.max(210, Math.min(360, artboardRect.width - 20))
-    : 330;
-
-  const style: CSSProperties = artboardRect
-    ? {
-        left: Math.min(
-          window.innerWidth - panelWidth / 2 - 8,
-          Math.max(panelWidth / 2 + 8, artboardRect.left + artboardRect.width / 2)
-        ),
-        top: Math.min(
-          window.innerHeight - 12,
-          Math.max(56, artboardRect.top + artboardRect.height - 12)
-        ),
-        width: panelWidth,
-        transform: 'translate(-50%, -100%)',
-      }
-    : {
-        left: '50%',
-        top: 'calc(100% - 16px)',
-        width: 330,
-        transform: 'translate(-50%, -100%)',
-      };
-
   return (
-    <div
-      style={style}
-      className="fixed z-[70] flex items-start gap-2 overflow-hidden rounded border border-paper-border bg-paper-panel px-3 py-2 text-paper-ink"
-    >
+    <div className="fixed bottom-3 right-3 z-[70] flex w-[320px] max-w-[calc(100vw-24px)] items-start gap-2 overflow-hidden rounded border border-paper-border bg-paper-panel px-3 py-2 text-paper-ink">
       <button
         type="button"
         onClick={() => {

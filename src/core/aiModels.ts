@@ -28,11 +28,11 @@ export const OPENAI_COMPATIBLE_PRESETS: OpenAICompatiblePreset[] = [
     id: 'openrouter',
     label: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1',
-    defaultModel: 'openai/gpt-6.2-sol',
+    defaultModel: 'openai/gpt-6-luna',
     models: [
-      'openai/gpt-6.2-sol',
-      'anthropic/claude-sonnet-5.5',
-      'google/gemini-4-neon',
+      'openai/gpt-6-luna',
+      'anthropic/claude-haiku-5.5',
+      'google/gemini-4-hydrogen',
       'deepseek/deepseek-v4.1-flash',
     ],
   },
@@ -40,12 +40,12 @@ export const OPENAI_COMPATIBLE_PRESETS: OpenAICompatiblePreset[] = [
     id: 'groq',
     label: 'Groq',
     baseUrl: 'https://api.groq.com/openai/v1',
-    defaultModel: 'openai/gpt-oss-120b',
+    defaultModel: 'openai/gpt-oss-20b',
     models: [
-      'openai/gpt-oss-120b',
+      'openai/gpt-oss-20b',
       'qwen/qwen3.8-27b',
-      'moonshotai/kimi-k2-instruct',
       'llama-3.3-70b-versatile',
+      'moonshotai/kimi-k2-instruct',
     ],
   },
   {
@@ -58,11 +58,11 @@ export const OPENAI_COMPATIBLE_PRESETS: OpenAICompatiblePreset[] = [
 ];
 
 export const PROVIDER_QUICK_MODELS: Record<AIProviderType, string[]> = {
-  gemini: ['gemini-4-carbon', 'gemini-4-neon', 'gemini-4-argon', 'gemini-3.8-flash'],
+  gemini: ['gemini-4-hydrogen', 'gemini-4-neon', 'gemini-4-carbon', 'gemini-4-argon'],
   anthropic: [
+    'claude-haiku-5-5',
     'claude-sonnet-5-5',
     'claude-opus-5-5',
-    'claude-haiku-5-5',
     'claude-fable-5-2',
   ],
   ollama: ['qwen3.8', 'gpt-oss:20b', 'deepseek-v4.1-flash', 'gemma4'],

@@ -178,9 +178,9 @@ export type AIProviderType = 'gemini' | 'anthropic' | 'ollama' | 'openai';
 export interface AIConfig {
   provider: AIProviderType;
   geminiApiKey: string;
-  geminiModel: string;     // по умолчанию 'gemini-4-neon'
+  geminiModel: string;     // по умолчанию 'gemini-4-hydrogen'
   anthropicApiKey: string;
-  anthropicModel: string;  // по умолчанию 'claude-sonnet-5-5'
+  anthropicModel: string;  // по умолчанию 'claude-haiku-5-5'
   ollamaBaseUrl: string;   // по умолчанию 'http://localhost:11434'
   ollamaModel: string;     // по умолчанию 'qwen3.8'
   openaiBaseUrl: string;   // например 'https://api.openai.com/v1' или 'https://api.deepseek.com/v1'

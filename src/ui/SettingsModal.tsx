@@ -549,6 +549,11 @@ export function SettingsModal({
     }
   };
 
+  const handleApplyAndClose = () => {
+    updateSettings({});
+    onClose();
+  };
+
   if (!isOpen) return null;
 
   const activeThemePreset = getThemePreset(settings.themeId);
@@ -559,6 +564,13 @@ export function SettingsModal({
         if (e.target === e.currentTarget) {
           onClose();
         }
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+        const target = e.target as HTMLElement;
+        if (target.closest('button, textarea, [role="listbox"]')) return;
+        e.preventDefault();
+        handleApplyAndClose();
       }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-paper-ink/30 p-4"
     >
@@ -1597,13 +1609,11 @@ export function SettingsModal({
           </div>
           <button
             type="button"
-            onClick={() => {
-              updateSettings({});
-              onClose();
-            }}
+            onClick={handleApplyAndClose}
+            title="Применить настройки и закрыть (Enter)"
             className="h-7 shrink-0 rounded bg-paper-accent px-3 text-[12px] font-medium text-white hover:bg-paper-accent-hover"
           >
-            Сохранить изменения
+            Применить
           </button>
         </div>
       </div>
