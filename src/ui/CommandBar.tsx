@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { ArrowUp, Loader2, Paperclip, Settings2, Sparkles, Square, X } from 'lucide-react';
 import { getAiModelLabel, getAiProviderIssue } from '../ai/providers';
-import { TOOL_LABELS } from '../ai/registry';
 import { useAiTaskStore } from '../ai/taskStore';
 import { bytesToDataUrl, inferImageMimeType } from '../core/assets';
 import { useSettingsStore } from '../core/settings';
 import { useEditorStore } from '../core/store';
 import { pickOpenFile } from '../platform/io';
+import { useRotatingStatusWord } from './useRotatingStatusWord';
 
 export interface CommandBarProps {
   isOpen: boolean;
@@ -23,11 +23,9 @@ export function CommandBar({
   const selectedCount = useEditorStore((s) => s.selectedIds.length);
 
   const status = useAiTaskStore((s) => s.status);
-  const log = useAiTaskStore((s) => s.log);
   const answer = useAiTaskStore((s) => s.answer);
   const streamText = useAiTaskStore((s) => s.streamText);
   const error = useAiTaskStore((s) => s.error);
-  const stepInfo = useAiTaskStore((s) => s.step);
   const attachments = useAiTaskStore((s) => s.attachments);
   const addAttachment = useAiTaskStore((s) => s.addAttachment);
   const removeAttachment = useAiTaskStore((s) => s.removeAttachment);
@@ -41,6 +39,7 @@ export function CommandBar({
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const isRunning = status === 'running';
+  const statusWord = useRotatingStatusWord(isRunning);
 
   const providerIssue = useMemo(() => getAiProviderIssue(ai), [ai]);
   const hasImages = attachments.length > 0;
@@ -236,9 +235,9 @@ export function CommandBar({
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2 text-[12px] text-paper-muted">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.75} />
-                {stepInfo
-                  ? `Шаг ${stepInfo.step} из ${stepInfo.maxSteps}: модель думает…`
-                  : 'Отправляю запрос…'}
+                <span key={statusWord} className="animate-fade-in">
+                  {statusWord}…
+                </span>
               </div>
               {streamText && (
                 <div className="animate-rise whitespace-pre-wrap rounded border border-paper-border bg-paper-bg px-3 py-2 text-[12px] leading-relaxed">
@@ -246,40 +245,6 @@ export function CommandBar({
                   <span className="ai-caret" />
                 </div>
               )}
-            </div>
-          )}
-
-          {log.length > 0 && (
-            <div className="flex max-h-44 flex-col gap-1 overflow-y-auto rounded border border-paper-border bg-paper-bg px-2.5 py-2">
-              <span className="text-[10px] uppercase tracking-wider text-paper-muted">
-                Шаги
-              </span>
-              <ul className="flex flex-col gap-1">
-                {log.map((entry, index) => (
-                  <li
-                    key={`${entry.name}_${index}`}
-                    className="animate-rise flex items-start gap-2 text-[11px] leading-snug"
-                  >
-                    <span
-                      className={
-                        entry.ok
-                          ? 'mt-0.5 shrink-0 font-semibold text-paper-accent'
-                          : 'mt-0.5 shrink-0 font-semibold text-paper-danger'
-                      }
-                    >
-                      {entry.ok ? 'OK' : '!'}
-                    </span>
-                    <span className="min-w-0">
-                      <span className="text-paper-muted">
-                        {TOOL_LABELS[entry.name] ?? entry.name}:{' '}
-                      </span>
-                      <span className={entry.ok ? 'text-paper-ink' : 'text-paper-danger'}>
-                        {entry.error ?? entry.summary}
-                      </span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
             </div>
           )}
 

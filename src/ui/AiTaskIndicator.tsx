@@ -1,10 +1,10 @@
 import { Loader2, Sparkles, Square, X } from 'lucide-react';
 import { useAiTaskStore } from '../ai/taskStore';
+import { useRotatingStatusWord } from './useRotatingStatusWord';
 
 export function AiTaskIndicator({ onOpen }: { onOpen: () => void }) {
   const minimized = useAiTaskStore((s) => s.minimized);
   const status = useAiTaskStore((s) => s.status);
-  const step = useAiTaskStore((s) => s.step);
   const log = useAiTaskStore((s) => s.log);
   const answer = useAiTaskStore((s) => s.answer);
   const streamText = useAiTaskStore((s) => s.streamText);
@@ -13,14 +13,15 @@ export function AiTaskIndicator({ onOpen }: { onOpen: () => void }) {
   const restore = useAiTaskStore((s) => s.restore);
   const reset = useAiTaskStore((s) => s.reset);
 
+  const isRunning = status === 'running';
+  const statusWord = useRotatingStatusWord(isRunning);
   const isVisible = minimized && status !== 'idle';
   if (!isVisible) return null;
 
-  const isRunning = status === 'running';
   const lastEntry = log[log.length - 1];
 
   const headline = isRunning
-    ? `ИИ работает · шаг ${step?.step ?? 1} из ${step?.maxSteps ?? 8}`
+    ? `${statusWord}…`
     : status === 'done'
       ? 'ИИ закончил'
       : status === 'stopped'
@@ -36,7 +37,7 @@ export function AiTaskIndicator({ onOpen }: { onOpen: () => void }) {
   const detail = isRunning
     ? lastEntry
       ? lastEntry.summary
-      : streamTail ?? 'Думает над задачей…'
+      : streamTail ?? 'Модель работает'
     : status === 'done'
       ? answer || `Выполнено действий: ${log.length}`
       : status === 'stopped'
@@ -69,7 +70,9 @@ export function AiTaskIndicator({ onOpen }: { onOpen: () => void }) {
           />
         )}
         <span className="min-w-0">
-          <span className="block text-[12px] font-medium">{headline}</span>
+          <span key={headline} className="animate-fade-in block text-[12px] font-medium">
+            {headline}
+          </span>
           <span className="mt-0.5 block truncate text-[11px] text-paper-muted">
             {detail}
           </span>
@@ -98,12 +101,6 @@ export function AiTaskIndicator({ onOpen }: { onOpen: () => void }) {
         </button>
       )}
 
-      {isRunning && step && (
-        <div
-          className="absolute bottom-0 left-0 h-0.5 bg-paper-accent transition-[width]"
-          style={{ width: `${Math.min(100, (step.step / step.maxSteps) * 100)}%` }}
-        />
-      )}
     </div>
   );
 }

@@ -8,6 +8,7 @@ vi.mock('../src/ai/executor', async (importOriginal) => {
   return { ...actual, runAiCommand: runMock };
 });
 
+import { AI_STATUS_WORDS, pickStatusWordIndex } from '../src/ai/statusWords';
 import { useAiTaskStore } from '../src/ai/taskStore';
 import { useSettingsStore } from '../src/core/settings';
 
@@ -121,5 +122,14 @@ describe('AI background task store', () => {
     expect(useAiTaskStore.getState().status).toBe('error');
     expect(useAiTaskStore.getState().error).toContain('API-ключа');
     expect(useAiTaskStore.getState().minimized).toBe(false);
+  });
+
+  it('uses rotating gerund status words instead of step numbers', () => {
+    expect(AI_STATUS_WORDS.length).toBeGreaterThan(6);
+    expect(AI_STATUS_WORDS.every((word) => word.endsWith('ing'))).toBe(true);
+    for (let i = 0; i < 10; i += 1) {
+      const index = i % AI_STATUS_WORDS.length;
+      expect(pickStatusWordIndex(index)).not.toBe(index);
+    }
   });
 });
