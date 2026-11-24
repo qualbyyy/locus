@@ -151,7 +151,7 @@ export function CommandBar({
         <div className="flex items-center justify-between gap-3 border-b border-paper-border px-4 py-2.5">
           <div className="flex min-w-0 items-center gap-2">
             <Sparkles className="h-4 w-4 shrink-0 text-paper-accent" strokeWidth={1.75} />
-            <h2 className="shrink-0 text-[13px] font-semibold">Командная строка ИИ</h2>
+            <h2 className="shrink-0 text-[13px]">Командная строка ИИ</h2>
             <span className="truncate text-[11px] text-paper-muted">
               {getAiModelLabel(ai)}
             </span>
@@ -160,6 +160,17 @@ export function CommandBar({
             <span className="shrink-0 text-[11px] text-paper-muted">
               Выделено: {selectedCount}
             </span>
+            {onOpenSettings && (
+              <button
+                type="button"
+                onClick={() => onOpenSettings('ai')}
+                aria-label="Настройки ИИ"
+                title="Настройки ИИ"
+                className="flex h-6 w-6 items-center justify-center rounded text-paper-muted hover:bg-paper-hover hover:text-paper-ink"
+              >
+                <Settings2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+              </button>
+            )}
             <button
               type="button"
               onClick={handleClose}
