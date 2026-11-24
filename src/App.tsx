@@ -71,6 +71,7 @@ import { matchShortcut } from './core/shortcuts';
 import { useCanRedo, useCanUndo, useEditorStore } from './core/store';
 import type { Scene } from './core/types';
 import type { BooleanOp } from './engine/booleans';
+import { isCanvasZoomWheel } from './engine/zoom';
 import { hasAnyEffects } from './engine/effects';
 import { PaperCanvas, type PaperCanvasHandle } from './engine/PaperCanvas';
 import {
@@ -470,7 +471,10 @@ export function App() {
 
   useEffect(() => {
     const preventWebviewZoom = (event: WheelEvent) => {
-      if (event.ctrlKey && !(event.target instanceof HTMLCanvasElement)) {
+      if (
+        isCanvasZoomWheel(event) &&
+        !(event.target instanceof HTMLCanvasElement)
+      ) {
         event.preventDefault();
       }
     };

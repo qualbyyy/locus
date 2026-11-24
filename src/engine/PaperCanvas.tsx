@@ -20,6 +20,7 @@ import type {
 } from '../core/types';
 import { renderOverlay } from './overlay';
 import { syncSceneToPaper } from './sync';
+import { getWheelZoomFactor, isCanvasZoomWheel } from './zoom';
 import { createBlobTool } from './tools/blobTool';
 import { createEyedropperTool } from './tools/eyedropperTool';
 import { createNodeTool } from './tools/nodeTool';
@@ -494,6 +495,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       });
 
       const handleWheel = (event: WheelEvent) => {
+        if (!isCanvasZoomWheel(event)) return;
         event.preventDefault();
         const rect = canvas.getBoundingClientRect();
         const viewPoint = new scope.Point(
@@ -502,9 +504,8 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
         );
         const before = scope.view.viewToProject(viewPoint);
         const wheelSpeed = useSettingsStore.getState().settings.wheelZoomSpeed;
-        const sensitivity = (event.ctrlKey ? 0.01 : 0.0015) * wheelSpeed;
         const nextZoom = clamp(
-          scope.view.zoom * Math.exp(-event.deltaY * sensitivity),
+          scope.view.zoom * getWheelZoomFactor(event.deltaY, wheelSpeed),
           MIN_ZOOM,
           MAX_ZOOM
         );

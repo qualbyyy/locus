@@ -96,6 +96,12 @@ describe('UI features: context menu and canvas zoom', () => {
     expect(isCanvasZoomWheel({ ctrlKey: false, metaKey: false })).toBe(false);
   });
 
+  it('uses modifier-only wheel zoom semantics', () => {
+    expect(isCanvasZoomWheel({ ctrlKey: false, metaKey: false })).toBe(false);
+    expect(isCanvasZoomWheel({ ctrlKey: true, metaKey: false })).toBe(true);
+    expect(isCanvasZoomWheel({ ctrlKey: false, metaKey: true })).toBe(true);
+  });
+
   it('computes a stable zoom factor from wheel delta and speed', () => {
     const zoomOut = getWheelZoomFactor(120, 1);
     const zoomIn = getWheelZoomFactor(-120, 1.5);
