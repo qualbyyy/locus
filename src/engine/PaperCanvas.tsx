@@ -10,6 +10,7 @@ import paper from 'paper/dist/paper-core';
 import { subscribeAssets } from '../core/assets';
 import { deleteLayers, updateLayers } from '../core/commands';
 import { useSettingsStore } from '../core/settings';
+import { useCanvasBackdropStore } from '../core/canvasBackdrop';
 import { useEditorStore } from '../core/store';
 import type {
   Point2D,
@@ -139,6 +140,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     const gridOpacity = useSettingsStore((s) => s.settings.gridOpacity);
     const accentColor = useSettingsStore((s) => s.settings.accentColor);
     const showPerfStats = useSettingsStore((s) => s.settings.showPerfStats);
+    const canvasBackdrop = useCanvasBackdropStore((s) => s.meta?.dataUrl ?? null);
 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -869,6 +871,15 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       <div
         ref={containerRef}
         className={`relative flex-1 overflow-hidden bg-paper-canvas ${cursorClass}`}
+        style={
+          canvasBackdrop
+            ? {
+                backgroundImage: `url(${canvasBackdrop})`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+              }
+            : undefined
+        }
       >
         <canvas ref={canvasRef} className="block h-full w-full outline-none" />
         {textEditorOverlay}

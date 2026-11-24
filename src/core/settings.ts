@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { readAppConfigText, writeAppConfigText } from '../platform/io';
+import { useCanvasBackdropStore } from './canvasBackdrop';
 import { clamp } from './math';
 import { setUndoLimit } from './store';
 import {
@@ -292,6 +293,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       .getState()
       .load()
       .then(() => applyRuntimeSideEffects(useSettingsStore.getState().settings));
+    void useCanvasBackdropStore.getState().load();
     return next;
   },
 

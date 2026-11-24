@@ -41,6 +41,8 @@ import {
   getRuntimeDiagnostics,
   type AppContactLink,
 } from '../core/appInfo';
+import { inferImageMimeType } from '../core/assets';
+import { useCanvasBackdropStore } from '../core/canvasBackdrop';
 import { ACCENT_PRESETS, getThemePreset, THEME_PRESETS } from '../core/themes';
 import {
   CUSTOM_FONT_FAMILY,
@@ -123,7 +125,7 @@ function ToggleRow({
         }`}
       >
         <span
-          className={`block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
+          className={`block h-3.5 w-3.5 rounded-full border border-paper-muted/50 bg-paper-panel transition-transform ${
             checked ? 'translate-x-4' : 'translate-x-0.5'
           }`}
         />
@@ -395,9 +397,12 @@ export function SettingsModal({
     scene: Scene;
   } | null>(null);
   const customFont = useCustomFontStore((s) => s.meta);
+  const canvasBackdrop = useCanvasBackdropStore((s) => s.meta);
   const [customFontInput, setCustomFontInput] = useState(settings.customFontFamily);
   const [fontStatus, setFontStatus] = useState<string | null>(null);
   const [isFontLoading, setIsFontLoading] = useState(false);
+  const [canvasStatus, setCanvasStatus] = useState<string | null>(null);
+  const [isCanvasImageLoading, setIsCanvasImageLoading] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
@@ -531,6 +536,40 @@ export function SettingsModal({
     updateSettings({ fontPreset: 'paper', customFontFamily: '' });
     setCustomFontInput('');
     setFontStatus('Свой шрифт удалён');
+  };
+
+  const handlePickCanvasImage = async () => {
+    setCanvasStatus(null);
+    setIsCanvasImageLoading(true);
+    try {
+      const file = await pickOpenFile({
+        title: 'Фон рабочей области',
+        filters: [
+          { name: 'Изображения', extensions: ['png', 'jpg', 'jpeg', 'webp'] },
+        ],
+      });
+      if (!file) return;
+      const mimeType = inferImageMimeType(file.name, file.bytes);
+      if (!/^image\/(png|jpeg|webp)$/.test(mimeType)) {
+        setCanvasStatus('Поддерживаются PNG, JPEG и WebP');
+        return;
+      }
+      await useCanvasBackdropStore
+        .getState()
+        .save({ name: file.name, mimeType, bytes: file.bytes });
+      setCanvasStatus('Фон рабочей области обновлён');
+    } catch (err) {
+      setCanvasStatus(
+        err instanceof Error ? err.message : 'Не удалось загрузить изображение'
+      );
+    } finally {
+      setIsCanvasImageLoading(false);
+    }
+  };
+
+  const handleClearCanvasImage = async () => {
+    await useCanvasBackdropStore.getState().clear();
+    setCanvasStatus('Фото убрано');
   };
 
   const handleFetchModels = async () => {
@@ -753,6 +792,33 @@ export function SettingsModal({
                         updateSettings({ customCanvasBg })
                       }
                     />
+                  )}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={isCanvasImageLoading}
+                      onClick={() => void handlePickCanvasImage()}
+                      className="rounded border border-paper-border bg-paper-panel px-2 py-1 text-[11px] text-paper-ink hover:bg-paper-hover disabled:opacity-50"
+                    >
+                      {isCanvasImageLoading ? 'Загрузка…' : 'Своё фото…'}
+                    </button>
+                    {canvasBackdrop && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void handleClearCanvasImage()}
+                          className="rounded px-1.5 py-1 text-[11px] text-paper-muted hover:text-paper-danger"
+                        >
+                          Убрать фото
+                        </button>
+                        <span className="max-w-40 truncate text-[10px] text-paper-muted">
+                          {canvasBackdrop.name}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  {canvasStatus && (
+                    <span className="text-[10px] text-paper-muted">{canvasStatus}</span>
                   )}
                 </div>
 
