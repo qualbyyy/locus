@@ -421,7 +421,7 @@ describe('AI provider adapters', () => {
 
   it('validates provider configuration', () => {
     expect(getAiProviderIssue({ ...DEFAULT_AI_CONFIG, provider: 'gemini' })).toContain(
-      'Gemini API Key'
+      'API-ключа'
     );
     expect(
       getAiProviderIssue({

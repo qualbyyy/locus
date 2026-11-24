@@ -8,10 +8,10 @@ import { createOllamaSend } from './ollama';
 import { createOpenAISend } from './openai';
 
 export const PROVIDER_LABELS: Record<AIProviderType, string> = {
-  gemini: 'Gemini',
-  anthropic: 'Anthropic',
-  ollama: 'Ollama',
   openai: 'OpenAI-compatible',
+  anthropic: 'Anthropic',
+  gemini: 'Gemini',
+  ollama: 'Ollama',
 };
 
 function isLocalUrl(url: string): boolean {
@@ -38,17 +38,17 @@ export function createSendChat(
 
 export function getAiProviderIssue(ai: AIConfig): string | null {
   if (ai.provider === 'gemini' && !ai.geminiApiKey.trim()) {
-    return 'Укажите Gemini API Key в настройках (Ctrl+,)';
+    return 'Нет API-ключа — укажите его в настройках (Ctrl+,)';
   }
   if (ai.provider === 'anthropic' && !ai.anthropicApiKey.trim()) {
-    return 'Укажите Anthropic API Key в настройках (Ctrl+,)';
+    return 'Нет API-ключа — укажите его в настройках (Ctrl+,)';
   }
   if (
     ai.provider === 'openai' &&
     !ai.openaiApiKey.trim() &&
     !isLocalUrl(ai.openaiBaseUrl.trim())
   ) {
-    return 'Укажите API Key или локальный baseURL в настройках (Ctrl+,)';
+    return 'Нет API-ключа — укажите его или локальный baseURL в настройках (Ctrl+,)';
   }
   return null;
 }

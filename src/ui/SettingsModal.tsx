@@ -1038,11 +1038,11 @@ export function SettingsModal({
                   <span className="text-[11px] text-paper-muted">Провайдер</span>
                   <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
                     <SegmentedButton
-                      active={settings.ai.provider === 'gemini'}
-                      label="Google Gemini"
+                      active={settings.ai.provider === 'openai'}
+                      label="OpenAI / API"
                       onClick={() => {
                         setModelsFetchError(null);
-                        updateSettings({ ai: { provider: 'gemini' } });
+                        updateSettings({ ai: { provider: 'openai' } });
                       }}
                     />
                     <SegmentedButton
@@ -1054,19 +1054,19 @@ export function SettingsModal({
                       }}
                     />
                     <SegmentedButton
+                      active={settings.ai.provider === 'gemini'}
+                      label="Google Gemini"
+                      onClick={() => {
+                        setModelsFetchError(null);
+                        updateSettings({ ai: { provider: 'gemini' } });
+                      }}
+                    />
+                    <SegmentedButton
                       active={settings.ai.provider === 'ollama'}
                       label="Ollama"
                       onClick={() => {
                         setModelsFetchError(null);
                         updateSettings({ ai: { provider: 'ollama' } });
-                      }}
-                    />
-                    <SegmentedButton
-                      active={settings.ai.provider === 'openai'}
-                      label="OpenAI / API"
-                      onClick={() => {
-                        setModelsFetchError(null);
-                        updateSettings({ ai: { provider: 'openai' } });
                       }}
                     />
                   </div>
@@ -1412,17 +1412,29 @@ export function SettingsModal({
           </div>
         </div>
 
-        <div className="flex h-10 shrink-0 items-center justify-between border-t border-paper-border px-4">
-          <span className="text-[11px] text-paper-muted">
-            Обучающие материалы появятся позже
-          </span>
+        <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-t border-paper-border px-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              disabled
+              title="Раздел будет добавлен позже"
+              className="h-7 cursor-not-allowed rounded border border-paper-border bg-paper-bg px-2.5 text-[12px] text-paper-muted opacity-60"
+            >
+              Обучение
+            </button>
+            <span className="truncate text-[11px] text-paper-muted">
+              Настройки сохраняются автоматически
+            </span>
+          </div>
           <button
             type="button"
-            disabled
-            title="Раздел будет добавлен позже"
-            className="h-7 cursor-not-allowed rounded border border-paper-border bg-paper-bg px-2.5 text-[12px] text-paper-muted opacity-60"
+            onClick={() => {
+              updateSettings({});
+              onClose();
+            }}
+            className="h-7 shrink-0 rounded bg-paper-accent px-3 text-[12px] font-medium text-white hover:bg-paper-accent-hover"
           >
-            Обучение
+            Сохранить изменения
           </button>
         </div>
       </div>

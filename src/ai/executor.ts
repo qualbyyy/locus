@@ -10,7 +10,7 @@ import type {
   AiToolCall,
 } from './types';
 
-export const MAX_TOOL_STEPS = 5;
+export const MAX_TOOL_STEPS = 8;
 
 export const SYSTEM_PROMPT = [
   'Ты — ИИ-ассистент векторного редактора Locus и работаешь как оператор его инструментов.',
@@ -27,7 +27,19 @@ export const SYSTEM_PROMPT = [
   '- Не вызывай инструменты с несуществующими id и не повторяй уже выполненное.',
   '- Если пользователь задаёт вопрос, не требующий изменений сцены, ответь текстом без инструментов.',
   '- В финальном ответе по-русски кратко перечисли, что сделано. Не показывай JSON и служебные детали.',
+  '- Если творческая задача поставлена кратко, прими смелое и аккуратное решение сам, без лишних вопросов.',
   `- Не более ${MAX_TOOL_STEPS} шагов: планируй действия заранее.`,
+  '',
+  'Как строить сложные композиции (постер, обложка, афиша, иллюстрация):',
+  '- Думай цельным образом, а не набором случайных фигур: фон или большая подложка, 1–2 опорные формы,',
+  '  2–4 акцентные детали, заголовок и подпись/подзаголовок.',
+  '- Соблюдай иерархию: заголовок в 2–3 раза крупнее подзаголовка; отступы от краёв артборда 6–10%.',
+  '- Координаты считай от размеров артборда; элементы должны осознанно перекрываться, а не стоять в ряд.',
+  '- Используй 2–4 цвета одной палитры и разные уровни прозрачности (0.15–0.35 для подложек).',
+  '- Выравнивай через align_layers (artboard_center, left, distribute_*), комбинируй формы через boolean_op,',
+  '  применяй set_clip_mask для необычных краёв, randomize_anchors — для живых органических силуэтов.',
+  '- Для постера или обложки делай минимум 5–8 осмысленных элементов, а не 2–3 фигуры.',
+  '- Порядок работы: крупные формы и фон → акценты и декор → текст → выравнивание и финальная правка.',
 ].join('\n');
 
 export interface AiToolLogEntry {
@@ -88,13 +100,8 @@ export async function runAiCommand(options: AiRunOptions): Promise<AiRunResult> 
     if (issue) throw new Error(issue);
   }
 
-  const state = useEditorStore.getState();
-  const context = buildSceneContext(state.scene, state.selectedIds);
   const messages: AiConversationMessage[] = [
-    {
-      role: 'user',
-      text: `${sceneContextToText(context)}\n\nЗадача пользователя:\n${trimmedPrompt}`,
-    },
+    { role: 'user', text: trimmedPrompt },
   ];
 
   const toolLog: AiToolLogEntry[] = [];
@@ -112,8 +119,10 @@ export async function runAiCommand(options: AiRunOptions): Promise<AiRunResult> 
       steps += 1;
       onEvent?.({ type: 'step', step: steps, maxSteps });
 
+      const current = useEditorStore.getState();
+      const context = buildSceneContext(current.scene, current.selectedIds);
       const reply = await send({
-        system: SYSTEM_PROMPT,
+        system: `${SYSTEM_PROMPT}\n\n${sceneContextToText(context)}`,
         messages,
         tools: TOOL_DEFINITIONS,
         signal,

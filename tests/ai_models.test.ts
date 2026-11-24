@@ -76,7 +76,7 @@ describe('AI providers and model fetching', () => {
   it('validates required API keys and fetches Anthropic/Ollama models', async () => {
     await expect(
       fetchProviderModels({ ...DEFAULT_AI_CONFIG, provider: 'anthropic', anthropicApiKey: '' })
-    ).rejects.toThrow('Anthropic API Key');
+    ).rejects.toThrow('API-ключа');
 
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')

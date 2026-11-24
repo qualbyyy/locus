@@ -72,7 +72,7 @@ export function createGeminiSend(
   return async ({ system, messages, tools, signal }: AiChatRequest) => {
     const apiKey = ai.geminiApiKey.trim();
     if (!apiKey) {
-      throw new Error('Укажите Gemini API Key в настройках (Ctrl+,)');
+      throw new Error('Нет API-ключа — укажите его в настройках (Ctrl+,)');
     }
     const model = (ai.geminiModel.trim() || 'gemini-2.5-flash').replace(/^models\//, '');
     const response = await fetchImpl(

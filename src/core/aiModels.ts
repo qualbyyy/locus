@@ -185,7 +185,7 @@ export async function fetchProviderModels(ai: AIConfig): Promise<string[]> {
   if (ai.provider === 'gemini') {
     const key = ai.geminiApiKey.trim();
     if (!key) {
-      throw new Error('Укажите Gemini API Key для загрузки моделей');
+      throw new Error('Нет API-ключа для загрузки моделей');
     }
     const payload = await fetchJsonWithTimeout(
       `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`
@@ -200,7 +200,7 @@ export async function fetchProviderModels(ai: AIConfig): Promise<string[]> {
   if (ai.provider === 'anthropic') {
     const key = ai.anthropicApiKey.trim();
     if (!key) {
-      throw new Error('Укажите Anthropic API Key для загрузки моделей');
+      throw new Error('Нет API-ключа для загрузки моделей');
     }
     const payload = await fetchJsonWithTimeout('https://api.anthropic.com/v1/models', {
       headers: {
@@ -229,7 +229,7 @@ export async function fetchProviderModels(ai: AIConfig): Promise<string[]> {
   const base = normalizeBaseUrl(ai.openaiBaseUrl, 'https://api.openai.com/v1');
   const key = ai.openaiApiKey.trim();
   if (!key && !isLocalUrl(base)) {
-    throw new Error('Укажите API Key для загрузки моделей');
+    throw new Error('Нет API-ключа для загрузки моделей');
   }
   const headers: Record<string, string> = {};
   if (key) {
