@@ -1034,7 +1034,8 @@ export function SettingsModal({
             {activeTab === 'ai' && (
               <div className="flex flex-col gap-3">
                 <div className="rounded border border-paper-border bg-paper-bg/70 px-3 py-2 text-[11px] text-paper-muted">
-                  Параметры сохраняются в <span className="font-mono text-paper-ink">settings.json</span>. Агент и панель команд <span className="font-mono text-paper-ink">Ctrl+K</span> будут активированы на Этапе 5.
+                  Параметры сохраняются в <span className="font-mono text-paper-ink">settings.json</span> и не попадают в файл проекта. Панель команд открывается по{' '}
+                  <span className="font-mono text-paper-ink">Ctrl+K</span>.
                 </div>
 
                 <div className="flex flex-col gap-1">

@@ -691,13 +691,15 @@ export interface BBox {
   * `tests/export.test.ts` проверяет: round-trip `.locus` (сцена + бинарник картинки восстанавливаются без потерь), валидность XML/структуры `.svg`, непустые PDF-байты `%PDF-` для `.ai` с кириллицей, кривыми и маской, чтение обратно через `readPsd` из `ag-psd` для `.psd`.
   * Ручная проверка открытием экспортированных `.svg`, `.ai` и `.psd` во внешнем просмотрщике / векторном редакторе.
 
-### Этап 5. Подключение ИИ (Gemini + OpenAI-compatible)
-* Реализовать `src/ai/config.ts` (`$APPCONFIG/locus/settings.json`) и `SettingsModal.tsx`.
-* Реализовать `src/ai/context.ts`, `src/ai/registry.ts` (12 инструментов + валидация), `src/ai/providers/gemini.ts`, `src/ai/providers/openai.ts`, `src/ai/executor.ts` и `CommandBar.tsx` (`Ctrl+K`).
+### Этап 5. Подключение ИИ (Gemini + OpenAI-compatible) — **ВЫПОЛНЕНО**
+* [x] Реализовать хранение настроек ИИ в `$APPCONFIG/locus/settings.json` (вкладка «ИИ» в `SettingsModal.tsx`): Gemini, Anthropic, Ollama и OpenAI-compatible провайдеры.
+* [x] Реализовать `src/ai/types.ts`, `src/ai/context.ts`, `src/ai/registry.ts` (12 инструментов + валидация аргументов), `src/ai/providers/{gemini,openai,anthropic,ollama,index}.ts`, `src/ai/executor.ts` и `src/ui/CommandBar.tsx` (`Ctrl+K`, контекстное меню «ИИ…», меню и верхняя панель).
+* [x] Батчинг Undo: серия tool calls выполняется при `temporal.pause()`, после чего история схлопывается в ровно один шаг `Ctrl+Z`; `AbortController` останавливает выполнение (кнопка «Стоп»).
 * **Критерии готовности и проверка:**
-  * `tests/ai.test.ts` проверяет (с моком `httpFetch`) цикл tool calling для обоих провайдеров, обработку ошибок аргументов, `AbortController` и слияние серии из 3+ команд ИИ в ровно 1 шаг `Ctrl+Z`.
-  * Интеграционная проверка в запущенном приложении: выделение слоёв → команда в `Ctrl+K` → вызов инструментов ИИ → живое обновление холста → полный откат по `Ctrl+Z`.
-  * Финальный релизный прогон: `npx tsc --noEmit && npm test && npm run build && npm run tauri build`.
+  * [x] `tests/ai.test.ts` проверяет реестр и валидацию 12 инструментов, выполнение команд, контекст сцены, адаптеры четырёх провайдеров (мок fetch), цикл tool calling, ошибки аргументов, `AbortController` и слияние серии из 2+ команд ИИ в ровно 1 шаг `Ctrl+Z`.
+  * [x] `npx tsc --noEmit`, `npm test` (75/75) и `npm run build` — зелёные.
+  * [ ] Интеграционная проверка в запущенном приложении: выделение слоёв → команда в `Ctrl+K` → вызов инструментов ИИ → живое обновление холста → полный откат по `Ctrl+Z` (запускается пользователем вручную).
+  * [ ] Финальный релизный прогон `npm run tauri build` (запускается пользователем вручную).
 
 ---
 

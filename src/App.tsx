@@ -81,6 +81,7 @@ import {
   subscribeFileDrop,
 } from './platform/io';
 import { ContextMenu } from './ui/ContextMenu';
+import { CommandBar } from './ui/CommandBar';
 import { EffectModal, type EffectModalTarget } from './ui/EffectModal';
 import { Inspector } from './ui/Inspector';
 import { LayersPanel } from './ui/LayersPanel';
@@ -144,6 +145,7 @@ export function App() {
 
   const [isStartModalOpen, setIsStartModalOpen] = useState(true);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isCommandBarOpen, setIsCommandBarOpen] = useState(false);
   const [rasterExportOpen, setRasterExportOpen] = useState(false);
   const [rasterExportFormat, setRasterExportFormat] = useState<'png' | 'jpg'>('png');
   const [activeEffectModal, setActiveEffectModal] = useState<EffectModalTarget | null>(null);
@@ -202,6 +204,15 @@ export function App() {
 
   const handleFitArtboard = useCallback(() => {
     canvasRef.current?.fitArtboard();
+  }, []);
+
+  const openCommandBar = useCallback(() => {
+    setContextMenu(null);
+    setIsCommandBarOpen(true);
+  }, []);
+
+  const closeCommandBar = useCallback(() => {
+    setIsCommandBarOpen(false);
   }, []);
 
   const handleOpenProject = useCallback(async () => {
@@ -541,8 +552,20 @@ export function App() {
       }
 
       if (
+        action === 'app.commandBar' &&
+        !isStartModalOpen &&
+        !isSettingsModalOpen &&
+        !isCommandBarOpen
+      ) {
+        event.preventDefault();
+        openCommandBar();
+        return;
+      }
+
+      if (
         isStartModalOpen ||
         isSettingsModalOpen ||
+        isCommandBarOpen ||
         rasterExportOpen ||
         activeEffectModal !== null
       ) {
@@ -703,9 +726,6 @@ export function App() {
           case 'view.toggleSnap':
             handleToggleSnap();
             return;
-          case 'app.commandBar':
-            showNotice('ИИ CommandBar (Ctrl+K) появится на Этапе 5');
-            return;
           case 'vector.textToOutlines':
             void handleConvertToOutlines(st.selectedIds);
             return;
@@ -826,6 +846,8 @@ export function App() {
     activeEffectModal,
     isSettingsModalOpen,
     isStartModalOpen,
+    isCommandBarOpen,
+    openCommandBar,
     rasterExportOpen,
     setActiveTool,
     setSelectedIds,
@@ -1023,7 +1045,7 @@ export function App() {
       onToggleToolbar: () => setShowToolbar((v) => !v),
       onToggleLayers: () => setShowLayers((v) => !v),
       onToggleInspector: () => setShowInspector((v) => !v),
-      onOpenCommandBar: () => showNotice('ИИ CommandBar (Ctrl+K) появится на Этапе 5'),
+      onOpenCommandBar: openCommandBar,
     }),
     [
       handleConvertToOutlines,
@@ -1039,6 +1061,7 @@ export function App() {
       handleSaveProject,
       handleToggleGrid,
       handleToggleSnap,
+      openCommandBar,
       showNotice,
     ]
   );
@@ -1141,11 +1164,14 @@ export function App() {
           deselectAllLayers();
           return;
         case 'ai':
-          showNotice('ИИ CommandBar (Ctrl+K) появится на Этапе 5');
+          if (ids.length > 0) {
+            useEditorStore.setState({ selectedIds: ids, selectedNode: null });
+          }
+          openCommandBar();
           return;
       }
     },
-    [contextMenu, showNotice]
+    [contextMenu, openCommandBar, showNotice]
   );
 
   const handleCreateClipMask = useCallback(
@@ -1250,9 +1276,7 @@ export function App() {
         onRenameDocument={(name) => updateArtboard({ name })}
         onUndo={undoCommand}
         onRedo={redoCommand}
-        onOpenCommandBar={() =>
-          showNotice('ИИ CommandBar (Ctrl+K) появится на Этапе 5')
-        }
+        onOpenCommandBar={openCommandBar}
         onFitArtboard={handleFitArtboard}
         onOpenSettings={() => setIsSettingsModalOpen(true)}
       />
@@ -1400,6 +1424,15 @@ export function App() {
           {notice}
         </div>
       )}
+
+      <CommandBar
+        isOpen={isCommandBarOpen}
+        onClose={closeCommandBar}
+        onOpenSettings={() => {
+          setIsCommandBarOpen(false);
+          setIsSettingsModalOpen(true);
+        }}
+      />
 
       <StartModal
         isOpen={isStartModalOpen}
