@@ -19,7 +19,7 @@ describe('UI typography presets', () => {
   });
 
   it('builds font stacks for presets and a custom family', () => {
-    expect(getFontStacks('paper', null).ui).toContain('Manrope');
+    expect(getFontStacks('paper', null).ui).toContain('Golos Text');
     expect(getFontStacks('editorial', null).display).toContain('Playfair Display');
     expect(getFontStacks('custom', 'My Font').ui).toContain('"My Font"');
     expect(getFontStacks('custom', null).ui).toContain('Locus Custom');

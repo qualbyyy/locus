@@ -47,8 +47,8 @@
   --color-paper-muted: #6b665e;      /* Вторичный текст, подписи, шорткаты */
   --color-paper-danger: #b83b2e;     /* Ошибки валидации и удаление */
 
-  --font-ui: "Manrope", system-ui, sans-serif;
-  --font-display: "Golos Text", "Manrope", system-ui, sans-serif;
+  --font-ui: "Golos Text", "Manrope", system-ui, sans-serif;
+  --font-display: "Manrope", "Golos Text", system-ui, sans-serif;
 }
 ```
 

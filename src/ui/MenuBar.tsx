@@ -145,7 +145,7 @@ function MenuDropdown({
               )}
             </button>
 
-            {hasSub && item.submenu && (
+            {hasSub && item.submenu && !item.disabled && (
               <div className="absolute left-full top-0 z-50 ml-0.5 hidden min-w-52 rounded-md border border-paper-border bg-paper-panel py-1 shadow-xl group-hover:block">
                 {item.submenu.map((sub, sIdx) => {
                   if (sub.type === 'sep') {

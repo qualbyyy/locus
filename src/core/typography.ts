@@ -15,9 +15,9 @@ export const FONT_PRESETS: FontPreset[] = [
   {
     id: 'paper',
     label: 'Бумага',
-    hint: 'Manrope · Golos Text',
-    ui: 'Manrope',
-    display: 'Golos Text',
+    hint: 'Golos Text · Manrope',
+    ui: 'Golos Text',
+    display: 'Manrope',
   },
   {
     id: 'editorial',
@@ -67,8 +67,8 @@ export function getFontStacks(
   customFamily?: string | null
 ): { ui: string; display: string } {
   const custom = (customFamily ?? '').trim();
-  const fallbackUi = '"Manrope", "Inter", system-ui, sans-serif';
-  const fallbackDisplay = '"Golos Text", "Manrope", system-ui, sans-serif';
+  const fallbackUi = '"Golos Text", "Manrope", system-ui, sans-serif';
+  const fallbackDisplay = '"Manrope", "Golos Text", system-ui, sans-serif';
 
   if (presetId === 'custom') {
     const family = custom || CUSTOM_FONT_FAMILY;
