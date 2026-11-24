@@ -160,7 +160,7 @@ export function RasterExportModal({
       }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
     >
-      <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-paper-border bg-paper-panel text-paper-ink shadow-2xl">
+      <div className="animate-rise flex w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-paper-border bg-paper-panel text-paper-ink shadow-2xl">
         <div className="flex items-center justify-between border-b border-paper-border px-4 py-2.5">
           <div className="flex items-center gap-2">
             <Download className="h-4 w-4 text-paper-accent" strokeWidth={1.75} />

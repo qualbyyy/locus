@@ -55,6 +55,7 @@ function releaseBackdropUrl(url: string | null): void {
 
 interface CanvasBackdropState {
   meta: CanvasBackdropMeta | null;
+  warning: string | null;
   load: () => Promise<CanvasBackdropMeta | null>;
   save: (file: {
     name: string;
@@ -66,6 +67,7 @@ interface CanvasBackdropState {
 
 export const useCanvasBackdropStore = create<CanvasBackdropState>((set, get) => ({
   meta: null,
+  warning: null,
 
   load: async () => {
     try {
@@ -81,7 +83,7 @@ export const useCanvasBackdropStore = create<CanvasBackdropState>((set, get) => 
             typeof parsed.mimeType === 'string' ? parsed.mimeType : 'image/png',
           url: parsed.dataUrl,
         };
-        set({ meta });
+        set({ meta, warning: null });
         return meta;
       }
 
@@ -102,7 +104,7 @@ export const useCanvasBackdropStore = create<CanvasBackdropState>((set, get) => 
         mimeType,
         url: objectUrl,
       };
-      set({ meta });
+      set({ meta, warning: null });
       return meta;
     } catch {
       return null;
@@ -118,17 +120,24 @@ export const useCanvasBackdropStore = create<CanvasBackdropState>((set, get) => 
       : 'image/png';
     const fileName = `canvas-background.${extensionForMime(safeMime)}`;
 
-    await writeAppConfigBytes(fileName, bytes);
-    await writeAppConfigText(
-      CANVAS_BACKDROP_META_FILE,
-      JSON.stringify({ name, mimeType: safeMime, fileName })
-    );
+    let warning: string | null = null;
+    try {
+      await writeAppConfigBytes(fileName, bytes);
+      await writeAppConfigText(
+        CANVAS_BACKDROP_META_FILE,
+        JSON.stringify({ name, mimeType: safeMime, fileName })
+      );
+    } catch (err) {
+      warning = `Фон применён, но не сохранён на диск: ${
+        err instanceof Error ? err.message : String(err)
+      }`;
+    }
 
     releaseBackdropUrl(get().meta?.url ?? null);
     const objectUrl =
       createBackdropUrl(bytes, safeMime) ?? bytesToDataUrl(bytes, safeMime);
     const meta: CanvasBackdropMeta = { name, mimeType: safeMime, url: objectUrl };
-    set({ meta });
+    set({ meta, warning });
     return meta;
   },
 
@@ -139,6 +148,6 @@ export const useCanvasBackdropStore = create<CanvasBackdropState>((set, get) => 
     } catch {
       // In-memory state resets regardless.
     }
-    set({ meta: null });
+    set({ meta: null, warning: null });
   },
 }));

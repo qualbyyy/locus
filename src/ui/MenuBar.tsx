@@ -107,7 +107,7 @@ function MenuDropdown({
   onSelectDone: () => void;
 }) {
   return (
-    <div className="absolute left-0 top-full z-50 mt-1 min-w-56 rounded-md border border-paper-border bg-paper-panel py-1 text-[12px] shadow-xl">
+    <div className="animate-rise absolute left-0 top-full z-50 mt-1 min-w-56 rounded-md border border-paper-border bg-paper-panel py-1 text-[12px] shadow-xl">
       {items.map((item, idx) => {
         if (item.type === 'sep') {
           return <div key={`sep-${idx}`} className="my-1 h-px bg-paper-border" />;
@@ -146,7 +146,7 @@ function MenuDropdown({
             </button>
 
             {hasSub && item.submenu && !item.disabled && (
-              <div className="absolute left-full top-0 z-50 ml-0.5 hidden min-w-52 rounded-md border border-paper-border bg-paper-panel py-1 shadow-xl group-hover:block">
+              <div className="animate-fade-in absolute left-full top-0 z-50 ml-0.5 hidden min-w-52 rounded-md border border-paper-border bg-paper-panel py-1 shadow-xl group-hover:block">
                 {item.submenu.map((sub, sIdx) => {
                   if (sub.type === 'sep') {
                     return <div key={`ssep-${sIdx}`} className="my-1 h-px bg-paper-border" />;

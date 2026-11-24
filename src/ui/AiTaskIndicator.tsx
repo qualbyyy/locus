@@ -7,6 +7,7 @@ export function AiTaskIndicator({ onOpen }: { onOpen: () => void }) {
   const step = useAiTaskStore((s) => s.step);
   const log = useAiTaskStore((s) => s.log);
   const answer = useAiTaskStore((s) => s.answer);
+  const streamText = useAiTaskStore((s) => s.streamText);
   const error = useAiTaskStore((s) => s.error);
   const stop = useAiTaskStore((s) => s.stop);
   const restore = useAiTaskStore((s) => s.restore);
@@ -26,10 +27,16 @@ export function AiTaskIndicator({ onOpen }: { onOpen: () => void }) {
         ? 'ИИ остановлен'
         : 'Ошибка ИИ';
 
+  const streamTail = streamText
+    .trim()
+    .split('\n')
+    .filter((line) => line.trim())
+    .pop();
+
   const detail = isRunning
     ? lastEntry
       ? lastEntry.summary
-      : 'Думает над задачей…'
+      : streamTail ?? 'Думает над задачей…'
     : status === 'done'
       ? answer || `Выполнено действий: ${log.length}`
       : status === 'stopped'
@@ -37,7 +44,7 @@ export function AiTaskIndicator({ onOpen }: { onOpen: () => void }) {
         : error ?? 'Нажмите, чтобы открыть командную строку';
 
   return (
-    <div className="fixed bottom-3 right-3 z-[70] flex w-[320px] max-w-[calc(100vw-24px)] items-start gap-2 overflow-hidden rounded border border-paper-border bg-paper-panel px-3 py-2 text-paper-ink">
+    <div className="animate-rise fixed bottom-3 right-3 z-[70] flex w-[320px] max-w-[calc(100vw-24px)] items-start gap-2 overflow-hidden rounded border border-paper-border bg-paper-panel px-3 py-2 text-paper-ink">
       <button
         type="button"
         onClick={() => {

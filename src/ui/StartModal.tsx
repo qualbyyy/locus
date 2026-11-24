@@ -103,7 +103,7 @@ export function StartModal({
       }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-paper-ink/25 p-4"
     >
-      <div className="w-full max-w-2xl rounded border border-paper-border bg-paper-panel">
+      <div className="animate-rise w-full max-w-2xl rounded border border-paper-border bg-paper-panel">
         <div className="flex items-center justify-between border-b border-paper-border px-4 py-3">
           <div className="flex items-center gap-2">
             <img src="/icon.svg" alt="Locus" className="h-5 w-5 rounded" />

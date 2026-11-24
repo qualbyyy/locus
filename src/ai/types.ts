@@ -41,6 +41,7 @@ export interface AiChatRequest {
   messages: AiConversationMessage[];
   tools: ToolDefinition[];
   signal?: AbortSignal;
+  onToken?: (delta: string) => void;
 }
 
 export interface AiProviderReply {
@@ -52,6 +53,7 @@ export type AiSendChat = (request: AiChatRequest) => Promise<AiProviderReply>;
 
 export type AiRunEvent =
   | { type: 'step'; step: number; maxSteps: number }
+  | { type: 'assistant-delta'; text: string }
   | { type: 'assistant'; text: string }
   | {
       type: 'tool';

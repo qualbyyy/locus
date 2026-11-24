@@ -16,6 +16,7 @@ interface AiTaskState {
   prompt: string;
   log: AiToolLogEntry[];
   answer: string;
+  streamText: string;
   error: string | null;
   step: AiTaskStep | null;
   minimized: boolean;
@@ -38,6 +39,7 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
   prompt: '',
   log: [],
   answer: '',
+  streamText: '',
   error: null,
   step: null,
   minimized: false,
@@ -86,6 +88,7 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
       prompt,
       log: [],
       answer: '',
+      streamText: '',
       error: null,
       step: null,
       minimized: false,
@@ -114,13 +117,20 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
                 },
               ],
             }));
+          } else if (event.type === 'assistant-delta') {
+            set((state) => ({ streamText: state.streamText + event.text }));
           } else if (event.type === 'assistant' && event.text.trim()) {
             set({ answer: event.text.trim() });
           }
         },
       });
       if (runId !== id) return;
-      set({ answer: result.text, status: 'done', step: null });
+      set({
+        answer: result.text,
+        status: 'done',
+        step: null,
+        streamText: '',
+      });
     } catch (err) {
       if (runId !== id) return;
       if (isAbortError(err)) {
@@ -161,6 +171,7 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
       prompt: '',
       log: [],
       answer: '',
+      streamText: '',
       error: null,
       step: null,
       minimized: false,

@@ -57,21 +57,36 @@ export async function pickOpenFile(options?: {
   filters?: FileFilter[];
 }): Promise<OpenedFile | null> {
   if (isTauri()) {
-    const { open } = await import('@tauri-apps/plugin-dialog');
-    const selected = await open({
-      title: options?.title,
-      multiple: false,
-      directory: false,
-      filters: options?.filters,
-    });
-    if (typeof selected !== 'string') {
-      return null;
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({
+        title: options?.title,
+        multiple: false,
+        directory: false,
+        filters: options?.filters,
+      });
+      if (typeof selected !== 'string') {
+        return null;
+      }
+      const bytes = await readFileBytes(selected);
+      const name = selected.split(/[\\/]/).pop() || 'file';
+      return { name, path: selected, bytes };
+    } catch (err) {
+      console.warn(
+        'Locus: не удалось прочитать файл через fs, пробуем file input',
+        err
+      );
+      return pickOpenFileViaInput(options);
     }
-    const bytes = await readFileBytes(selected);
-    const name = selected.split(/[\\/]/).pop() || 'file';
-    return { name, path: selected, bytes };
   }
 
+  return pickOpenFileViaInput(options);
+}
+
+async function pickOpenFileViaInput(options?: {
+  title?: string;
+  filters?: FileFilter[];
+}): Promise<OpenedFile | null> {
   if (typeof document === 'undefined') {
     return null;
   }

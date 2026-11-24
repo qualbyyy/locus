@@ -79,11 +79,100 @@ function toOpenAIMessages(
   return out;
 }
 
+async function readOpenAIStream(
+  response: Response,
+  onToken: (delta: string) => void
+): Promise<AiProviderReply> {
+  const textParts: string[] = [];
+  const calls = new Map<number, { id: string; name: string; args: string }>();
+
+  const consumeLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) return;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === '[DONE]') return;
+    let payload: unknown;
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (!isRecord(payload)) return;
+    const choices = Array.isArray(payload.choices) ? payload.choices : [];
+    const first = choices[0];
+    if (!isRecord(first)) return;
+    const delta = isRecord(first.delta) ? first.delta : null;
+    if (!delta) return;
+
+    if (typeof delta.content === 'string' && delta.content) {
+      textParts.push(delta.content);
+      onToken(delta.content);
+    }
+
+    const rawCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
+    rawCalls.forEach((rawCall, fallbackIndex) => {
+      if (!isRecord(rawCall)) return;
+      const index =
+        typeof rawCall.index === 'number' ? rawCall.index : fallbackIndex;
+      const current = calls.get(index) ?? { id: '', name: '', args: '' };
+      if (typeof rawCall.id === 'string' && rawCall.id) {
+        current.id = rawCall.id;
+      }
+      const fn = isRecord(rawCall.function) ? rawCall.function : null;
+      if (fn) {
+        if (typeof fn.name === 'string' && fn.name) current.name = fn.name;
+        if (typeof fn.arguments === 'string') current.args += fn.arguments;
+      }
+      calls.set(index, current);
+    });
+  };
+
+  if (response.body) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let newline = buffer.indexOf('\n');
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline).replace(/\r$/, '');
+        buffer = buffer.slice(newline + 1);
+        consumeLine(line);
+        newline = buffer.indexOf('\n');
+      }
+    }
+    if (buffer) consumeLine(buffer);
+  } else {
+    const raw = await response.text();
+    raw.split(/\r?\n/).forEach(consumeLine);
+  }
+
+  const text = textParts.join('').trim();
+  const toolCalls: AiToolCall[] = [];
+  [...calls.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .forEach(([index, call]) => {
+      if (!call.name) return;
+      toolCalls.push({
+        id: call.id || `openai_call_${index}`,
+        name: call.name,
+        args: parseArgsObject(call.args, call.name),
+      });
+    });
+
+  if (!text && toolCalls.length === 0) {
+    throw new Error('Провайдер вернул пустой ответ');
+  }
+  return { text, toolCalls };
+}
+
 export function createOpenAISend(
   ai: AIConfig,
   fetchImpl: FetchLike
 ): AiSendChat {
-  return async ({ system, messages, tools, signal }: AiChatRequest) => {
+  return async ({ system, messages, tools, signal, onToken }: AiChatRequest) => {
     const baseUrl = normalizeBaseUrl(ai.openaiBaseUrl, 'https://api.openai.com/v1');
     const model = ai.openaiModel.trim() || 'gpt-6-luna';
     const apiKey = ai.openaiApiKey.trim();
@@ -111,11 +200,16 @@ export function createOpenAISend(
         })),
         tool_choice: 'auto',
         temperature: 0.4,
+        ...(onToken ? { stream: true } : {}),
       }),
     });
 
     if (!response.ok) {
       throw new Error(await readHttpError(response));
+    }
+
+    if (onToken) {
+      return readOpenAIStream(response, onToken);
     }
 
     const payload = (await response.json()) as unknown;

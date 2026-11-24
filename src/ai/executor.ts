@@ -148,6 +148,7 @@ export async function runAiCommand(options: AiRunOptions): Promise<AiRunResult> 
         messages,
         tools: TOOL_DEFINITIONS,
         signal,
+        onToken: (delta) => onEvent?.({ type: 'assistant-delta', text: delta }),
       });
       throwIfAborted(signal);
 

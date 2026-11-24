@@ -605,10 +605,11 @@ export interface BBox {
 2. **OpenAI-compatible (`src/ai/providers/openai.ts`):**
    * `POST {baseURL}/chat/completions` (нормализация завершающего `/`), заголовок `Authorization: Bearer <apiKey>`.
    * Передаются `messages`, `tools` в формате `type: "function"`, цикл обработки `message.tool_calls` с возвратом `role: "tool"`.
+   * Если исполнитель передаёт `onToken`, запрос идёт со `stream: true`, SSE-дельты текста эмитятся событием `assistant-delta` и печатаются в `CommandBar`/индикаторе в реальном времени; tool calls собираются из дельт. Остальные провайдеры пока отвечают целиком (запасной путь без стриминга).
 
 ### Исполнитель и жизненный цикл (`src/ai/executor.ts`)
 1. При запуске промпта создаётся `AbortController` (кнопка «Стоп» в `CommandBar`).
-2. ИИ работает в цикле до **5 шагов** (`MAX_TOOL_ITERATIONS = 5`), пока модель возвращает `tool_calls` / `functionCall`.
+2. ИИ работает в цикле до **8 шагов** (`MAX_TOOL_STEPS = 8`, после `report_plan` — до 12), пока модель возвращает `tool_calls` / `functionCall`.
 3. Каждый вызов валидируется по схеме (`src/ai/registry.ts`) — неверные параметры возвращают модели структурированную ошибку без краша сцены.
 4. Перед серией tool calls история `zundo` ставится на паузу (`pause()`), после выполнения всей цепочки команд в `src/core/commands.ts` фиксируется **ровно один шаг Undo** (`resume()` + commit), чтобы пользователь мог отменить весь результат ИИ одним `Ctrl+Z`.
 

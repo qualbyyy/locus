@@ -25,6 +25,7 @@ export function CommandBar({
   const status = useAiTaskStore((s) => s.status);
   const log = useAiTaskStore((s) => s.log);
   const answer = useAiTaskStore((s) => s.answer);
+  const streamText = useAiTaskStore((s) => s.streamText);
   const error = useAiTaskStore((s) => s.error);
   const stepInfo = useAiTaskStore((s) => s.step);
   const attachments = useAiTaskStore((s) => s.attachments);
@@ -141,7 +142,7 @@ export function CommandBar({
         role="dialog"
         aria-modal="true"
         aria-label="Командная строка ИИ"
-        className="flex w-full max-w-[680px] flex-col overflow-hidden rounded-lg border border-paper-border bg-paper-panel text-paper-ink shadow-2xl"
+        className="animate-rise flex w-full max-w-[680px] flex-col overflow-hidden rounded-lg border border-paper-border bg-paper-panel text-paper-ink shadow-2xl"
       >
         <div className="flex items-center justify-between gap-3 border-b border-paper-border px-4 py-2.5">
           <div className="flex min-w-0 items-center gap-2">
@@ -231,41 +232,54 @@ export function CommandBar({
             </div>
           )}
 
-          {log.length > 0 && (
-            <ul className="flex max-h-44 flex-col gap-1 overflow-y-auto rounded border border-paper-border bg-paper-bg px-2.5 py-2">
-              {log.map((entry, index) => (
-                <li
-                  key={`${entry.name}_${index}`}
-                  className="flex items-start gap-2 text-[11px] leading-snug"
-                >
-                  <span
-                    className={
-                      entry.ok
-                        ? 'mt-0.5 shrink-0 font-semibold text-paper-accent'
-                        : 'mt-0.5 shrink-0 font-semibold text-paper-danger'
-                    }
-                  >
-                    {entry.ok ? 'OK' : '!'}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="text-paper-muted">
-                      {TOOL_LABELS[entry.name] ?? entry.name}:{' '}
-                    </span>
-                    <span className={entry.ok ? 'text-paper-ink' : 'text-paper-danger'}>
-                      {entry.error ?? entry.summary}
-                    </span>
-                  </span>
-                </li>
-              ))}
-            </ul>
+          {isRunning && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 text-[12px] text-paper-muted">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.75} />
+                {stepInfo
+                  ? `Шаг ${stepInfo.step} из ${stepInfo.maxSteps}: модель думает…`
+                  : 'Отправляю запрос…'}
+              </div>
+              {streamText && (
+                <div className="animate-rise whitespace-pre-wrap rounded border border-paper-border bg-paper-bg px-3 py-2 text-[12px] leading-relaxed">
+                  {streamText}
+                  <span className="ai-caret" />
+                </div>
+              )}
+            </div>
           )}
 
-          {isRunning && (
-            <div className="flex items-center gap-2 text-[12px] text-paper-muted">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.75} />
-              {stepInfo
-                ? `Шаг ${stepInfo.step} из ${stepInfo.maxSteps}: модель думает…`
-                : 'Отправляю запрос…'}
+          {log.length > 0 && (
+            <div className="flex max-h-44 flex-col gap-1 overflow-y-auto rounded border border-paper-border bg-paper-bg px-2.5 py-2">
+              <span className="text-[10px] uppercase tracking-wider text-paper-muted">
+                Шаги
+              </span>
+              <ul className="flex flex-col gap-1">
+                {log.map((entry, index) => (
+                  <li
+                    key={`${entry.name}_${index}`}
+                    className="animate-rise flex items-start gap-2 text-[11px] leading-snug"
+                  >
+                    <span
+                      className={
+                        entry.ok
+                          ? 'mt-0.5 shrink-0 font-semibold text-paper-accent'
+                          : 'mt-0.5 shrink-0 font-semibold text-paper-danger'
+                      }
+                    >
+                      {entry.ok ? 'OK' : '!'}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="text-paper-muted">
+                        {TOOL_LABELS[entry.name] ?? entry.name}:{' '}
+                      </span>
+                      <span className={entry.ok ? 'text-paper-ink' : 'text-paper-danger'}>
+                        {entry.error ?? entry.summary}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 

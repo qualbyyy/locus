@@ -360,6 +360,45 @@ describe('AI provider adapters', () => {
     expect(body.messages.at(-1).tool_call_id).toBe('prev_1');
   });
 
+  it('streams OpenAI-compatible text deltas and assembles tool calls', async () => {
+    const encoder = new TextEncoder();
+    const chunks = [
+      'data: {"choices":[{"delta":{"content":"При"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"вет"}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_9","function":{"name":"create_shape","arguments":"{\\"preset\\":"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"star\\"}"}}]}}]}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    const send = createSendChat(
+      { ...DEFAULT_AI_CONFIG, provider: 'openai', openaiApiKey: 'sk-test' },
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              for (const chunk of chunks) {
+                controller.enqueue(encoder.encode(chunk));
+              }
+              controller.close();
+            },
+          }),
+          { status: 200 }
+        )
+    );
+
+    const deltas: string[] = [];
+    const reply = await send({
+      system: 'system',
+      messages: baseMessages,
+      tools: TOOL_DEFINITIONS,
+      onToken: (delta) => deltas.push(delta),
+    });
+
+    expect(deltas.join('')).toBe('Привет');
+    expect(reply.text).toBe('Привет');
+    expect(reply.toolCalls[0].name).toBe('create_shape');
+    expect(reply.toolCalls[0].args).toEqual({ preset: 'star' });
+  });
+
   it('builds Anthropic requests and parses tool_use blocks', async () => {
     const captured: { url?: string; init?: RequestInit } = {};
     const send = createSendChat(

@@ -123,8 +123,8 @@ function ToggleRow({
         }`}
       >
         <span
-          className={`block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
-            checked ? 'translate-x-4' : 'translate-x-0.5'
+          className={`block h-3.5 w-3.5 rounded-full bg-white transition-transform duration-200 ease-out ${
+            checked ? 'translate-x-[20px]' : 'translate-x-0.5'
           }`}
         />
       </button>
@@ -555,12 +555,16 @@ export function SettingsModal({
       await useCanvasBackdropStore
         .getState()
         .save({ name: file.name, mimeType, bytes: file.bytes });
-      setCanvasStatus('Фон рабочей области обновлён');
+      setCanvasStatus(
+        useCanvasBackdropStore.getState().warning ??
+          'Фон рабочей области обновлён'
+      );
     } catch (err) {
+      console.error('Locus: не удалось загрузить фон рабочей области', err);
       setCanvasStatus(
         err instanceof Error
           ? `Не удалось загрузить изображение: ${err.message}`
-          : 'Не удалось загрузить изображение'
+          : `Не удалось загрузить изображение: ${String(err)}`
       );
     } finally {
       setIsCanvasImageLoading(false);
@@ -613,7 +617,7 @@ export function SettingsModal({
       }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-paper-ink/30 p-4"
     >
-      <div className="flex h-[540px] w-full max-w-3xl flex-col overflow-hidden rounded border border-paper-border bg-paper-panel">
+      <div className="animate-rise flex h-[540px] w-full max-w-3xl flex-col overflow-hidden rounded border border-paper-border bg-paper-panel">
         <div className="flex h-11 shrink-0 items-center justify-between border-b border-paper-border px-4">
           <span className="text-[14px] font-semibold text-paper-ink">
             Настройки Locus

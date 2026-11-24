@@ -64,7 +64,7 @@ export function ContextMenu({
         event.preventDefault();
         event.stopPropagation();
       }}
-      className="fixed z-[70] min-w-52 rounded border border-paper-border bg-paper-panel py-1 text-[12px] text-paper-ink"
+      className="animate-fade-in fixed z-[70] min-w-52 rounded border border-paper-border bg-paper-panel py-1 text-[12px] text-paper-ink"
       style={{ left: position.x, top: position.y }}
     >
       {items.map((item) => (
