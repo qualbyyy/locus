@@ -6,6 +6,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from 'react';
+import { BookOpen, X } from 'lucide-react';
 import { inferImageMimeType, registerAssetFromBytes } from './core/assets';
 import {
   copyLayerStyle,
@@ -93,6 +94,7 @@ import { RasterExportModal } from './ui/RasterExportModal';
 import { SettingsModal, type SettingsTabId } from './ui/SettingsModal';
 import { TutorialModal } from './ui/tutorial/TutorialModal';
 import { useTutorialStore } from './tutorial/store';
+import { dismissTutorialWelcome } from './tutorial/progress';
 import { StartModal } from './ui/StartModal';
 import { Toolbar } from './ui/Toolbar';
 import { TopBar } from './ui/TopBar';
@@ -169,6 +171,7 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [isUnsavedOpen, setIsUnsavedOpen] = useState(false);
   const [isSavingBeforeAction, setIsSavingBeforeAction] = useState(false);
+  const [showTutorialHint, setShowTutorialHint] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -1042,6 +1045,13 @@ export function App() {
     background: string;
   }) => {
     resetDocument(opts);
+    const settingsState = useSettingsStore.getState();
+    if (settingsState.loaded && !settingsState.settings.tutorial.welcomeDismissed) {
+      settingsState.updateSettings({
+        tutorial: dismissTutorialWelcome(settingsState.settings.tutorial),
+      });
+      setShowTutorialHint(true);
+    }
     setIsStartModalOpen(false);
     requestAnimationFrame(() => {
       canvasRef.current?.fitArtboard();
@@ -1599,6 +1609,31 @@ export function App() {
           <div className="rounded border border-paper-border bg-paper-panel px-4 py-2 text-[13px] font-medium text-paper-ink">
             Отпустите PNG, JPEG, WebP или SVG для вставки на холст
           </div>
+        </div>
+      )}
+
+      {showTutorialHint && (
+        <div className="animate-rise fixed bottom-4 left-4 z-40 flex max-w-[calc(100vw-32px)] items-center gap-2 rounded border border-paper-border bg-paper-panel px-3 py-2 text-[12px] text-paper-ink">
+          <BookOpen className="h-3.5 w-3.5 shrink-0 text-paper-accent" strokeWidth={1.75} />
+          <span className="whitespace-nowrap">Не знаете с чего начать?</span>
+          <button
+            type="button"
+            onClick={() => {
+              setShowTutorialHint(false);
+              openTutorial();
+            }}
+            className="shrink-0 font-medium text-paper-accent hover:underline"
+          >
+            Открыть обучение
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowTutorialHint(false)}
+            title="Скрыть"
+            className="ml-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded text-paper-muted hover:bg-paper-hover hover:text-paper-ink"
+          >
+            <X className="h-3.5 w-3.5" strokeWidth={1.75} />
+          </button>
         </div>
       )}
 
