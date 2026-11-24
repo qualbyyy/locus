@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Фон: тёплая бумага -->
+  <rect x="32" y="32" width="960" height="960" rx="220" fill="#f5f2eb" stroke="#dfd9ce" stroke-width="12"/>
+
+  <!-- Оптически отцентрированная L: терракота + графит -->
+  <rect x="302" y="216" width="156" height="584" rx="78" fill="#da7756"/>
+  <rect x="302" y="644" width="444" height="156" rx="78" fill="#1c1b1a"/>
+  <circle cx="380" cy="722" r="38" fill="#f5f2eb"/>
+</svg>
