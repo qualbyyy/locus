@@ -73,6 +73,7 @@ interface SettingsModalProps {
   onClose: () => void;
   onRestoreDraft?: (scene: Scene) => void;
   initialTab?: SettingsTabId | null;
+  onOpenTutorial?: () => void;
 }
 
 const TABS: Array<{
@@ -366,7 +367,8 @@ export function SettingsModal({
   isOpen,
   onClose,
   onRestoreDraft,
-  initialTab,
+  initialTab = null,
+  onOpenTutorial,
 }: SettingsModalProps) {
   const settings = useSettingsStore((s) => s.settings);
   const lastAutosaveAt = useSettingsStore((s) => s.lastAutosaveAt);
@@ -1676,9 +1678,10 @@ export function SettingsModal({
           <div className="flex min-w-0 items-center gap-2">
             <button
               type="button"
-              disabled
-              title="Раздел будет добавлен позже"
-              className="h-7 cursor-not-allowed rounded border border-paper-border bg-paper-bg px-2.5 text-[12px] text-paper-muted opacity-60"
+              onClick={onOpenTutorial}
+              disabled={!onOpenTutorial}
+              title="Открыть обучение (F1)"
+              className="h-7 rounded border border-paper-border bg-paper-bg px-2.5 text-[12px] text-paper-ink hover:bg-paper-hover disabled:cursor-not-allowed disabled:text-paper-muted disabled:opacity-60"
             >
               Обучение
             </button>

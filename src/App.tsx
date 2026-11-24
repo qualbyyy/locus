@@ -92,6 +92,7 @@ import type { MenuBarActions, MenuBarState } from './ui/MenuBar';
 import { RasterExportModal } from './ui/RasterExportModal';
 import { SettingsModal, type SettingsTabId } from './ui/SettingsModal';
 import { TutorialModal } from './ui/tutorial/TutorialModal';
+import { useTutorialStore } from './tutorial/store';
 import { StartModal } from './ui/StartModal';
 import { Toolbar } from './ui/Toolbar';
 import { TopBar } from './ui/TopBar';
@@ -137,6 +138,7 @@ export function App() {
   const smartShapeOptions = useEditorStore((s) => s.smartShapeOptions);
   const zoomPercent = useEditorStore((s) => s.zoomPercent);
   const isDirty = useEditorStore((s) => s.isDirty);
+  const isAcademyOpen = useTutorialStore((state) => state.isAcademyOpen);
 
   const setSelectedIds = useEditorStore((s) => s.setSelectedIds);
   const setSelectedNode = useEditorStore((s) => s.setSelectedNode);
@@ -182,6 +184,13 @@ export function App() {
   const openSettingsTab = useCallback((tab: SettingsTabId | null = null) => {
     setSettingsInitialTab(tab);
     setIsSettingsModalOpen(true);
+  }, []);
+
+  const openTutorial = useCallback(() => {
+    setIsStartModalOpen(false);
+    setIsSettingsModalOpen(false);
+    setSettingsInitialTab(null);
+    useTutorialStore.getState().openAcademy();
   }, []);
 
   useEffect(() => {
@@ -701,6 +710,13 @@ export function App() {
       const action = matchShortcut(event, currentSettings.customShortcuts);
       const editable = isEditableElement(event.target);
 
+      if (action === 'app.openTutorial') {
+        event.preventDefault();
+        if (isCommandBarOpen || rasterExportOpen || activeEffectModal) return;
+        openTutorial();
+        return;
+      }
+
       if (action === 'app.openSettings' && !isStartModalOpen && !editable) {
         event.preventDefault();
         setSettingsInitialTab(null);
@@ -722,6 +738,7 @@ export function App() {
       if (
         isStartModalOpen ||
         isSettingsModalOpen ||
+        isAcademyOpen ||
         isCommandBarOpen ||
         rasterExportOpen ||
         activeEffectModal !== null
@@ -1004,8 +1021,10 @@ export function App() {
     activeEffectModal,
     isSettingsModalOpen,
     isStartModalOpen,
+    isAcademyOpen,
     isCommandBarOpen,
     openCommandBar,
+    openTutorial,
     rasterExportOpen,
     setActiveTool,
     setSelectedIds,
@@ -1161,6 +1180,9 @@ export function App() {
       onDuplicate: () => duplicateLayers(useEditorStore.getState().selectedIds, 16, 16),
       onDelete: () => deleteLayers(useEditorStore.getState().selectedIds),
       onOpenSettings: () => openSettingsTab(null),
+      onOpenTutorial: openTutorial,
+      onOpenShortcuts: () => openSettingsTab('shortcuts'),
+      onOpenAbout: () => openSettingsTab('about'),
       onRotateBy: (deg) => rotateLayersBy(useEditorStore.getState().selectedIds, deg),
       onFlip: (axis) => flipLayers(useEditorStore.getState().selectedIds, axis),
       onReorder: (mode) => {
@@ -1220,6 +1242,7 @@ export function App() {
       handleToggleSnap,
       openCommandBar,
       openSettingsTab,
+      openTutorial,
       requestNewProject,
       requestOpenProject,
       showNotice,
@@ -1602,6 +1625,7 @@ export function App() {
         onClose={() => setIsStartModalOpen(false)}
         onCreateDocument={handleCreateDocument}
         onOpenProject={requestOpenProject}
+        onOpenTutorial={openTutorial}
       />
 
       <SettingsModal
@@ -1612,6 +1636,7 @@ export function App() {
           setSettingsInitialTab(null);
         }}
         onRestoreDraft={handleRestoreDraft}
+        onOpenTutorial={openTutorial}
       />
 
       <TutorialModal />

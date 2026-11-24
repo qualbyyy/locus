@@ -43,6 +43,7 @@ interface StartModalProps {
     background: string;
   }) => void;
   onOpenProject: () => void;
+  onOpenTutorial?: () => void;
 }
 
 export function StartModal({
@@ -50,6 +51,7 @@ export function StartModal({
   onClose,
   onCreateDocument,
   onOpenProject,
+  onOpenTutorial,
 }: StartModalProps) {
   const [selectedPresetId, setSelectedPresetId] = useState<string>(
     DOCUMENT_PRESETS[0].id
@@ -245,14 +247,25 @@ export function StartModal({
           </div>
 
           <div className="flex items-center justify-between gap-3 border-t border-paper-border px-4 py-3">
-            <button
-              type="button"
-              onClick={onOpenProject}
-              className="flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded border border-paper-border bg-paper-bg px-3 text-[12px] text-paper-ink hover:bg-paper-hover"
-            >
-              <FolderOpen className="h-3.5 w-3.5 shrink-0 text-paper-muted" strokeWidth={1.75} />
-              <span>Открыть .locus</span>
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={onOpenProject}
+                className="flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded border border-paper-border bg-paper-bg px-3 text-[12px] text-paper-ink hover:bg-paper-hover"
+              >
+                <FolderOpen className="h-3.5 w-3.5 shrink-0 text-paper-muted" strokeWidth={1.75} />
+                <span>Открыть .locus</span>
+              </button>
+              {onOpenTutorial && (
+                <button
+                  type="button"
+                  onClick={onOpenTutorial}
+                  className="text-[11px] text-paper-muted underline-offset-2 hover:text-paper-ink hover:underline"
+                >
+                  Впервые в Locus? Как это работает
+                </button>
+              )}
+            </div>
             <button
               type="submit"
               className="h-8 shrink-0 whitespace-nowrap rounded bg-paper-accent px-4 text-[12px] font-medium text-white hover:bg-paper-accent-hover"

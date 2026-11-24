@@ -25,6 +25,7 @@ export type ShortcutActionId =
   | 'view.toggleSnap'
   | 'app.openSettings'
   | 'app.commandBar'
+  | 'app.openTutorial'
   | 'vector.textToOutlines'
   | 'vector.combineCompound'
   | 'vector.splitCompound'
@@ -196,6 +197,13 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     defaultCombo: 'Ctrl+KeyK',
     editable: false,
     note: 'Этап 5',
+  },
+  {
+    id: 'app.openTutorial',
+    label: 'Открыть обучение',
+    category: 'view',
+    defaultCombo: 'F1',
+    editable: false,
   },
   {
     id: 'vector.textToOutlines',

@@ -39,6 +39,9 @@ export interface MenuBarActions {
   onDuplicate: () => void;
   onDelete: () => void;
   onOpenSettings: () => void;
+  onOpenTutorial: () => void;
+  onOpenShortcuts: () => void;
+  onOpenAbout: () => void;
   onRotateBy: (deg: number) => void;
   onFlip: (axis: 'horizontal' | 'vertical') => void;
   onReorder: (mode: 'front' | 'forward' | 'backward' | 'back') => void;
@@ -407,6 +410,16 @@ export function MenuBar({
           { label: 'Инспектор', checked: state.showInspector, onClick: actions.onToggleInspector },
           { type: 'sep' },
           { label: 'Командная строка ИИ', shortcut: 'Ctrl+K', onClick: actions.onOpenCommandBar },
+        ],
+      },
+      {
+        id: 'help',
+        label: 'Справка',
+        items: [
+          { label: 'Обучение', shortcut: 'F1', onClick: actions.onOpenTutorial },
+          { label: 'Горячие клавиши', onClick: actions.onOpenShortcuts },
+          { type: 'sep' },
+          { label: 'О приложении', onClick: actions.onOpenAbout },
         ],
       },
     ],
