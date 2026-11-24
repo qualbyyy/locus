@@ -719,6 +719,7 @@ export function App() {
 
       if (action === 'app.openSettings' && !isStartModalOpen && !editable) {
         event.preventDefault();
+        useTutorialStore.getState().closeAcademy();
         setSettingsInitialTab(null);
         setIsSettingsModalOpen((open) => !open);
         return;
@@ -728,6 +729,7 @@ export function App() {
         action === 'app.commandBar' &&
         !isStartModalOpen &&
         !isSettingsModalOpen &&
+        !isAcademyOpen &&
         !isCommandBarOpen
       ) {
         event.preventDefault();
