@@ -4,6 +4,7 @@ import type { SmartShapeOptions, SubPath } from '../src/core/types';
 import {
   generateSmartShape,
   randomizeAnchors,
+  roundPathCorners,
   smoothSubPaths,
 } from '../src/engine/geometry';
 
@@ -144,8 +145,7 @@ describe('engine/geometry', () => {
     expect(smoothedOpen[0].anchors[1].smooth).toBe(true);
   });
 
-  it('randomizes anchors deterministically and respects zero intensity', () => {
-    const polygon = generateSmartShape(120, 120, {
+  it('randomizes anchors deterministically and respects zero intensity', () => {    const polygon = generateSmartShape(120, 120, {
       ...BASE_OPTIONS,
       preset: 'polygon',
       points: 6,
@@ -158,5 +158,24 @@ describe('engine/geometry', () => {
     expect(wobbledA).toEqual(wobbledB);
     expect(wobbledA).not.toEqual(polygon);
     assertCenteredAndFinite(wobbledA);
+  });
+
+  it('rounds straight corners into bezier fillets and leaves curves untouched', () => {
+    const star = generateSmartShape(160, 160, {
+      ...BASE_OPTIONS,
+      preset: 'star',
+      points: 5,
+    });
+    const rounded = roundPathCorners(star, 8);
+    expect(rounded).toHaveLength(star.length);
+    expect(rounded[0].closed).toBe(true);
+    expect(rounded[0].anchors.length).toBeGreaterThan(star[0].anchors.length);
+    for (const anchor of rounded[0].anchors) {
+      expect(Number.isFinite(anchor.x)).toBe(true);
+      expect(Number.isFinite(anchor.handleOut.x)).toBe(true);
+    }
+
+    const smooth = smoothSubPaths(star, 1);
+    expect(roundPathCorners(smooth, 8)).toEqual(smooth);
   });
 });

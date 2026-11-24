@@ -303,6 +303,79 @@ export function smoothSubPaths(subpaths: SubPath[], factor = 1): SubPath[] {
   });
 }
 
+/**
+ * Скругляет прямые углы на стыках двух линейных сегментов. Кривые участки
+ * не трогает: каждый угол заменяется парой узлов с кубической дугой между ними.
+ */
+export function roundPathCorners(subpaths: SubPath[], radius: number): SubPath[] {
+  if (radius <= 0) return cloneSubPaths(subpaths);
+  const eps = 0.01;
+
+  return subpaths.map((sp) => {
+    const { anchors, closed } = sp;
+    const count = anchors.length;
+    if (count < 3) {
+      return { closed, anchors: cloneSubPaths([sp])[0].anchors };
+    }
+
+    const result: AnchorPoint[] = [];
+
+    for (let i = 0; i < count; i += 1) {
+      const cur = anchors[i];
+      const prevIndex = i === 0 ? (closed ? count - 1 : -1) : i - 1;
+      const nextIndex = i === count - 1 ? (closed ? 0 : -1) : i + 1;
+
+      const cornerVertex =
+        Math.hypot(cur.handleIn.x, cur.handleIn.y) < eps &&
+        Math.hypot(cur.handleOut.x, cur.handleOut.y) < eps;
+      if (!cornerVertex || prevIndex < 0 || nextIndex < 0) {
+        result.push({ ...cur, handleIn: { ...cur.handleIn }, handleOut: { ...cur.handleOut } });
+        continue;
+      }
+
+      const prev = anchors[prevIndex];
+      const next = anchors[nextIndex];
+      const straightPrev = Math.hypot(prev.handleOut.x, prev.handleOut.y) < eps;
+      const straightNext = Math.hypot(next.handleIn.x, next.handleIn.y) < eps;
+      if (!straightPrev || !straightNext) {
+        result.push({ ...cur, handleIn: { ...cur.handleIn }, handleOut: { ...cur.handleOut } });
+        continue;
+      }
+
+      const inLen = Math.hypot(cur.x - prev.x, cur.y - prev.y);
+      const outLen = Math.hypot(next.x - cur.x, next.y - cur.y);
+      const trim = Math.min(radius, inLen / 2, outLen / 2);
+      if (inLen < eps || outLen < eps || trim < eps) {
+        result.push({ ...cur, handleIn: { ...cur.handleIn }, handleOut: { ...cur.handleOut } });
+        continue;
+      }
+
+      const ax = cur.x + ((prev.x - cur.x) / inLen) * trim;
+      const ay = cur.y + ((prev.y - cur.y) / inLen) * trim;
+      const bx = cur.x + ((next.x - cur.x) / outLen) * trim;
+      const by = cur.y + ((next.y - cur.y) / outLen) * trim;
+      const k = 2 / 3;
+
+      result.push({
+        x: ax,
+        y: ay,
+        handleIn: { x: 0, y: 0 },
+        handleOut: { x: (cur.x - ax) * k, y: (cur.y - ay) * k },
+        smooth: false,
+      });
+      result.push({
+        x: bx,
+        y: by,
+        handleIn: { x: (cur.x - bx) * k, y: (cur.y - by) * k },
+        handleOut: { x: 0, y: 0 },
+        smooth: false,
+      });
+    }
+
+    return { closed, anchors: result };
+  });
+}
+
 export function createBlobSubPaths(
   width: number,
   height: number,

@@ -8,7 +8,7 @@ import {
   computeSplitCompoundPath,
   type BooleanOp,
 } from '../../engine/booleans';
-import { randomizeAnchors, smoothSubPaths } from '../../engine/geometry';
+import { randomizeAnchors, roundPathCorners, smoothSubPaths } from '../../engine/geometry';
 import {
   hasVectorEffects,
   resolveEffectivePathGeometry,
@@ -186,6 +186,19 @@ export function smoothLayers(layerIds: string[], factor = 1): Scene {
     return {
       ...layer,
       subpaths: smoothSubPaths(layer.subpaths, factor),
+    };
+  });
+}
+
+export function roundCornersLayers(layerIds: string[], radius: number): Scene {
+  if (layerIds.length === 0 || radius <= 0) {
+    return useEditorStore.getState().scene;
+  }
+  return updateLayers(layerIds, (layer) => {
+    if (layer.type !== 'path') return layer;
+    return {
+      ...layer,
+      subpaths: roundPathCorners(layer.subpaths, radius),
     };
   });
 }

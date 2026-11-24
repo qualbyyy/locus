@@ -5,9 +5,12 @@ import {
   deleteLayers,
   duplicateLayers,
   insertAnchorOnSegment,
+  mirrorDuplicateLayers,
+  placeLayersInBounds,
   redoCommand,
   releaseClipMask,
   reorderLayer,
+  repeatLayers,
   resetDocument,
   runCommandBatch,
   setClipMask,
@@ -16,7 +19,7 @@ import {
   updateLayers,
   updatePathSubpaths,
 } from '../src/core/commands';
-import { localToWorld } from '../src/core/math';
+import { computeLayerWorldBBox, localToWorld } from '../src/core/math';
 import { useEditorStore } from '../src/core/store';
 import type { PathLayer } from '../src/core/types';
 
@@ -220,5 +223,37 @@ describe('core/commands & zundo store', () => {
 
     redoCommand();
     expect(useEditorStore.getState().scene.layers).toHaveLength(3);
+  });
+
+  it('mirrors, repeats and fits layers with predictable geometry', () => {
+    const square = createShapeLayer({
+      preset: 'rect',
+      x: 300,
+      y: 300,
+      width: 120,
+      height: 80,
+    });
+    const copies = repeatLayers([square.id], {
+      mode: 'grid',
+      count: 5,
+      columns: 2,
+      gap: 10,
+    });
+    expect(copies).toHaveLength(4);
+
+    placeLayersInBounds([square.id], { x: 100, y: 200, width: 160, height: 160 });
+    const fitted = useEditorStore
+      .getState()
+      .scene.layers.find((layer) => layer.id === square.id)!;
+    const box = computeLayerWorldBBox(fitted);
+    expect(box.width).toBeCloseTo(160, 2);
+    expect(box.height).toBeCloseTo(106.67, 1);
+    expect(box.x).toBeCloseTo(100, 2);
+    expect(box.y).toBeCloseTo(226.67, 1);
+
+    const mirrored = mirrorDuplicateLayers([square.id], 'horizontal');
+    expect(mirrored).toHaveLength(1);
+    const copyX = mirrored[0].x;
+    expect(copyX + fitted.x).toBeCloseTo(1080, 4);
   });
 });

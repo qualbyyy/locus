@@ -2,18 +2,35 @@ import {
   addLayer,
   alignLayers,
   booleanLayers,
+  combineCompoundPathLayers,
   createShapeLayer,
   createTextLayer,
   createLayerId,
   deleteLayers,
+  deselectAllLayers,
   duplicateLayers,
+  flipLayers,
+  invertSelection,
+  mirrorDuplicateLayers,
+  offsetPathLayers,
+  outlineStrokeLayers,
+  placeLayersInBounds,
   reorderLayer,
+  repeatLayers,
+  rotateLayersBy,
+  roundCornersLayers,
+  selectAllLayers,
+  selectSimilarLayers,
   setClipMask,
+  simplifyPathLayers,
+  splitCompoundPathLayers,
+  transformTextCase,
   updateArtboard,
   updateLayers,
   updatePathSubpaths,
   type AlignMode,
 } from '../core/commands';
+import { computeLayerWorldBBox } from '../core/math';
 import { useEditorStore } from '../core/store';
 import type {
   BuiltinFontFamily,
@@ -67,6 +84,21 @@ export const TOOL_LABELS: Record<string, string> = {
   align_layers: 'Выравнивание',
   apply_palette: 'Палитра',
   boolean_op: 'Булева операция',
+  flip_layers: 'Отражение',
+  offset_path: 'Параллельный контур',
+  outline_stroke: 'Обводка в контуры',
+  combine_compound: 'Составной контур',
+  split_compound: 'Разбиение контура',
+  simplify_path: 'Упрощение контура',
+  set_artboard: 'Артборд',
+  text_case: 'Регистр текста',
+  rotate_layers: 'Поворот',
+  select_layers: 'Выделение',
+  get_layer_geometry: 'Геометрия слоёв',
+  mirror_duplicate: 'Зеркальный дубль',
+  repeat_layer: 'Повтор',
+  round_corners: 'Скругление углов',
+  place_in_bounds: 'Вписать в прямоугольник',
 };
 
 class ToolError extends Error {}
@@ -838,6 +870,364 @@ function booleanOpTool(args: Record<string, unknown>): Record<string, unknown> {
   return describeLayer(result, `Булева операция ${operation}:`);
 }
 
+function flipLayersTool(args: Record<string, unknown>): Record<string, unknown> {
+  const ids = selectedOrGivenLayerIds(args);
+  const axis = requiredEnum(args, 'axis', ['horizontal', 'vertical'] as const);
+  flipLayers(ids, axis);
+  return {
+    summary: `Отражено слоёв: ${ids.length} (${axis === 'horizontal' ? 'по горизонтали' : 'по вертикали'})`,
+    layerIds: ids,
+  };
+}
+
+function offsetPathTool(args: Record<string, unknown>): Record<string, unknown> {
+  const ids = selectedOrGivenLayerIds(args);
+  const distance = requiredNumber(args, 'distance', -500, 500);
+  if (Math.abs(distance) < 0.5) fail('distance: смещение не может быть нулевым');
+  const copyBehind = optionalBoolean(args, 'copyBehind', true);
+  const join = optionalEnum(args, 'join', ['round', 'miter', 'bevel'] as const) ?? 'round';
+  const created = offsetPathLayers(ids, distance, { copyBehind, join });
+  if (created.length === 0) {
+    fail('Не удалось построить параллельный контур: нет векторов или смещение слишком велико');
+  }
+  return {
+    summary: copyBehind
+      ? `Создан параллельный контур: ${created.length} сл. (${distance > 0 ? '+' : ''}${distance} px)`
+      : `Смещён контур: ${created.length} сл. (${distance > 0 ? '+' : ''}${distance} px)`,
+    createdLayerIds: created.map((layer) => layer.id),
+  };
+}
+
+function outlineStrokeTool(args: Record<string, unknown>): Record<string, unknown> {
+  const ids = resolveLayerIds(args.layerIds);
+  const created = outlineStrokeLayers(ids);
+  if (created.length === 0) {
+    fail('Нечего обводить: у слоёв нет обводки (stroke)');
+  }
+  return {
+    summary: `Обводка переведена в контуры: ${created.length} сл.`,
+    layerIds: created.map((layer) => layer.id),
+  };
+}
+
+function combineCompoundTool(args: Record<string, unknown>): Record<string, unknown> {
+  const ids = resolveLayerIds(args.layerIds);
+  if (ids.length < 2) fail('combine_compound: нужно минимум 2 векторных слоя');
+  const result = combineCompoundPathLayers(ids);
+  if (!result) fail('Не удалось собрать составной контур');
+  return describeLayer(result, 'Собран составной контур');
+}
+
+function splitCompoundTool(args: Record<string, unknown>): Record<string, unknown> {
+  const ids = resolveLayerIds(args.layerIds);
+  const created = splitCompoundPathLayers(ids);
+  if (created.length === 0) {
+    fail('У выбранных слоёв нет нескольких субконтуров для разбиения');
+  }
+  return {
+    summary: `Контур разбит на части: ${created.length}`,
+    createdLayerIds: created.map((layer) => layer.id),
+  };
+}
+
+function simplifyPathTool(args: Record<string, unknown>): Record<string, unknown> {
+  const ids = resolveLayerIds(args.layerIds);
+  const tolerance = optionalNumber(args, 'tolerance', 0.1, 100, 2.5);
+  const before = countAnchors(ids);
+  simplifyPathLayers(ids, tolerance);
+  const after = countAnchors(ids);
+  return {
+    summary: `Контуры упрощены (tolerance ${tolerance}): узлов ${before} → ${after}`,
+    layerIds: ids,
+    anchorsBefore: before,
+    anchorsAfter: after,
+  };
+}
+
+function countAnchors(ids: string[]): number {
+  const idSet = new Set(ids);
+  return useEditorStore
+    .getState()
+    .scene.layers.reduce((total, layer) => {
+      if (!idSet.has(layer.id) || layer.type !== 'path') return total;
+      return (
+        total + layer.subpaths.reduce((sum, subpath) => sum + subpath.anchors.length, 0)
+      );
+    }, 0);
+}
+
+function setArtboardTool(args: Record<string, unknown>): Record<string, unknown> {
+  const patch: {
+    name?: string;
+    width?: number;
+    height?: number;
+    dpi?: number;
+    background?: string;
+  } = {};
+  if (args.name !== undefined) {
+    const name = optionalString(args, 'name', 200);
+    if (name) patch.name = name;
+  }
+  if (args.width !== undefined) patch.width = optionalNumber(args, 'width', 64, 16000, 1080);
+  if (args.height !== undefined) {
+    patch.height = optionalNumber(args, 'height', 64, 16000, 1080);
+  }
+  if (args.dpi !== undefined) patch.dpi = optionalNumber(args, 'dpi', 72, 600, 72);
+  if (args.background !== undefined) {
+    patch.background = normalizeHexColor(args.background, 'background');
+  }
+  if (Object.keys(patch).length === 0) {
+    fail('set_artboard: передайте хотя бы одно из полей width, height, dpi, background, name');
+  }
+  const scene = updateArtboard(patch);
+  return {
+    summary: `Артборд: ${scene.width}×${scene.height} px, DPI ${scene.dpi}, фон ${scene.background}`,
+    artboard: {
+      width: scene.width,
+      height: scene.height,
+      dpi: scene.dpi,
+      background: scene.background,
+      name: scene.name,
+    },
+  };
+}
+
+function textCaseTool(args: Record<string, unknown>): Record<string, unknown> {
+  const ids = selectedOrGivenLayerIds(args);
+  const mode = requiredEnum(args, 'mode', ['upper', 'lower', 'title'] as const);
+  const before = new Map(
+    useEditorStore
+      .getState()
+      .scene.layers.filter((layer) => ids.includes(layer.id) && layer.type === 'text')
+      .map((layer) => [layer.id, layer.type === 'text' ? layer.content : ''])
+  );
+  if (before.size === 0) fail('text_case: среди слоёв нет текста');
+  transformTextCase(ids, mode);
+  const changed = useEditorStore
+    .getState()
+    .scene.layers.filter((layer) => {
+      if (layer.type !== 'text') return false;
+      const previous = before.get(layer.id);
+      return previous !== undefined && previous !== layer.content;
+    }).length;
+  return {
+    summary: `Регистр изменён: ${changed} текстовых слоёв (${mode})`,
+    changed,
+  };
+}
+
+function rotateLayersTool(args: Record<string, unknown>): Record<string, unknown> {
+  const ids = selectedOrGivenLayerIds(args);
+  const angle = requiredNumber(args, 'angle', -3600, 3600);
+  if (Math.abs(angle) < 1e-4) fail('angle: угол не может быть нулевым');
+  const locked = useEditorStore
+    .getState()
+    .scene.layers.filter((layer) => ids.includes(layer.id) && layer.locked).length;
+  if (locked === ids.length) fail('Все указанные слои заблокированы');
+  rotateLayersBy(ids, angle);
+  return {
+    summary: `Слоёв повёрнуто: ${ids.length - locked} на ${angle}°`,
+    layerIds: ids,
+  };
+}
+
+function selectLayersTool(args: Record<string, unknown>): Record<string, unknown> {
+  const mode = requiredEnum(args, 'mode', [
+    'ids',
+    'all',
+    'none',
+    'invert',
+    'similar_fill',
+    'similar_stroke',
+    'similar_type',
+  ] as const);
+
+  if (mode === 'ids') {
+    const ids = resolveLayerIds(args.layerIds);
+    useEditorStore.setState({ selectedIds: ids, selectedNode: null });
+  } else if (mode === 'all') {
+    selectAllLayers();
+  } else if (mode === 'none') {
+    deselectAllLayers();
+  } else if (mode === 'invert') {
+    invertSelection();
+  } else {
+    const criterion =
+      mode === 'similar_fill' ? 'fill' : mode === 'similar_stroke' ? 'stroke' : 'type';
+    const matched = selectSimilarLayers(criterion);
+    if (matched === 0) {
+      fail('Для выделения похожих нужен выделенный слой с заливкой или обводкой');
+    }
+  }
+
+  const state = useEditorStore.getState();
+  const names = state.scene.layers
+    .filter((layer) => state.selectedIds.includes(layer.id))
+    .map((layer) => layer.name);
+  return {
+    summary: `Выделено слоёв: ${state.selectedIds.length}${
+      names.length > 0 ? ` (${names.slice(0, 10).join(', ')})` : ''
+    }`,
+    selectedIds: state.selectedIds,
+  };
+}
+
+function getLayerGeometryTool(args: Record<string, unknown>): Record<string, unknown> {
+  const state = useEditorStore.getState();
+  let ids: string[];
+  if (args.layerIds === undefined || args.layerIds === null) {
+    ids = state.selectedIds;
+    if (ids.length === 0) {
+      fail('Укажите layerIds или сначала выделите слои');
+    }
+  } else {
+    ids = resolveLayerIds(args.layerIds);
+  }
+
+  const round = (value: number) => Math.round(value * 10) / 10;
+  const MAX_ANCHORS = 200;
+  const idSet = new Set(ids);
+  const layers = state.scene.layers
+    .filter((layer) => idSet.has(layer.id))
+    .map((layer) => {
+      const box = computeLayerWorldBBox(layer);
+      const base = {
+        id: layer.id,
+        name: layer.name,
+        type: layer.type,
+        visible: layer.visible,
+        locked: layer.locked,
+        x: round(layer.x),
+        y: round(layer.y),
+        rotation: round(layer.rotation),
+        scaleX: round(layer.scaleX),
+        scaleY: round(layer.scaleY),
+        opacity: round(layer.opacity),
+        bbox: {
+          x: round(box.x),
+          y: round(box.y),
+          width: round(box.width),
+          height: round(box.height),
+        },
+      };
+
+      if (layer.type === 'path') {
+        const anchorCount = layer.subpaths.reduce(
+          (total, subpath) => total + subpath.anchors.length,
+          0
+        );
+        let budget = MAX_ANCHORS;
+        const subpaths = layer.subpaths.map((subpath) => {
+          const anchors = subpath.anchors.slice(0, Math.max(0, budget)).map((anchor) => ({
+            x: round(anchor.x),
+            y: round(anchor.y),
+            handleIn: { x: round(anchor.handleIn.x), y: round(anchor.handleIn.y) },
+            handleOut: { x: round(anchor.handleOut.x), y: round(anchor.handleOut.y) },
+            smooth: anchor.smooth,
+          }));
+          budget -= anchors.length;
+          return { closed: subpath.closed, anchors };
+        });
+        return {
+          ...base,
+          fill: layer.fill,
+          stroke: layer.stroke,
+          fillRule: layer.fillRule,
+          anchorCount,
+          anchorsTruncated: anchorCount > MAX_ANCHORS,
+          subpaths,
+        };
+      }
+
+      if (layer.type === 'text') {
+        return {
+          ...base,
+          content: layer.content,
+          fontFamily: layer.fontFamily,
+          fontWeight: layer.fontWeight,
+          fontSize: layer.fontSize,
+          lineHeight: layer.lineHeight,
+          letterSpacing: layer.letterSpacing ?? 0,
+          align: layer.align,
+          fill: layer.fill,
+        };
+      }
+
+      return { ...base, width: layer.width, height: layer.height, assetId: layer.assetId };
+    });
+
+  return {
+    summary: `Геометрия слоёв: ${layers.length}`,
+    layers,
+  };
+}
+
+function mirrorDuplicateTool(args: Record<string, unknown>): Record<string, unknown> {
+  const ids = selectedOrGivenLayerIds(args);
+  const axis = requiredEnum(args, 'axis', ['horizontal', 'vertical'] as const);
+  const created = mirrorDuplicateLayers(ids, axis);
+  if (created.length === 0) fail('Не удалось создать зеркальные копии');
+  return {
+    summary: `Созданы зеркальные копии: ${created.length}`,
+    createdLayerIds: created.map((layer) => layer.id),
+  };
+}
+
+function repeatLayerTool(args: Record<string, unknown>): Record<string, unknown> {
+  const ids = selectedOrGivenLayerIds(args);
+  const mode = requiredEnum(args, 'mode', ['row', 'column', 'grid', 'ring'] as const);
+  const count = Math.round(requiredNumber(args, 'count', 2, 40));
+  const gap = optionalNumber(args, 'gap', 0, 5000, 20);
+  const columns = Math.round(optionalNumber(args, 'columns', 2, 10, 3));
+  const radius =
+    args.radius === undefined || args.radius === null
+      ? undefined
+      : optionalNumber(args, 'radius', 1, 5000, 200);
+  const sweep = optionalNumber(args, 'sweep', -360, 360, 360);
+
+  const created = repeatLayers(ids, { mode, count, gap, columns, radius, sweep });
+  if (created.length === 0) fail('Не удалось размножить слои');
+  return {
+    summary: `Создано копий: ${created.length} (${mode}, всего ${count} элементов)`,
+    createdLayerIds: created.map((layer) => layer.id),
+  };
+}
+
+function roundCornersTool(args: Record<string, unknown>): Record<string, unknown> {
+  const ids = selectedOrGivenLayerIds(args);
+  const radius = requiredNumber(args, 'radius', 0.5, 2000);
+  const paths = useEditorStore
+    .getState()
+    .scene.layers.filter((layer) => ids.includes(layer.id) && layer.type === 'path').length;
+  if (paths === 0) fail('round_corners: среди слоёв нет векторов');
+  roundCornersLayers(ids, radius);
+  return {
+    summary: `Углы скруглены: ${paths} контур(ов), радиус ${radius} px`,
+    layerIds: ids,
+  };
+}
+
+function placeInBoundsTool(args: Record<string, unknown>): Record<string, unknown> {
+  const ids = selectedOrGivenLayerIds(args);
+  const box = {
+    x: requiredNumber(args, 'x', -100000, 100000),
+    y: requiredNumber(args, 'y', -100000, 100000),
+    width: requiredNumber(args, 'width', 1, 100000),
+    height: requiredNumber(args, 'height', 1, 100000),
+  };
+  const mode = optionalEnum(args, 'mode', ['fit', 'fill'] as const) ?? 'fit';
+  const locked = useEditorStore
+    .getState()
+    .scene.layers.filter((layer) => ids.includes(layer.id) && layer.locked).length;
+  if (locked === ids.length) fail('Все указанные слои заблокированы');
+  placeLayersInBounds(ids, box, mode);
+  return {
+    summary: `Вписано в прямоугольник ${box.width}×${box.height}: ${ids.length - locked} сл. (${mode})`,
+    layerIds: ids,
+    box,
+  };
+}
+
 type ToolHandler = (args: Record<string, unknown>) => Record<string, unknown>;
 
 const TOOL_HANDLERS: Record<string, ToolHandler> = {
@@ -855,6 +1245,27 @@ const TOOL_HANDLERS: Record<string, ToolHandler> = {
   align_layers: alignLayersTool,
   apply_palette: applyPaletteTool,
   boolean_op: booleanOpTool,
+  flip_layers: flipLayersTool,
+  offset_path: offsetPathTool,
+  outline_stroke: outlineStrokeTool,
+  combine_compound: combineCompoundTool,
+  split_compound: splitCompoundTool,
+  simplify_path: simplifyPathTool,
+  set_artboard: setArtboardTool,
+  text_case: textCaseTool,
+  rotate_layers: rotateLayersTool,
+  select_layers: selectLayersTool,
+  get_layer_geometry: getLayerGeometryTool,
+  mirror_duplicate: mirrorDuplicateTool,
+  repeat_layer: repeatLayerTool,
+  round_corners: roundCornersTool,
+  place_in_bounds: placeInBoundsTool,
+};
+
+const LAYER_IDS_SCHEMA = {
+  type: 'array' as const,
+  items: { type: 'string' as const },
+  description: 'id слоёв; если не указано — берётся текущее выделение',
 };
 
 const STROKE_SCHEMA = {
@@ -1134,6 +1545,253 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         operation: { type: 'string', enum: BOOLEAN_OPS },
       },
       required: ['layerIds', 'operation'],
+    },
+  },
+  {
+    name: 'flip_layers',
+    description:
+      'Отразить слои зеркально относительно общего центра. axis=horizontal — лево/право, vertical — верх/низ. Меняет сами слои, не создаёт копий.',
+    parameters: {
+      type: 'object',
+      properties: {
+        layerIds: LAYER_IDS_SCHEMA,
+        axis: { type: 'string', enum: ['horizontal', 'vertical'] },
+      },
+      required: ['axis'],
+    },
+  },
+  {
+    name: 'offset_path',
+    description:
+      'Построить параллельный контур: подложку, стикер-обводку, тень или утолщение. distance > 0 расширяет, < 0 сжимает. copyBehind=true (по умолчанию) оставляет исходник и кладёт контур под ним.',
+    parameters: {
+      type: 'object',
+      properties: {
+        layerIds: LAYER_IDS_SCHEMA,
+        distance: { type: 'number', description: 'Смещение в px, -500..500, не 0' },
+        copyBehind: {
+          type: 'boolean',
+          description: 'Оставить исходный слой, по умолчанию true',
+        },
+        join: { type: 'string', enum: ['round', 'miter', 'bevel'] },
+      },
+      required: ['distance'],
+    },
+  },
+  {
+    name: 'outline_stroke',
+    description:
+      'Перевести обводку вектора в залитый контур (как Object → Path → Outline Stroke). Нужно перед булевыми операциями с тонкими линиями или offset_path по ним.',
+    parameters: {
+      type: 'object',
+      properties: {
+        layerIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'id векторных слоёв с обводкой',
+        },
+      },
+      required: ['layerIds'],
+    },
+  },
+  {
+    name: 'combine_compound',
+    description:
+      'Собрать несколько векторных слоёв в один составной контур (как Ctrl+8): дырки и пересечения сохраняются через fillRule evenodd.',
+    parameters: {
+      type: 'object',
+      properties: {
+        layerIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Минимум 2 векторных слоя',
+        },
+      },
+      required: ['layerIds'],
+    },
+  },
+  {
+    name: 'split_compound',
+    description:
+      'Разбить составной контур на отдельные части (как Ctrl+Shift+8): буквы слова, отдельные субконтуры, дырки становятся самостоятельными фигурами.',
+    parameters: {
+      type: 'object',
+      properties: {
+        layerIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'id составных контуров (2+ субконтура)',
+        },
+      },
+      required: ['layerIds'],
+    },
+  },
+  {
+    name: 'simplify_path',
+    description:
+      'Упростить контуры, убрав лишние узлы. Полезно после randomize_anchors или для тяжёлых силуэтов. tolerance — допуск в px, больше = грубее.',
+    parameters: {
+      type: 'object',
+      properties: {
+        layerIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'id векторных слоёв',
+        },
+        tolerance: { type: 'number', description: '0.1..100, по умолчанию 2.5' },
+      },
+      required: ['layerIds'],
+    },
+  },
+  {
+    name: 'set_artboard',
+    description:
+      'Изменить артборд: размер в px, DPI, цвет фона, имя документа. Единственный способ залить фон холста.',
+    parameters: {
+      type: 'object',
+      properties: {
+        width: { type: 'number', description: '64..16000 px' },
+        height: { type: 'number', description: '64..16000 px' },
+        dpi: { type: 'number', description: '72..600' },
+        background: { type: 'string', description: 'Фон артборда, hex #rrggbb' },
+        name: { type: 'string', description: 'Имя документа' },
+      },
+    },
+  },
+  {
+    name: 'text_case',
+    description:
+      'Сменить регистр текстовых слоёв: upper, lower или title (каждое слово с заглавной).',
+    parameters: {
+      type: 'object',
+      properties: {
+        layerIds: LAYER_IDS_SCHEMA,
+        mode: { type: 'string', enum: ['upper', 'lower', 'title'] },
+      },
+      required: ['mode'],
+    },
+  },
+  {
+    name: 'rotate_layers',
+    description:
+      'Повернуть каждый слой вокруг своей опорной точки на angle градусов по часовой стрелке. Для точной ориентации деталей.',
+    parameters: {
+      type: 'object',
+      properties: {
+        layerIds: LAYER_IDS_SCHEMA,
+        angle: { type: 'number', description: 'Градусы, -3600..3600' },
+      },
+      required: ['angle'],
+    },
+  },
+  {
+    name: 'select_layers',
+    description:
+      'Управлять выделением: ids (по списку), all, none, invert, similar_fill, similar_stroke, similar_type. Выбор не меняет сцену, но влияет на инструменты без layerIds.',
+    parameters: {
+      type: 'object',
+      properties: {
+        mode: {
+          type: 'string',
+          enum: [
+            'ids',
+            'all',
+            'none',
+            'invert',
+            'similar_fill',
+            'similar_stroke',
+            'similar_type',
+          ],
+        },
+        layerIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Только для mode=ids',
+        },
+      },
+      required: ['mode'],
+    },
+  },
+  {
+    name: 'get_layer_geometry',
+    description:
+      'Прочитать точную геометрию слоёв: локальные anchors с усиками, fill, stroke и мировой bbox. Вызывай перед изменением или доработкой существующей фигуры, чтобы понять её форму.',
+    parameters: {
+      type: 'object',
+      properties: {
+        layerIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'id слоёв; без него — текущее выделение',
+        },
+      },
+    },
+  },
+  {
+    name: 'mirror_duplicate',
+    description:
+      'Дублировать слои зеркально относительно центральной оси артборда: горизонтальное отражение ставит копию слева/справа, вертикальное — сверху/снизу. Основной способ делать симметричные пары (уши, глаза, крылья).',
+    parameters: {
+      type: 'object',
+      properties: {
+        layerIds: LAYER_IDS_SCHEMA,
+        axis: { type: 'string', enum: ['horizontal', 'vertical'] },
+      },
+      required: ['axis'],
+    },
+  },
+  {
+    name: 'repeat_layer',
+    description:
+      'Размножить слои: row — в ряд по X, column — в столбец по Y, grid — сеткой, ring — по кольцу вокруг центра артборда. count — всего элементов вместе с исходным.',
+    parameters: {
+      type: 'object',
+      properties: {
+        layerIds: LAYER_IDS_SCHEMA,
+        mode: { type: 'string', enum: ['row', 'column', 'grid', 'ring'] },
+        count: { type: 'integer', description: 'Всего элементов, 2..40' },
+        gap: { type: 'number', description: 'Зазор между копиями в px, по умолчанию 20' },
+        columns: {
+          type: 'integer',
+          description: 'Колонок для grid, 2..10, по умолчанию 3',
+        },
+        radius: {
+          type: 'number',
+          description: 'Радиус кольца в px (по умолчанию от центра артборда)',
+        },
+        sweep: { type: 'number', description: 'Угол кольца, -360..360, по умолчанию 360' },
+      },
+      required: ['mode', 'count'],
+    },
+  },
+  {
+    name: 'round_corners',
+    description:
+      'Скруглить прямые углы векторного контура (polygon, star, rect без скругления, ломаные). Кривые участки не меняются.',
+    parameters: {
+      type: 'object',
+      properties: {
+        layerIds: LAYER_IDS_SCHEMA,
+        radius: { type: 'number', description: 'Радиус скругления в px, 0.5..2000' },
+      },
+      required: ['radius'],
+    },
+  },
+  {
+    name: 'place_in_bounds',
+    description:
+      'Точно вписать слои в прямоугольник (x, y, width, height) с сохранением пропорций: fit — целиком внутри, fill — заполнить с обрезкой краёв. Избавляет от ручного пересчёта scale.',
+    parameters: {
+      type: 'object',
+      properties: {
+        layerIds: LAYER_IDS_SCHEMA,
+        x: { type: 'number' },
+        y: { type: 'number' },
+        width: { type: 'number' },
+        height: { type: 'number' },
+        mode: { type: 'string', enum: ['fit', 'fill'] },
+      },
+      required: ['x', 'y', 'width', 'height'],
     },
   },
 ];

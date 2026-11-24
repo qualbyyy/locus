@@ -707,6 +707,186 @@ export function flipLayers(
   });
 }
 
+/** Дублирует слои зеркально относительно центральной оси артборда. */
+export function mirrorDuplicateLayers(
+  layerIds: string[],
+  axis: 'horizontal' | 'vertical'
+): Layer[] {
+  if (layerIds.length === 0) return [];
+  const sourceSet = new Set(layerIds);
+  const created: Layer[] = [];
+
+  commitScene((scene) => {
+    const nextLayers: Layer[] = [];
+    for (const layer of scene.layers) {
+      nextLayers.push(layer);
+      if (!sourceSet.has(layer.id) || layer.locked) continue;
+
+      const copy = cloneLayerWithNewId(layer);
+      copy.name = `${layer.name} отражение`;
+      if (axis === 'horizontal') {
+        copy.x = scene.width - layer.x;
+        copy.rotation = -layer.rotation;
+        copy.scaleX = -layer.scaleX;
+      } else {
+        copy.y = scene.height - layer.y;
+        copy.rotation = -layer.rotation;
+        copy.scaleY = -layer.scaleY;
+      }
+      if (copy.type === 'path' && copy.isClipMask) {
+        copy.isClipMask = false;
+      }
+      created.push(copy);
+      nextLayers.push(copy);
+    }
+    return created.length > 0 ? { ...scene, layers: nextLayers } : scene;
+  });
+
+  if (created.length > 0) {
+    useEditorStore.setState({
+      selectedIds: created.map((item) => item.id),
+      selectedNode: null,
+    });
+  }
+  return created;
+}
+
+export interface RepeatLayersOptions {
+  mode: 'row' | 'column' | 'grid' | 'ring';
+  count: number;
+  gap?: number;
+  columns?: number;
+  radius?: number;
+  sweep?: number;
+}
+
+/** Размножает слои рядом, сеткой или по кольцу вокруг центра артборда. */
+export function repeatLayers(
+  layerIds: string[],
+  opts: RepeatLayersOptions
+): Layer[] {
+  if (layerIds.length === 0) return [];
+  const count = clamp(Math.round(opts.count), 2, 40);
+  const gap = Math.max(0, opts.gap ?? 20);
+  const columns = clamp(Math.round(opts.columns ?? 3), 2, 10);
+  const sourceSet = new Set(layerIds);
+  const created: Layer[] = [];
+
+  commitScene((scene) => {
+    const nextLayers: Layer[] = [];
+    const artboardCenter = { x: scene.width / 2, y: scene.height / 2 };
+    const sweep = clamp(opts.sweep ?? 360, -360, 360);
+
+    for (const layer of scene.layers) {
+      nextLayers.push(layer);
+      if (!sourceSet.has(layer.id) || layer.locked) continue;
+
+      const box = computeLayerWorldBBox(layer);
+      const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      const stepX = box.width + gap;
+      const stepY = box.height + gap;
+      const rows = Math.ceil(count / columns);
+      const baseRadius =
+        opts.radius ??
+        Math.max(
+          Math.hypot(center.x - artboardCenter.x, center.y - artboardCenter.y),
+          Math.max(box.width, box.height) / 2
+        );
+      const baseAngle = Math.atan2(
+        center.y - artboardCenter.y,
+        center.x - artboardCenter.x
+      );
+
+      for (let index = 1; index < count; index += 1) {
+        let targetCenter: { x: number; y: number };
+
+        if (opts.mode === 'row') {
+          targetCenter = { x: center.x + stepX * index, y: center.y };
+        } else if (opts.mode === 'column') {
+          targetCenter = { x: center.x, y: center.y + stepY * index };
+        } else if (opts.mode === 'grid') {
+          const col = index % columns;
+          const row = Math.floor(index / columns);
+          if (row >= rows) break;
+          targetCenter = {
+            x: center.x + stepX * col,
+            y: center.y + stepY * row,
+          };
+        } else {
+          const angle = baseAngle + ((Math.PI * 2 * sweep) / 360) * (index / count);
+          targetCenter = {
+            x: artboardCenter.x + Math.cos(angle) * baseRadius,
+            y: artboardCenter.y + Math.sin(angle) * baseRadius,
+          };
+        }
+
+        const copy = cloneLayerWithNewId(layer);
+        copy.name = `${layer.name} ${index + 1}`;
+        copy.x += targetCenter.x - center.x;
+        copy.y += targetCenter.y - center.y;
+        if (copy.type === 'path' && copy.isClipMask) {
+          copy.isClipMask = false;
+        }
+        created.push(copy);
+        nextLayers.push(copy);
+      }
+    }
+
+    return created.length > 0 ? { ...scene, layers: nextLayers } : scene;
+  });
+
+  if (created.length > 0) {
+    useEditorStore.setState({
+      selectedIds: created.map((item) => item.id),
+      selectedNode: null,
+    });
+  }
+  return created;
+}
+
+/** Вписывает слои в заданный прямоугольник с сохранением пропорций. */
+export function placeLayersInBounds(
+  layerIds: string[],
+  box: { x: number; y: number; width: number; height: number },
+  mode: 'fit' | 'fill' = 'fit'
+): Scene {
+  if (layerIds.length === 0 || box.width <= 0 || box.height <= 0) {
+    return useEditorStore.getState().scene;
+  }
+  const idSet = new Set(layerIds);
+
+  return commitScene((scene) => {
+    let changed = false;
+    const nextLayers = scene.layers.map((layer) => {
+      if (!idSet.has(layer.id) || layer.locked) return layer;
+      const current = computeLayerWorldBBox(layer);
+      if (current.width <= 1e-6 || current.height <= 1e-6) return layer;
+
+      const scaleX = box.width / current.width;
+      const scaleY = box.height / current.height;
+      const k = mode === 'fill' ? Math.max(scaleX, scaleY) : Math.min(scaleX, scaleY);
+      if (!Number.isFinite(k) || k <= 0) return layer;
+
+      const scaled: Layer = {
+        ...layer,
+        scaleX: layer.scaleX * k,
+        scaleY: layer.scaleY * k,
+      };
+      const next = computeLayerWorldBBox(scaled);
+      const dx = box.x + box.width / 2 - (next.x + next.width / 2);
+      const dy = box.y + box.height / 2 - (next.y + next.height / 2);
+
+      changed = true;
+      return {
+        ...scaled,
+        x: scaled.x + dx,
+        y: scaled.y + dy,
+      };
+    });
+    return changed ? { ...scene, layers: nextLayers } : scene;
+  });
+}
+
 export function rotateLayersBy(layerIds: string[], deltaDeg: number): Scene {
   if (layerIds.length === 0) return useEditorStore.getState().scene;
   const idSet = new Set(layerIds);

@@ -38,9 +38,9 @@ describe('AI tool registry', () => {
     resetDocument();
   });
 
-  it('exposes exactly 14 unique tool definitions', () => {
-    expect(TOOL_DEFINITIONS).toHaveLength(14);
-    expect(new Set(TOOL_DEFINITIONS.map((tool) => tool.name)).size).toBe(14);
+  it('exposes exactly 29 unique tool definitions', () => {
+    expect(TOOL_DEFINITIONS).toHaveLength(29);
+    expect(new Set(TOOL_DEFINITIONS.map((tool) => tool.name)).size).toBe(29);
     for (const tool of TOOL_DEFINITIONS) {
       expect(tool.parameters.type).toBe('object');
     }
@@ -287,7 +287,7 @@ describe('AI provider adapters', () => {
     expect((calls[0].init?.headers as Record<string, string>)['x-goog-api-key']).toBe(
       'gem-key'
     );
-    expect(body.tools[0].functionDeclarations).toHaveLength(14);
+    expect(body.tools[0].functionDeclarations).toHaveLength(29);
     expect(body.systemInstruction.parts[0].text).toBe('system');
   });
 

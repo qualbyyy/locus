@@ -29,7 +29,7 @@ describe('AI tools smoke scenario', () => {
     executed.clear();
   });
 
-  it('executes all 14 tools in one realistic composition', () => {
+  it('executes all 29 tools in one realistic composition', () => {
     run('report_plan', {
       steps: 10,
       summary: 'Морда кота: голова, уши, глаза, нос, усы и подпись',
@@ -167,6 +167,78 @@ describe('AI tools smoke scenario', () => {
       operation: 'unite',
     });
     expect(union.layerId).toBeTruthy();
+
+    run('rotate_layers', { layerIds: [id(nose)], angle: 12 });
+    run('flip_layers', { layerIds: [id(whiskers)], axis: 'vertical' });
+    run('round_corners', { layerIds: [id(nose)], radius: 4 });
+
+    const spark = run('create_shape', {
+      name: 'Искра',
+      preset: 'star',
+      x: 200,
+      y: 200,
+      width: 80,
+      height: 80,
+      points: 10,
+      fill: '#da7756',
+    });
+    run('repeat_layer', {
+      layerIds: [id(spark)],
+      mode: 'grid',
+      count: 6,
+      columns: 3,
+      gap: 10,
+    });
+    run('place_in_bounds', {
+      layerIds: [id(spark)],
+      x: 80,
+      y: 80,
+      width: 160,
+      height: 96,
+    });
+    run('mirror_duplicate', { layerIds: [id(spark)], axis: 'horizontal' });
+    run('offset_path', { layerIds: [id(nose)], distance: 6, copyBehind: true });
+
+    const ring = run('create_shape', {
+      name: 'Обводка',
+      preset: 'ellipse',
+      x: 300,
+      y: 300,
+      width: 120,
+      height: 120,
+      fill: 'none',
+      stroke: { color: '#da7756', width: 6 },
+    });
+    run('outline_stroke', { layerIds: [id(ring)] });
+
+    const dotA = run('create_shape', {
+      name: 'Точка A',
+      preset: 'ellipse',
+      x: 900,
+      y: 900,
+      width: 120,
+      height: 70,
+      fill: '#1c1b1a',
+    });
+    const dotB = run('create_shape', {
+      name: 'Точка B',
+      preset: 'ellipse',
+      x: 980,
+      y: 920,
+      width: 90,
+      height: 110,
+      fill: '#1c1b1a',
+    });
+    const compound = run('combine_compound', {
+      layerIds: [id(dotA), id(dotB)],
+    });
+    run('split_compound', { layerIds: [id(compound)] });
+    run('simplify_path', { layerIds: [id(spark)], tolerance: 1 });
+
+    run('text_case', { layerIds: [id(label)], mode: 'title' });
+    run('set_artboard', { background: '#fdf8ec', width: 1200, height: 1200 });
+    run('select_layers', { mode: 'all' });
+    run('get_layer_geometry', { layerIds: [id(spark)] });
 
     run('delete_layers', {
       layerIds: duplicates.createdLayerIds as string[],
