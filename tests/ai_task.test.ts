@@ -93,6 +93,34 @@ describe('AI background task store', () => {
     expect(useAiTaskStore.getState().minimized).toBe(true);
   });
 
+  it('blocks image attachments when the model has no vision support', async () => {
+    const settings = useSettingsStore.getState().settings;
+    useSettingsStore.setState({
+      settings: {
+        ...settings,
+        ai: {
+          ...settings.ai,
+          provider: 'ollama',
+          ollamaModel: 'qwen2.5-coder:7b',
+        },
+      },
+    });
+    useAiTaskStore.getState().addAttachment({
+      id: 'img_1',
+      name: 'ref.png',
+      mimeType: 'image/png',
+      dataUrl: 'data:image/png;base64,QUJD',
+      dataBase64: 'QUJD',
+    });
+
+    await useAiTaskStore.getState().start('Опиши картинку');
+
+    expect(runMock).not.toHaveBeenCalled();
+    expect(useAiTaskStore.getState().status).toBe('error');
+    expect(useAiTaskStore.getState().error).toContain('не поддерживает изображения');
+    expect(useAiTaskStore.getState().attachments).toHaveLength(1);
+  });
+
   it('reports a missing API key without starting a run', async () => {
     setKey('');
 

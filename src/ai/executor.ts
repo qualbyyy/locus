@@ -5,12 +5,14 @@ import { createSendChat, getAiProviderIssue } from './providers';
 import { TOOL_DEFINITIONS, TOOL_LABELS, executeTool } from './registry';
 import type {
   AiConversationMessage,
+  AiImageAttachment,
   AiRunEvent,
   AiSendChat,
   AiToolCall,
 } from './types';
 
 export const MAX_TOOL_STEPS = 8;
+export const MAX_PLANNED_STEPS = 12;
 
 export const SYSTEM_PROMPT = [
   'Ты — ИИ-ассистент векторного редактора Locus и работаешь как оператор его инструментов.',
@@ -28,7 +30,9 @@ export const SYSTEM_PROMPT = [
   '- Если пользователь задаёт вопрос, не требующий изменений сцены, ответь текстом без инструментов.',
   '- В финальном ответе по-русски кратко перечисли, что сделано. Не показывай JSON и служебные детали.',
   '- Если творческая задача поставлена кратко, прими смелое и аккуратное решение сам, без лишних вопросов.',
-  `- Не более ${MAX_TOOL_STEPS} шагов: планируй действия заранее.`,
+  '- Первым действием вызови report_plan: steps — сколько всего ответов с инструментами понадобится',
+  '  (2–10, без запаса прочности), summary — план одной строкой. Это план, а не действие над сценой.',
+  `- Не более ${MAX_PLANNED_STEPS} шагов: планируй действия заранее.`,
   '',
   'Как строить сложные композиции (постер, обложка, афиша, иллюстрация):',
   '- Думай цельным образом, а не набором случайных фигур: фон или большая подложка, 1–2 опорные формы,',
@@ -71,6 +75,7 @@ export interface AiRunResult {
 export interface AiRunOptions {
   prompt: string;
   ai: AIConfig;
+  attachments?: AiImageAttachment[];
   signal?: AbortSignal;
   sendChat?: AiSendChat;
   onEvent?: (event: AiRunEvent) => void;
@@ -100,7 +105,8 @@ function toolContent(
 }
 
 export async function runAiCommand(options: AiRunOptions): Promise<AiRunResult> {
-  const { prompt, ai, signal, onEvent, maxSteps = MAX_TOOL_STEPS } = options;
+  const { prompt, ai, attachments, signal, onEvent } = options;
+  let maxSteps = options.maxSteps ?? MAX_TOOL_STEPS;
   const trimmedPrompt = prompt.trim();
   if (!trimmedPrompt) {
     throw new Error('Введите задачу для ИИ');
@@ -113,7 +119,11 @@ export async function runAiCommand(options: AiRunOptions): Promise<AiRunResult> 
   }
 
   const messages: AiConversationMessage[] = [
-    { role: 'user', text: trimmedPrompt },
+    {
+      role: 'user',
+      text: trimmedPrompt,
+      ...(attachments && attachments.length > 0 ? { images: attachments } : {}),
+    },
   ];
 
   const toolLog: AiToolLogEntry[] = [];
@@ -159,6 +169,16 @@ export async function runAiCommand(options: AiRunOptions): Promise<AiRunResult> 
       for (const call of reply.toolCalls) {
         throwIfAborted(signal);
         const execution = executeTool(call.name, call.args);
+        if (execution.ok && call.name === 'report_plan') {
+          const planned = Number(execution.result.plannedSteps);
+          if (Number.isFinite(planned)) {
+            maxSteps = Math.min(
+              MAX_PLANNED_STEPS,
+              Math.max(1, Math.round(planned))
+            );
+            onEvent?.({ type: 'step', step: steps, maxSteps });
+          }
+        }
         const summary = execution.ok
           ? String(
               execution.result.summary ??

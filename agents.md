@@ -362,7 +362,7 @@ locus/
 │   ├── ai/
 │   │   ├── config.ts                   # Чтение/запись $APPCONFIG/locus/settings.json
 │   │   ├── context.ts                  # Компактный снимок сцены (метаданные + мировой bbox)
-│   │   ├── registry.ts                 # JSON Schema 13 инструментов и валидатор аргументов
+│   │   ├── registry.ts                 # JSON Schema 14 инструментов и валидатор аргументов
 │   │   ├── executor.ts                 # Tool-calling loop (до 5 шагов), батчинг Undo, AbortController
 │   │   └── providers/
 │   │       ├── gemini.ts               # Адаптер Gemini API (generateContent + functionDeclarations)
@@ -608,7 +608,7 @@ export interface BBox {
 3. Каждый вызов валидируется по схеме (`src/ai/registry.ts`) — неверные параметры возвращают модели структурированную ошибку без краша сцены.
 4. Перед серией tool calls история `zundo` ставится на паузу (`pause()`), после выполнения всей цепочки команд в `src/core/commands.ts` фиксируется **ровно один шаг Undo** (`resume()` + commit), чтобы пользователь мог отменить весь результат ИИ одним `Ctrl+Z`.
 
-### Базовый реестр инструментов (`src/ai/registry.ts` — 13 инструментов)
+### Базовый реестр инструментов (`src/ai/registry.ts` — 14 инструментов)
 
 | Инструмент | Назначение |
 | :--- | :--- |
@@ -616,6 +616,7 @@ export interface BBox {
 | `create_shape` | Создать примитив (`name, preset: 'ellipse'\|'rect'\|'polygon'\|'star', width, height, cornerRadius?, points?, innerRadiusRatio?, fill, stroke?, x, y`) |
 | `create_text` | Добавить текстовый слой (`name, content, fontSize, fontFamily, fontWeight?, align?, fill, x, y`) |
 | `create_line` | Нарисовать линию/открытый контур по точкам с обводкой (`points, closed?, smooth?, stroke, fill?, name?`) — усы, брови, рот, контуры |
+| `report_plan` | Зафиксировать план и бюджет шагов (`steps`, `summary`); исполнитель подстраивает прогресс под план |
 | `update_layers` | Изменить свойства слоёв (`layerIds, patch`: `name, visible, locked, x, y, rotation, scaleX, scaleY, opacity, fill, stroke, content, fontSize, fontFamily, fontWeight, align`) |
 | `delete_layers` | Удалить указанные слои с очисткой зависимых `clipMaskId` (`layerIds`) |
 | `duplicate_layers` | Дублировать слои со сдвигом (`layerIds, offsetX?, offsetY?`) |
@@ -694,10 +695,11 @@ export interface BBox {
 
 ### Этап 5. Подключение ИИ (Gemini + OpenAI-compatible) — **ВЫПОЛНЕНО**
 * [x] Реализовать хранение настроек ИИ в `$APPCONFIG/locus/settings.json` (вкладка «ИИ» в `SettingsModal.tsx`): Gemini, Anthropic, Ollama и OpenAI-compatible провайдеры.
-* [x] Реализовать `src/ai/types.ts`, `src/ai/context.ts`, `src/ai/registry.ts` (13 инструментов + валидация аргументов), `src/ai/providers/{gemini,openai,anthropic,ollama,index}.ts`, `src/ai/executor.ts` и `src/ui/CommandBar.tsx` (`Ctrl+K`, контекстное меню «ИИ…», меню и верхняя панель).
-* [x] Батчинг Undo: серия tool calls выполняется при `temporal.pause()`, после чего история схлопывается в ровно один шаг `Ctrl+Z`; `AbortController` останавливает выполнение (кнопка «Стоп»).
+* [x] Реализовать `src/ai/types.ts`, `src/ai/context.ts`, `src/ai/registry.ts` (14 инструментов + валидация аргументов), `src/ai/providers/{gemini,openai,anthropic,ollama,index}.ts`, `src/ai/executor.ts` и `src/ui/CommandBar.tsx` (`Ctrl+K`, контекстное меню «ИИ…», меню и верхняя панель).
+* [x] Батчинг Undo: серия tool calls выполняется при `temporal.pause()`, после чего история схлопывается в ровно один шаг `Ctrl+Z`; `AbortController` останавливает выполнение (кнопка «Стоп»). Сворачивание окна не прерывает задачу: прогресс показывается в индикаторе внутри артборда.
+* [x] Вложения-изображения (PNG/JPEG/WebP, до 4 шт.) с превью; поддержка vision проверяется по модели, для неподдерживающих выводится явное сообщение. `report_plan` задаёт число шагов по плану модели.
 * **Критерии готовности и проверка:**
-  * [x] `tests/ai.test.ts` проверяет реестр и валидацию 13 инструментов, выполнение команд, контекст сцены, адаптеры четырёх провайдеров (мок fetch), цикл tool calling, ошибки аргументов, `AbortController` и слияние серии из 2+ команд ИИ в ровно 1 шаг `Ctrl+Z`.
+  * [x] `tests/ai.test.ts` проверяет реестр и валидацию 14 инструментов, выполнение команд, контекст сцены, адаптеры четырёх провайдеров (мок fetch), цикл tool calling, ошибки аргументов, `AbortController` и слияние серии из 2+ команд ИИ в ровно 1 шаг `Ctrl+Z`.
   * [x] `npx tsc --noEmit`, `npm test` (75/75) и `npm run build` — зелёные.
   * [ ] Интеграционная проверка в запущенном приложении: выделение слоёв → команда в `Ctrl+K` → вызов инструментов ИИ → живое обновление холста → полный откат по `Ctrl+Z` (запускается пользователем вручную).
   * [ ] Финальный релизный прогон `npm run tauri build` (запускается пользователем вручную).

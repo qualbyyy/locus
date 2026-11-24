@@ -14,9 +14,13 @@ import {
   type FetchLike,
 } from './http';
 
+type OpenAIContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  content: string | OpenAIContentPart[] | null;
   tool_calls?: Array<{
     id: string;
     type: 'function';
@@ -32,7 +36,21 @@ function toOpenAIMessages(
   const out: OpenAIMessage[] = [{ role: 'system', content: system }];
   for (const message of messages) {
     if (message.role === 'user') {
-      out.push({ role: 'user', content: message.text });
+      const images = message.images ?? [];
+      if (images.length > 0) {
+        const content: OpenAIContentPart[] = [
+          ...(message.text ? [{ type: 'text' as const, text: message.text }] : []),
+          ...images.map((image) => ({
+            type: 'image_url' as const,
+            image_url: {
+              url: `data:${image.mimeType};base64,${image.dataBase64}`,
+            },
+          })),
+        ];
+        out.push({ role: 'user', content });
+      } else {
+        out.push({ role: 'user', content: message.text });
+      }
     } else if (message.role === 'assistant') {
       out.push({
         role: 'assistant',

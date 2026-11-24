@@ -15,6 +15,10 @@ import {
 
 type AnthropicBlock =
   | { type: 'text'; text: string }
+  | {
+      type: 'image';
+      source: { type: 'base64'; media_type: string; data: string };
+    }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'tool_result'; tool_use_id: string; content: string };
 
@@ -27,7 +31,20 @@ function toAnthropicMessages(messages: AiConversationMessage[]): AnthropicMessag
   const out: AnthropicMessage[] = [];
   for (const message of messages) {
     if (message.role === 'user') {
-      out.push({ role: 'user', content: [{ type: 'text', text: message.text }] });
+      const blocks: AnthropicBlock[] = [
+        ...(message.images ?? []).map((image) => ({
+          type: 'image' as const,
+          source: {
+            type: 'base64' as const,
+            media_type: image.mimeType,
+            data: image.dataBase64,
+          },
+        })),
+        ...(message.text
+          ? [{ type: 'text' as const, text: message.text }]
+          : []),
+      ];
+      out.push({ role: 'user', content: blocks });
       continue;
     }
 

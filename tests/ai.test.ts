@@ -5,6 +5,7 @@ import {
   createSendChat,
   getAiModelLabel,
   getAiProviderIssue,
+  supportsVision,
 } from '../src/ai/providers';
 import { TOOL_DEFINITIONS, executeTool } from '../src/ai/registry';
 import type { AiProviderReply, AiRunEvent, AiSendChat } from '../src/ai/types';
@@ -38,9 +39,9 @@ describe('AI tool registry', () => {
     resetDocument();
   });
 
-  it('exposes exactly 13 unique tool definitions', () => {
-    expect(TOOL_DEFINITIONS).toHaveLength(13);
-    expect(new Set(TOOL_DEFINITIONS.map((tool) => tool.name)).size).toBe(13);
+  it('exposes exactly 14 unique tool definitions', () => {
+    expect(TOOL_DEFINITIONS).toHaveLength(14);
+    expect(new Set(TOOL_DEFINITIONS.map((tool) => tool.name)).size).toBe(14);
     for (const tool of TOOL_DEFINITIONS) {
       expect(tool.parameters.type).toBe('object');
     }
@@ -287,7 +288,7 @@ describe('AI provider adapters', () => {
     expect((calls[0].init?.headers as Record<string, string>)['x-goog-api-key']).toBe(
       'gem-key'
     );
-    expect(body.tools[0].functionDeclarations).toHaveLength(13);
+    expect(body.tools[0].functionDeclarations).toHaveLength(14);
     expect(body.systemInstruction.parts[0].text).toBe('system');
   });
 
@@ -437,7 +438,110 @@ describe('AI provider adapters', () => {
     expect(captured.url).toBe('http://localhost:11434/api/chat');
     const body = JSON.parse(String(captured.init?.body));
     expect(body.stream).toBe(false);
-    expect(body.tools[0].function.name).toBe('create_blob');
+    expect(
+      body.tools.some(
+        (tool: { function: { name: string } }) =>
+          tool.function.name === 'create_blob'
+      )
+    ).toBe(true);
+  });
+
+  it('passes image attachments to every provider format', async () => {
+    const image = {
+      id: 'img_1',
+      name: 'ref.png',
+      mimeType: 'image/png',
+      dataUrl: 'data:image/png;base64,QUJD',
+      dataBase64: 'QUJD',
+    };
+    const messages = [{ role: 'user' as const, text: 'Опиши', images: [image] }];
+
+    const captures: Record<string, unknown> = {};
+    const makeFetch =
+      (provider: string) =>
+      async (_input: string | URL | Request, init?: RequestInit) => {
+      captures[provider] = JSON.parse(String(init?.body));
+      return jsonResponse({
+        candidates: [{ content: { parts: [{ text: 'ok' }] } }],
+        choices: [{ message: { content: 'ok' } }],
+        content: [{ type: 'text', text: 'ok' }],
+        message: { content: 'ok' },
+      });
+    };
+
+    await createSendChat(
+      { ...DEFAULT_AI_CONFIG, provider: 'gemini', geminiApiKey: 'k' },
+      makeFetch('gemini')
+    )({ system: 's', messages, tools: TOOL_DEFINITIONS });
+    await createSendChat(
+      { ...DEFAULT_AI_CONFIG, provider: 'openai', openaiApiKey: 'k' },
+      makeFetch('openai')
+    )({ system: 's', messages, tools: TOOL_DEFINITIONS });
+    await createSendChat(
+      { ...DEFAULT_AI_CONFIG, provider: 'anthropic', anthropicApiKey: 'k' },
+      makeFetch('anthropic')
+    )({ system: 's', messages, tools: TOOL_DEFINITIONS });
+    await createSendChat(
+      { ...DEFAULT_AI_CONFIG, provider: 'ollama' },
+      makeFetch('ollama')
+    )({ system: 's', messages, tools: TOOL_DEFINITIONS });
+
+    const geminiBody = captures.gemini as {
+      contents: Array<{ parts: Array<{ inlineData?: { data: string } }> }>;
+    };
+    expect(geminiBody.contents[0].parts[0].inlineData?.data).toBe('QUJD');
+
+    const openaiBody = captures.openai as {
+      messages: Array<{ content: Array<{ type: string; image_url?: { url: string } }> }>;
+    };
+    expect(openaiBody.messages[1].content[1].type).toBe('image_url');
+    expect(openaiBody.messages[1].content[1].image_url?.url).toContain('base64,QUJD');
+
+    const anthropicBody = captures.anthropic as {
+      messages: Array<{ content: Array<{ type: string; source?: { data: string } }> }>;
+    };
+    expect(anthropicBody.messages[0].content[0].type).toBe('image');
+    expect(anthropicBody.messages[0].content[0].source?.data).toBe('QUJD');
+
+    const ollamaBody = captures.ollama as {
+      messages: Array<{ images?: string[] }>;
+    };
+    expect(ollamaBody.messages[1].images).toEqual(['QUJD']);
+  });
+
+  it('detects vision support for known models', () => {
+    expect(supportsVision({ ...DEFAULT_AI_CONFIG, provider: 'gemini' })).toBe(true);
+    expect(
+      supportsVision({ ...DEFAULT_AI_CONFIG, provider: 'anthropic' })
+    ).toBe(true);
+    expect(
+      supportsVision({
+        ...DEFAULT_AI_CONFIG,
+        provider: 'openai',
+        openaiModel: 'gpt-4o-mini',
+      })
+    ).toBe(true);
+    expect(
+      supportsVision({
+        ...DEFAULT_AI_CONFIG,
+        provider: 'openai',
+        openaiModel: 'deepseek-chat',
+      })
+    ).toBe(false);
+    expect(
+      supportsVision({
+        ...DEFAULT_AI_CONFIG,
+        provider: 'ollama',
+        ollamaModel: 'qwen2.5-coder:7b',
+      })
+    ).toBe(false);
+    expect(
+      supportsVision({
+        ...DEFAULT_AI_CONFIG,
+        provider: 'ollama',
+        ollamaModel: 'llava:13b',
+      })
+    ).toBe(true);
   });
 
   it('surfaces provider error messages', async () => {
@@ -530,6 +634,48 @@ describe('AI executor', () => {
 
     undoCommand();
     expect(useEditorStore.getState().scene).toBe(before);
+  });
+
+  it('adjusts the step budget from report_plan', async () => {
+    const replies: AiProviderReply[] = [
+      {
+        text: '',
+        toolCalls: [
+          {
+            id: 'plan',
+            name: 'report_plan',
+            args: { steps: 3, summary: 'Сделать круг и подпись' },
+          },
+        ],
+      },
+      {
+        text: '',
+        toolCalls: [
+          {
+            id: 'c1',
+            name: 'create_shape',
+            args: { preset: 'ellipse', x: 540, y: 540, width: 200, height: 200 },
+          },
+        ],
+      },
+      { text: 'Готово', toolCalls: [] },
+    ];
+    const sendChat: AiSendChat = async () => replies.shift()!;
+    const events: AiRunEvent[] = [];
+
+    const result = await runAiCommand({
+      prompt: 'Сделай круг',
+      ai: DEFAULT_AI_CONFIG,
+      sendChat,
+      maxSteps: 8,
+      onEvent: (event) => events.push(event),
+    });
+
+    const stepEvents = events.filter((event) => event.type === 'step');
+    expect(stepEvents[0]).toMatchObject({ maxSteps: 8 });
+    expect(stepEvents.at(-1)).toMatchObject({ maxSteps: 3 });
+    expect(result.steps).toBe(3);
+    expect(sceneLayers()).toHaveLength(1);
   });
 
   it('stops on abort without recording history', async () => {

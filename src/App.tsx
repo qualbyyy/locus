@@ -211,6 +211,11 @@ export function App() {
     canvasRef.current?.fitArtboard();
   }, []);
 
+  const getArtboardScreenRect = useCallback(
+    () => canvasRef.current?.getArtboardScreenRect() ?? null,
+    []
+  );
+
   const openCommandBar = useCallback(() => {
     setContextMenu(null);
     setIsCommandBarOpen(true);
@@ -1497,7 +1502,10 @@ export function App() {
         }}
       />
 
-      <AiTaskIndicator onOpen={openCommandBar} />
+      <AiTaskIndicator
+        onOpen={openCommandBar}
+        getArtboardRect={getArtboardScreenRect}
+      />
 
       <StartModal
         isOpen={isStartModalOpen}

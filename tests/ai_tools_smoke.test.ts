@@ -29,7 +29,11 @@ describe('AI tools smoke scenario', () => {
     executed.clear();
   });
 
-  it('executes all 13 tools in one realistic composition', () => {
+  it('executes all 14 tools in one realistic composition', () => {
+    run('report_plan', {
+      steps: 10,
+      summary: 'Морда кота: голова, уши, глаза, нос, усы и подпись',
+    });
     const head = run('create_blob', {
       name: 'Голова',
       x: 540,

@@ -57,6 +57,7 @@ export const TOOL_LABELS: Record<string, string> = {
   create_shape: 'Фигура',
   create_text: 'Текст',
   create_line: 'Линия',
+  report_plan: 'План',
   update_layers: 'Изменение слоёв',
   delete_layers: 'Удаление слоёв',
   duplicate_layers: 'Дублирование',
@@ -333,6 +334,15 @@ function applyLayerExtras(layerId: string, args: Record<string, unknown>): void 
       ...(opacity !== 1 ? { opacity } : {}),
     });
   }
+}
+
+function reportPlan(args: Record<string, unknown>): Record<string, unknown> {
+  const steps = Math.round(requiredNumber(args, 'steps', 1, 12));
+  const summary = optionalString(args, 'summary', 500);
+  return {
+    summary: summary ? `План (${steps} шаг.): ${summary}` : `План: ${steps} шагов`,
+    plannedSteps: steps,
+  };
 }
 
 function createBlob(args: Record<string, unknown>): Record<string, unknown> {
@@ -835,6 +845,7 @@ const TOOL_HANDLERS: Record<string, ToolHandler> = {
   create_shape: createShape,
   create_text: createText,
   create_line: createLine,
+  report_plan: reportPlan,
   update_layers: updateLayersTool,
   delete_layers: deleteLayersTool,
   duplicate_layers: duplicateLayersTool,
@@ -864,6 +875,19 @@ const STROKE_SCHEMA = {
 };
 
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
+  {
+    name: 'report_plan',
+    description:
+      'Зафиксировать план работы. Вызывай первым действием: steps — сколько всего ответов с инструментами понадобится (2–10), summary — план одной строкой. Не меняет сцену.',
+    parameters: {
+      type: 'object',
+      properties: {
+        steps: { type: 'integer', description: 'Сколько шагов планируется, 2–10' },
+        summary: { type: 'string', description: 'Краткий план действий' },
+      },
+      required: ['steps'],
+    },
+  },
   {
     name: 'create_blob',
     description:

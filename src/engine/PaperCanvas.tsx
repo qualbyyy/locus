@@ -36,6 +36,12 @@ import type {
 
 export interface PaperCanvasHandle {
   fitArtboard: () => void;
+  getArtboardScreenRect: () => {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null;
   resetZoom100: () => void;
   zoomIn: () => void;
   zoomOut: () => void;
@@ -363,6 +369,25 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     const zoomIn = useCallback(() => stepZoom(1.25), [stepZoom]);
     const zoomOut = useCallback(() => stepZoom(1 / 1.25), [stepZoom]);
 
+    const getArtboardScreenRect = useCallback(() => {
+      const rig = rigRef.current;
+      const canvas = canvasRef.current;
+      if (!rig || !canvas) return null;
+      const { scope } = rig;
+      const currentScene = sceneRef.current;
+      const topLeft = scope.view.projectToView(new scope.Point(0, 0));
+      const bottomRight = scope.view.projectToView(
+        new scope.Point(currentScene.width, currentScene.height)
+      );
+      const box = canvas.getBoundingClientRect();
+      return {
+        left: box.left + Math.min(topLeft.x, bottomRight.x),
+        top: box.top + Math.min(topLeft.y, bottomRight.y),
+        width: Math.abs(bottomRight.x - topLeft.x),
+        height: Math.abs(bottomRight.y - topLeft.y),
+      };
+    }, []);
+
     const finishActiveTool = useCallback((): boolean => {
       if (editingTextRef.current) {
         commitTextEditing();
@@ -384,13 +409,22 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       ref,
       () => ({
         fitArtboard,
+        getArtboardScreenRect,
         resetZoom100,
         zoomIn,
         zoomOut,
         finishActiveTool,
         startTextEditing,
       }),
-      [finishActiveTool, fitArtboard, resetZoom100, startTextEditing, zoomIn, zoomOut]
+      [
+        finishActiveTool,
+        fitArtboard,
+        getArtboardScreenRect,
+        resetZoom100,
+        startTextEditing,
+        zoomIn,
+        zoomOut,
+      ]
     );
 
     const drawArtboard = useCallback((rig: PaperRig, targetScene: Scene) => {

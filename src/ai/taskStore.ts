@@ -1,8 +1,12 @@
 import { create } from 'zustand';
 import { useSettingsStore } from '../core/settings';
 import { isAbortError, runAiCommand, type AiToolLogEntry } from './executor';
-import { getAiProviderIssue } from './providers';
-import type { AiRunEvent } from './types';
+import {
+  getAiModelName,
+  getAiProviderIssue,
+  supportsVision,
+} from './providers';
+import type { AiImageAttachment, AiRunEvent } from './types';
 
 export type AiTaskStatus = 'idle' | 'running' | 'done' | 'error' | 'stopped';
 
@@ -19,6 +23,10 @@ interface AiTaskState {
   error: string | null;
   step: AiTaskStep | null;
   minimized: boolean;
+  attachments: AiImageAttachment[];
+  addAttachment: (attachment: AiImageAttachment) => void;
+  removeAttachment: (id: string) => void;
+  clearAttachments: () => void;
   start: (rawPrompt: string) => Promise<void>;
   stop: () => void;
   minimize: () => void;
@@ -37,18 +45,45 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
   error: null,
   step: null,
   minimized: false,
+  attachments: [],
+
+  addAttachment: (attachment) =>
+    set((state) =>
+      state.attachments.length >= 4 ||
+      state.attachments.some((item) => item.id === attachment.id)
+        ? state
+        : { attachments: [...state.attachments, attachment] }
+    ),
+
+  removeAttachment: (id) =>
+    set((state) => ({
+      attachments: state.attachments.filter((item) => item.id !== id),
+    })),
+
+  clearAttachments: () => set({ attachments: [] }),
 
   start: async (rawPrompt) => {
     const prompt = rawPrompt.trim();
     if (!prompt || get().status === 'running') return;
 
     const ai = useSettingsStore.getState().settings.ai;
+    const attachments = get().attachments;
     const issue = getAiProviderIssue(ai);
     if (issue) {
       set({
         status: 'error',
         prompt,
         error: issue,
+        step: null,
+        minimized: false,
+      });
+      return;
+    }
+    if (attachments.length > 0 && !supportsVision(ai)) {
+      set({
+        status: 'error',
+        prompt,
+        error: `Модель «${getAiModelName(ai)}» не поддерживает изображения. Выберите vision-модель в настройках (Ctrl+,) или уберите вложения.`,
         step: null,
         minimized: false,
       });
@@ -76,6 +111,7 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
         prompt,
         ai,
         signal: controller.signal,
+        ...(attachments.length > 0 ? { attachments } : {}),
         onEvent: (event: AiRunEvent) => {
           if (runId !== id) return;
           if (event.type === 'step') {
@@ -142,6 +178,7 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
       error: null,
       step: null,
       minimized: false,
+      attachments: [],
     });
   },
 }));

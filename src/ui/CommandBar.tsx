@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { ArrowUp, Loader2, Settings2, Sparkles, Square, X } from 'lucide-react';
-import { getAiModelLabel, getAiProviderIssue } from '../ai/providers';
+import { ArrowUp, Loader2, Paperclip, Settings2, Sparkles, Square, X } from 'lucide-react';
+import {
+  getAiModelLabel,
+  getAiModelName,
+  getAiProviderIssue,
+  supportsVision,
+} from '../ai/providers';
 import { TOOL_LABELS } from '../ai/registry';
 import { useAiTaskStore } from '../ai/taskStore';
+import { bytesToDataUrl, inferImageMimeType } from '../core/assets';
 import { useSettingsStore } from '../core/settings';
 import { useEditorStore } from '../core/store';
+import { pickOpenFile } from '../platform/io';
 
 export interface CommandBarProps {
   isOpen: boolean;
@@ -25,17 +32,24 @@ export function CommandBar({
   const answer = useAiTaskStore((s) => s.answer);
   const error = useAiTaskStore((s) => s.error);
   const stepInfo = useAiTaskStore((s) => s.step);
+  const attachments = useAiTaskStore((s) => s.attachments);
+  const addAttachment = useAiTaskStore((s) => s.addAttachment);
+  const removeAttachment = useAiTaskStore((s) => s.removeAttachment);
   const start = useAiTaskStore((s) => s.start);
   const stop = useAiTaskStore((s) => s.stop);
   const minimize = useAiTaskStore((s) => s.minimize);
   const restore = useAiTaskStore((s) => s.restore);
 
   const [prompt, setPrompt] = useState('');
+  const [attachError, setAttachError] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const isRunning = status === 'running';
 
   const providerIssue = useMemo(() => getAiProviderIssue(ai), [ai]);
+  const visionSupported = useMemo(() => supportsVision(ai), [ai]);
+  const hasImages = attachments.length > 0;
+  const visionBlocked = hasImages && !visionSupported;
 
   const handleClose = useCallback(() => {
     if (useAiTaskStore.getState().status === 'running') {
@@ -74,11 +88,51 @@ export function CommandBar({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, handleClose]);
 
+  const handleAttach = useCallback(async () => {
+    if (attachments.length >= 4 || isRunning) return;
+    setAttachError(null);
+    try {
+      const file = await pickOpenFile({
+        title: 'Прикрепить изображение',
+        filters: [
+          { name: 'Изображения', extensions: ['png', 'jpg', 'jpeg', 'webp'] },
+        ],
+      });
+      if (!file) return;
+      const mimeType = inferImageMimeType(file.name, file.bytes);
+      if (!/^image\/(png|jpeg|webp)$/.test(mimeType)) {
+        setAttachError('Поддерживаются PNG, JPEG и WebP');
+        return;
+      }
+      if (file.bytes.byteLength > 8 * 1024 * 1024) {
+        setAttachError('Файл больше 8 МБ');
+        return;
+      }
+      const dataUrl = bytesToDataUrl(file.bytes, mimeType);
+      const dataBase64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+      if (!dataBase64) {
+        setAttachError('Не удалось прочитать изображение');
+        return;
+      }
+      addAttachment({
+        id: `att_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+        name: file.name,
+        mimeType,
+        dataUrl,
+        dataBase64,
+      });
+    } catch (err) {
+      setAttachError(
+        err instanceof Error ? err.message : 'Не удалось прикрепить изображение'
+      );
+    }
+  }, [addAttachment, attachments.length, isRunning]);
+
   const submit = useCallback(() => {
     const value = prompt.trim();
-    if (!value || isRunning) return;
+    if (!value || isRunning || visionBlocked) return;
     void start(value);
-  }, [isRunning, prompt, start]);
+  }, [isRunning, prompt, start, visionBlocked]);
 
   if (!isOpen) return null;
 
@@ -120,6 +174,57 @@ export function CommandBar({
         </div>
 
         <div className="flex flex-col gap-3 p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            {attachments.map((attachment) => (
+              <div
+                key={attachment.id}
+                title={`${attachment.name} · ${attachment.mimeType}`}
+                className="relative h-12 w-12 overflow-hidden rounded border border-paper-border bg-paper-bg"
+              >
+                <img
+                  src={attachment.dataUrl}
+                  alt={attachment.name}
+                  className="h-full w-full object-cover"
+                />
+                <button
+                  type="button"
+                  disabled={isRunning}
+                  onClick={() => removeAttachment(attachment.id)}
+                  aria-label={`Убрать ${attachment.name}`}
+                  className="absolute right-0 top-0 flex h-4 w-4 items-center justify-center rounded-bl bg-paper-panel/90 text-paper-muted hover:text-paper-danger disabled:opacity-40"
+                >
+                  <X className="h-2.5 w-2.5" strokeWidth={2} />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => void handleAttach()}
+              disabled={isRunning || attachments.length >= 4}
+              title="Прикрепить изображение"
+              aria-label="Прикрепить изображение"
+              className="flex h-12 w-12 items-center justify-center rounded border border-dashed border-paper-border bg-paper-bg text-paper-muted hover:border-paper-accent hover:text-paper-ink disabled:cursor-default disabled:opacity-40"
+            >
+              <Paperclip className="h-4 w-4" strokeWidth={1.75} />
+            </button>
+            {hasImages && (
+              <span className="text-[11px] text-paper-muted">
+                {attachments.length}/4
+              </span>
+            )}
+          </div>
+
+          {visionBlocked && (
+            <div className="rounded border border-paper-danger/40 bg-paper-danger/5 px-2.5 py-1.5 text-[11px] text-paper-danger">
+              Модель «{getAiModelName(ai)}» не поддерживает изображения. Выберите
+              vision-модель в настройках (Ctrl+,) или уберите вложения.
+            </div>
+          )}
+
+          {attachError && (
+            <div className="text-[11px] text-paper-danger">{attachError}</div>
+          )}
+
           <textarea
             ref={textareaRef}
             value={prompt}
@@ -216,7 +321,7 @@ export function CommandBar({
               <button
                 type="button"
                 onClick={submit}
-                disabled={!prompt.trim()}
+                disabled={!prompt.trim() || visionBlocked}
                 className="flex items-center gap-1.5 rounded bg-paper-accent px-3 py-1 text-[12px] font-medium text-white hover:bg-paper-accent-hover disabled:cursor-default disabled:opacity-40"
               >
                 <ArrowUp className="h-3.5 w-3.5" strokeWidth={2} />

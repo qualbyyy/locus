@@ -17,6 +17,7 @@ import {
 interface OllamaMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  images?: string[];
   tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }>;
   tool_name?: string;
 }
@@ -28,7 +29,12 @@ function toOllamaMessages(
   const out: OllamaMessage[] = [{ role: 'system', content: system }];
   for (const message of messages) {
     if (message.role === 'user') {
-      out.push({ role: 'user', content: message.text });
+      const images = (message.images ?? []).map((image) => image.dataBase64);
+      out.push({
+        role: 'user',
+        content: message.text,
+        ...(images.length > 0 ? { images } : {}),
+      });
     } else if (message.role === 'assistant') {
       out.push({
         role: 'assistant',

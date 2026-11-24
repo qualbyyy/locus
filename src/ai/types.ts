@@ -1,3 +1,11 @@
+export interface AiImageAttachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  dataUrl: string;
+  dataBase64: string;
+}
+
 export interface AiToolCall {
   id: string;
   name: string;
@@ -5,7 +13,7 @@ export interface AiToolCall {
 }
 
 export type AiConversationMessage =
-  | { role: 'user'; text: string }
+  | { role: 'user'; text: string; images?: AiImageAttachment[] }
   | { role: 'assistant'; text: string; toolCalls: AiToolCall[] }
   | { role: 'tool'; toolCallId: string; name: string; content: string };
 

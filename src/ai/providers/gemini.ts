@@ -15,6 +15,7 @@ import {
 
 interface GeminiPart {
   text?: string;
+  inlineData?: { mimeType: string; data: string };
   functionCall?: { name: string; args: Record<string, unknown> };
   functionResponse?: { name: string; response: Record<string, unknown> };
 }
@@ -26,7 +27,14 @@ interface GeminiContent {
 
 function contentFromMessage(message: AiConversationMessage): GeminiContent {
   if (message.role === 'user') {
-    return { role: 'user', parts: [{ text: message.text }] };
+    const parts: GeminiPart[] = [];
+    for (const image of message.images ?? []) {
+      parts.push({
+        inlineData: { mimeType: image.mimeType, data: image.dataBase64 },
+      });
+    }
+    if (message.text) parts.push({ text: message.text });
+    return { role: 'user', parts };
   }
   if (message.role === 'assistant') {
     const parts: GeminiPart[] = [];
