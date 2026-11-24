@@ -51,7 +51,7 @@ export function InspectorVectorOps({
         <span className="text-[11px] font-medium text-paper-muted">
           Операции с контуром
         </span>
-        <span className="font-mono text-[10px] text-paper-muted">
+        <span className="font-display text-[10px] text-paper-muted">
           Узлов: {anchorCount}
         </span>
       </div>

@@ -30,7 +30,7 @@ describe('AI providers and model fetching', () => {
     expect(ollama.ai.ollamaModel).toBe(DEFAULT_AI_CONFIG.ollamaModel);
 
     const fallback = sanitizeSettings({ ai: { provider: 'unknown' } });
-    expect(fallback.ai.provider).toBe('gemini');
+    expect(fallback.ai.provider).toBe('openai');
   });
 
   it('includes DeepSeek preset with valid baseUrl and default model', () => {

@@ -81,7 +81,7 @@ function SliderRow({
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between text-[11px]">
         <span className="text-paper-muted">{label}</span>
-        <span className="font-mono text-paper-ink">
+        <span className="font-display text-paper-ink">
           {value}
           {unit}
         </span>

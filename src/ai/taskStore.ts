@@ -1,11 +1,7 @@
 import { create } from 'zustand';
 import { useSettingsStore } from '../core/settings';
 import { isAbortError, runAiCommand, type AiToolLogEntry } from './executor';
-import {
-  getAiModelName,
-  getAiProviderIssue,
-  supportsVision,
-} from './providers';
+import { getAiProviderIssue } from './providers';
 import type { AiImageAttachment, AiRunEvent } from './types';
 
 export type AiTaskStatus = 'idle' | 'running' | 'done' | 'error' | 'stopped';
@@ -79,17 +75,6 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
       });
       return;
     }
-    if (attachments.length > 0 && !supportsVision(ai)) {
-      set({
-        status: 'error',
-        prompt,
-        error: `Модель «${getAiModelName(ai)}» не поддерживает изображения. Выберите vision-модель в настройках (Ctrl+,) или уберите вложения.`,
-        step: null,
-        minimized: false,
-      });
-      return;
-    }
-
     runId += 1;
     const id = runId;
     currentController?.abort();
@@ -143,8 +128,9 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
       } else {
         set({
           status: 'error',
-          error:
-            err instanceof Error ? err.message : 'Не удалось выполнить команду',
+          error: describeAiError(
+            err instanceof Error ? err.message : 'Не удалось выполнить команду'
+          ),
           step: null,
         });
       }
@@ -182,6 +168,13 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
     });
   },
 }));
+
+function describeAiError(message: string): string {
+  if (/(image|vision|multimodal|inlineData|inline_data)/i.test(message)) {
+    return `Модель не приняла изображение: ${message}`;
+  }
+  return message;
+}
 
 export function isAiTaskRunning(): boolean {
   return useAiTaskStore.getState().status === 'running';

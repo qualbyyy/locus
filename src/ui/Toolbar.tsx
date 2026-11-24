@@ -69,7 +69,7 @@ export function Toolbar({
             >
               <Icon className="h-4 w-4" strokeWidth={1.75} />
               <span
-                className={`pointer-events-none absolute bottom-0.5 right-0.5 font-mono text-[8px] leading-none ${
+                className={`pointer-events-none absolute bottom-0.5 right-0.5 font-display text-[8px] leading-none ${
                   active ? 'text-white/85' : 'text-paper-muted'
                 }`}
               >
@@ -88,7 +88,7 @@ export function Toolbar({
           className="relative flex h-8 w-8 items-center justify-center rounded border border-transparent text-paper-ink hover:bg-paper-hover"
         >
           <ImagePlus className="h-4 w-4" strokeWidth={1.75} />
-          <span className="pointer-events-none absolute bottom-0.5 right-0.5 font-mono text-[8px] leading-none text-paper-muted">
+          <span className="pointer-events-none absolute bottom-0.5 right-0.5 font-display text-[8px] leading-none text-paper-muted">
             I
           </span>
         </button>

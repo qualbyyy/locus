@@ -5,7 +5,6 @@ import {
   createSendChat,
   getAiModelLabel,
   getAiProviderIssue,
-  supportsVision,
 } from '../src/ai/providers';
 import { TOOL_DEFINITIONS, executeTool } from '../src/ai/registry';
 import type { AiProviderReply, AiRunEvent, AiSendChat } from '../src/ai/types';
@@ -507,41 +506,6 @@ describe('AI provider adapters', () => {
       messages: Array<{ images?: string[] }>;
     };
     expect(ollamaBody.messages[1].images).toEqual(['QUJD']);
-  });
-
-  it('detects vision support for known models', () => {
-    expect(supportsVision({ ...DEFAULT_AI_CONFIG, provider: 'gemini' })).toBe(true);
-    expect(
-      supportsVision({ ...DEFAULT_AI_CONFIG, provider: 'anthropic' })
-    ).toBe(true);
-    expect(
-      supportsVision({
-        ...DEFAULT_AI_CONFIG,
-        provider: 'openai',
-        openaiModel: 'gpt-4o-mini',
-      })
-    ).toBe(true);
-    expect(
-      supportsVision({
-        ...DEFAULT_AI_CONFIG,
-        provider: 'openai',
-        openaiModel: 'deepseek-chat',
-      })
-    ).toBe(false);
-    expect(
-      supportsVision({
-        ...DEFAULT_AI_CONFIG,
-        provider: 'ollama',
-        ollamaModel: 'qwen2.5-coder:7b',
-      })
-    ).toBe(false);
-    expect(
-      supportsVision({
-        ...DEFAULT_AI_CONFIG,
-        provider: 'ollama',
-        ollamaModel: 'llava:13b',
-      })
-    ).toBe(true);
   });
 
   it('surfaces provider error messages', async () => {

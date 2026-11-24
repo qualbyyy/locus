@@ -90,7 +90,7 @@ export function LayersPanel({
           <Layers className="h-3.5 w-3.5 text-paper-muted" strokeWidth={1.75} />
           <span className="text-[12px] font-semibold text-paper-ink">Слои</span>
         </div>
-        <span className="font-mono text-[11px] text-paper-muted">{layers.length}</span>
+        <span className="font-display text-[11px] text-paper-muted">{layers.length}</span>
       </div>
 
       {ordered.length === 0 ? (
@@ -170,13 +170,13 @@ export function LayersPanel({
                           onReleaseMask(layer.id);
                         }}
                         title="Снять обтравочную маску"
-                        className="flex shrink-0 items-center gap-0.5 rounded border border-paper-border bg-paper-bg px-1 font-mono text-[9px] text-paper-muted hover:border-paper-accent hover:text-paper-accent"
+                        className="flex shrink-0 items-center gap-0.5 rounded border border-paper-border bg-paper-bg px-1 font-display text-[9px] text-paper-muted hover:border-paper-accent hover:text-paper-accent"
                       >
                         <Unlink className="h-2.5 w-2.5" strokeWidth={1.75} />
                         <span>Mask</span>
                       </button>
                     ) : (
-                      <span className="shrink-0 rounded border border-paper-border bg-paper-bg px-1 font-mono text-[9px] text-paper-muted">
+                      <span className="shrink-0 rounded border border-paper-border bg-paper-bg px-1 font-display text-[9px] text-paper-muted">
                         Mask
                       </span>
                     ))}

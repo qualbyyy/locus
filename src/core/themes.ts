@@ -1,3 +1,5 @@
+import { getFontStacks, type FontPresetId } from './typography';
+
 export type ThemeId = 'paper' | 'studio' | 'graphite' | 'midnight';
 
 export interface ThemeTokens {
@@ -138,6 +140,8 @@ export function applyThemeToDom(opts: {
   accentColor?: string;
   customCanvasBg?: string | null;
   uiScale?: 'compact' | 'normal';
+  fontPreset?: FontPresetId;
+  customFontFamily?: string | null;
 }): void {
   if (typeof document === 'undefined') return;
 
@@ -164,6 +168,11 @@ export function applyThemeToDom(opts: {
   root.style.setProperty('--color-paper-muted', preset.tokens.muted);
   root.style.setProperty('--color-paper-danger', preset.tokens.danger);
 
+  const fonts = getFontStacks(opts.fontPreset ?? 'paper', opts.customFontFamily);
+  root.style.setProperty('--font-ui', fonts.ui);
+  root.style.setProperty('--font-display', fonts.display);
+
   root.dataset.theme = preset.id;
   root.dataset.uiScale = opts.uiScale ?? 'normal';
+  root.dataset.fontPreset = opts.fontPreset ?? 'paper';
 }

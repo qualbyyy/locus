@@ -145,7 +145,7 @@ export function StartModal({
                         <span className="truncate text-[12px] font-medium text-paper-ink">
                           {preset.label}
                         </span>
-                        <span className="font-mono text-[11px] text-paper-muted">
+                        <span className="font-display text-[11px] text-paper-muted">
                           {preset.width} × {preset.height} px • {preset.dpi} DPI
                         </span>
                       </div>
@@ -185,7 +185,7 @@ export function StartModal({
                     setSelectedPresetId('custom');
                     setWidth(nextWidth);
                   }}
-                  className="h-8 w-full rounded border border-paper-border bg-paper-bg px-2.5 font-mono text-[12px] text-paper-ink outline-none focus:border-paper-accent"
+                  className="h-8 w-full rounded border border-paper-border bg-paper-bg px-2.5 font-display text-[12px] text-paper-ink outline-none focus:border-paper-accent"
                 />
                 <button
                   type="button"
@@ -208,7 +208,7 @@ export function StartModal({
                     setSelectedPresetId('custom');
                     setHeight(nextHeight);
                   }}
-                  className="h-8 w-full rounded border border-paper-border bg-paper-bg px-2.5 font-mono text-[12px] text-paper-ink outline-none focus:border-paper-accent"
+                  className="h-8 w-full rounded border border-paper-border bg-paper-bg px-2.5 font-display text-[12px] text-paper-ink outline-none focus:border-paper-accent"
                 />
               </div>
 
@@ -222,7 +222,7 @@ export function StartModal({
                     setSelectedPresetId('custom');
                     setDpi(nextDpi);
                   }}
-                  className="h-8 w-full rounded border border-paper-border bg-paper-bg px-2.5 font-mono text-[12px] text-paper-ink outline-none focus:border-paper-accent"
+                  className="h-8 w-full rounded border border-paper-border bg-paper-bg px-2.5 font-display text-[12px] text-paper-ink outline-none focus:border-paper-accent"
                 />
                 <label className="flex flex-col gap-1">
                   <span className="text-[11px] text-paper-muted">Фон</span>
@@ -236,7 +236,7 @@ export function StartModal({
                       type="text"
                       value={background}
                       onChange={(e) => setBackground(e.target.value)}
-                      className="h-8 min-w-0 flex-1 rounded border border-paper-border bg-paper-bg px-2 font-mono text-[12px] text-paper-ink outline-none focus:border-paper-accent"
+                      className="h-8 min-w-0 flex-1 rounded border border-paper-border bg-paper-bg px-2 font-display text-[12px] text-paper-ink outline-none focus:border-paper-accent"
                     />
                   </div>
                 </label>

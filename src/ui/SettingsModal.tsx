@@ -42,7 +42,14 @@ import {
   type AppContactLink,
 } from '../core/appInfo';
 import { ACCENT_PRESETS, getThemePreset, THEME_PRESETS } from '../core/themes';
-import { openExternalUrl } from '../platform/io';
+import {
+  CUSTOM_FONT_FAMILY,
+  FONT_PRESETS,
+  fontMimeFromName,
+  getFontStacks,
+  useCustomFontStore,
+} from '../core/typography';
+import { openExternalUrl, pickOpenFile } from '../platform/io';
 import type { AIProviderType, Scene } from '../core/types';
 import {
   HexColorRow,
@@ -51,7 +58,7 @@ import {
 } from './InspectorControls';
 import { Slider } from './controls';
 
-type SettingsTabId =
+export type SettingsTabId =
   | 'appearance'
   | 'canvas'
   | 'tech'
@@ -63,6 +70,7 @@ interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onRestoreDraft?: (scene: Scene) => void;
+  initialTab?: SettingsTabId | null;
 }
 
 const TABS: Array<{
@@ -225,7 +233,7 @@ function AIModelField({
             spellCheck={false}
             placeholder={placeholder}
             onChange={(e) => onChange(e.target.value)}
-            className="h-8 w-full rounded border border-paper-border bg-paper-bg pl-2.5 pr-8 font-mono text-[12px] text-paper-ink outline-none focus:border-paper-accent"
+            className="h-8 w-full rounded border border-paper-border bg-paper-bg pl-2.5 pr-8 font-display text-[12px] text-paper-ink outline-none focus:border-paper-accent"
           />
           {fetchedModels.length > 0 && (
             <button
@@ -268,7 +276,7 @@ function AIModelField({
                     onChange(modelId);
                     setDropdownOpen(false);
                   }}
-                  className={`flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left font-mono text-[11px] ${
+                  className={`flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left font-display text-[11px] ${
                     active
                       ? 'bg-paper-accent/15 text-paper-ink'
                       : 'text-paper-ink hover:bg-paper-hover'
@@ -297,7 +305,7 @@ function AIModelField({
                 key={modelId}
                 type="button"
                 onClick={() => onChange(modelId)}
-                className={`rounded border px-2 py-0.5 font-mono text-[10px] transition-colors ${
+                className={`rounded border px-2 py-0.5 font-display text-[10px] transition-colors ${
                   active
                     ? 'border-paper-accent bg-paper-accent/15 text-paper-ink'
                     : 'border-paper-border bg-paper-bg/60 text-paper-muted hover:bg-paper-hover hover:text-paper-ink'
@@ -358,6 +366,7 @@ export function SettingsModal({
   isOpen,
   onClose,
   onRestoreDraft,
+  initialTab,
 }: SettingsModalProps) {
   const settings = useSettingsStore((s) => s.settings);
   const lastAutosaveAt = useSettingsStore((s) => s.lastAutosaveAt);
@@ -385,6 +394,10 @@ export function SettingsModal({
     savedAt: number;
     scene: Scene;
   } | null>(null);
+  const customFont = useCustomFontStore((s) => s.meta);
+  const [customFontInput, setCustomFontInput] = useState(settings.customFontFamily);
+  const [fontStatus, setFontStatus] = useState<string | null>(null);
+  const [isFontLoading, setIsFontLoading] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
@@ -396,6 +409,13 @@ export function SettingsModal({
     }
     void loadSceneDraft().then((draft) => setDraftState(draft));
   }, [isOpen, lastAutosaveAt]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (initialTab) setActiveTab(initialTab);
+    setCustomFontInput(settings.customFontFamily);
+    void useCustomFontStore.getState().load();
+  }, [isOpen, initialTab]);
 
   useEffect(() => {
     if (!isOpen || !recordingAction) return;
@@ -473,6 +493,44 @@ export function SettingsModal({
     } catch {
       setAboutStatus('Не удалось скопировать сведения');
     }
+  };
+
+  const handlePickCustomFont = async () => {
+    setFontStatus(null);
+    setIsFontLoading(true);
+    try {
+      const file = await pickOpenFile({
+        title: 'Загрузить шрифт интерфейса',
+        filters: [
+          { name: 'Шрифты', extensions: ['ttf', 'otf', 'woff', 'woff2'] },
+        ],
+      });
+      if (!file) return;
+      await useCustomFontStore.getState().save({
+        name: file.name,
+        mimeType: fontMimeFromName(file.name),
+        bytes: file.bytes,
+      });
+      updateSettings({
+        fontPreset: 'custom',
+        customFontFamily: CUSTOM_FONT_FAMILY,
+      });
+      setCustomFontInput(CUSTOM_FONT_FAMILY);
+      setFontStatus('Шрифт загружен');
+    } catch (err) {
+      setFontStatus(
+        err instanceof Error ? err.message : 'Не удалось загрузить шрифт'
+      );
+    } finally {
+      setIsFontLoading(false);
+    }
+  };
+
+  const handleClearCustomFont = async () => {
+    await useCustomFontStore.getState().clear();
+    updateSettings({ fontPreset: 'paper', customFontFamily: '' });
+    setCustomFontInput('');
+    setFontStatus('Свой шрифт удалён');
   };
 
   const handleFetchModels = async () => {
@@ -703,6 +761,117 @@ export function SettingsModal({
                     />
                   </div>
                 </div>
+
+                <div className="flex flex-col gap-2 border-t border-paper-border pt-3">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+                    Шрифты интерфейса
+                  </span>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {FONT_PRESETS.map((preset) => {
+                      const active = settings.fontPreset === preset.id;
+                      const stack = getFontStacks(preset.id, null);
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => updateSettings({ fontPreset: preset.id })}
+                          className={`flex items-center justify-between gap-2 rounded border px-2.5 py-1.5 text-left transition-colors ${
+                            active
+                              ? 'border-paper-accent bg-paper-accent/10'
+                              : 'border-paper-border bg-paper-bg/60 hover:bg-paper-hover'
+                          }`}
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-[12px] font-medium text-paper-ink">
+                              {preset.label}
+                            </span>
+                            <span className="block truncate text-[10px] text-paper-muted">
+                              {preset.hint}
+                            </span>
+                          </span>
+                          <span
+                            className="shrink-0 text-[17px] leading-none text-paper-ink"
+                            style={{ fontFamily: stack.display }}
+                          >
+                            Aa
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div
+                    className={`flex flex-col gap-2 rounded border p-2.5 ${
+                      settings.fontPreset === 'custom'
+                        ? 'border-paper-accent bg-paper-accent/10'
+                        : 'border-paper-border bg-paper-bg/60'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => updateSettings({ fontPreset: 'custom' })}
+                        className="text-[12px] font-medium text-paper-ink hover:text-paper-accent"
+                      >
+                        Свой шрифт
+                      </button>
+                      <span
+                        className="text-[17px] leading-none text-paper-ink"
+                        style={{
+                          fontFamily: getFontStacks(
+                            'custom',
+                            customFontInput || settings.customFontFamily
+                          ).ui,
+                        }}
+                      >
+                        Aa
+                      </span>
+                    </div>
+                    <input
+                      type="text"
+                      value={customFontInput}
+                      spellCheck={false}
+                      placeholder="Название семейства, например Locus Custom"
+                      onChange={(e) => setCustomFontInput(e.target.value)}
+                      onBlur={() =>
+                        updateSettings({ customFontFamily: customFontInput })
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          updateSettings({ customFontFamily: customFontInput });
+                        }
+                      }}
+                      className="h-7 rounded border border-paper-border bg-paper-panel px-2 text-[12px] text-paper-ink outline-none placeholder:text-paper-muted focus:border-paper-accent"
+                    />
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        disabled={isFontLoading}
+                        onClick={() => void handlePickCustomFont()}
+                        className="rounded border border-paper-border bg-paper-panel px-2 py-1 text-[11px] text-paper-ink hover:bg-paper-hover disabled:opacity-50"
+                      >
+                        {isFontLoading ? 'Загрузка…' : 'Загрузить .ttf / .otf'}
+                      </button>
+                      {(customFont || settings.customFontFamily) && (
+                        <button
+                          type="button"
+                          onClick={() => void handleClearCustomFont()}
+                          className="rounded px-1.5 py-1 text-[11px] text-paper-muted hover:text-paper-danger"
+                        >
+                          Сбросить
+                        </button>
+                      )}
+                      {customFont && (
+                        <span className="truncate text-[10px] text-paper-muted">
+                          {customFont.fileName}
+                        </span>
+                      )}
+                    </div>
+                    {fontStatus && (
+                      <span className="text-[10px] text-paper-muted">{fontStatus}</span>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -732,7 +901,7 @@ export function SettingsModal({
                           key={size}
                           type="button"
                           onClick={() => updateSettings({ gridSize: size })}
-                          className={`h-7 rounded border px-2 font-mono text-[11px] ${
+                          className={`h-7 rounded border px-2 font-display text-[11px] ${
                             settings.gridSize === size
                               ? 'border-paper-accent bg-paper-accent/15 font-medium text-paper-ink'
                               : 'border-paper-border bg-paper-panel text-paper-ink hover:bg-paper-hover'
@@ -747,7 +916,7 @@ export function SettingsModal({
                   <label className="flex flex-col gap-1">
                     <div className="flex items-center justify-between text-[11px] text-paper-muted">
                       <span>Прозрачность сетки</span>
-                      <span className="font-mono text-paper-ink">
+                      <span className="font-display text-paper-ink">
                         {Math.round(settings.gridOpacity * 100)}%
                       </span>
                     </div>
@@ -1005,7 +1174,7 @@ export function SettingsModal({
                                     prev === def.id ? null : def.id
                                   );
                                 }}
-                                className={`min-w-20 rounded border px-2 py-0.5 font-mono text-[11px] transition-colors ${
+                                className={`min-w-20 rounded border px-2 py-0.5 font-display text-[11px] transition-colors ${
                                   isRecording
                                     ? 'border-paper-accent bg-paper-accent text-white'
                                     : def.editable === false
@@ -1030,8 +1199,8 @@ export function SettingsModal({
             {activeTab === 'ai' && (
               <div className="flex flex-col gap-3">
                 <div className="rounded border border-paper-border bg-paper-bg/70 px-3 py-2 text-[11px] text-paper-muted">
-                  Параметры сохраняются в <span className="font-mono text-paper-ink">settings.json</span> и не попадают в файл проекта. Панель команд открывается по{' '}
-                  <span className="font-mono text-paper-ink">Ctrl+K</span>.
+                  Параметры сохраняются в <span className="font-display text-paper-ink">settings.json</span> и не попадают в файл проекта. Панель команд открывается по{' '}
+                  <span className="font-display text-paper-ink">Ctrl+K</span>.
                 </div>
 
                 <div className="flex flex-col gap-1">
@@ -1091,7 +1260,7 @@ export function SettingsModal({
                               ai: { geminiApiKey: e.target.value },
                             });
                           }}
-                          className="h-8 flex-1 rounded border border-paper-border bg-paper-bg px-2.5 font-mono text-[12px] text-paper-ink outline-none focus:border-paper-accent"
+                          className="h-8 flex-1 rounded border border-paper-border bg-paper-bg px-2.5 font-display text-[12px] text-paper-ink outline-none focus:border-paper-accent"
                         />
                         <button
                           type="button"
@@ -1141,7 +1310,7 @@ export function SettingsModal({
                               ai: { anthropicApiKey: e.target.value },
                             });
                           }}
-                          className="h-8 flex-1 rounded border border-paper-border bg-paper-bg px-2.5 font-mono text-[12px] text-paper-ink outline-none focus:border-paper-accent"
+                          className="h-8 flex-1 rounded border border-paper-border bg-paper-bg px-2.5 font-display text-[12px] text-paper-ink outline-none focus:border-paper-accent"
                         />
                         <button
                           type="button"
@@ -1189,7 +1358,7 @@ export function SettingsModal({
                             ai: { ollamaBaseUrl: e.target.value },
                           });
                         }}
-                        className="h-8 rounded border border-paper-border bg-paper-bg px-2.5 font-mono text-[12px] text-paper-ink outline-none focus:border-paper-accent"
+                        className="h-8 rounded border border-paper-border bg-paper-bg px-2.5 font-display text-[12px] text-paper-ink outline-none focus:border-paper-accent"
                       />
                     </label>
 
@@ -1269,7 +1438,7 @@ export function SettingsModal({
                               ai: { openaiBaseUrl: e.target.value },
                             });
                           }}
-                          className="h-8 rounded border border-paper-border bg-paper-bg px-2.5 font-mono text-[12px] text-paper-ink outline-none focus:border-paper-accent"
+                          className="h-8 rounded border border-paper-border bg-paper-bg px-2.5 font-display text-[12px] text-paper-ink outline-none focus:border-paper-accent"
                         />
                       </label>
 
@@ -1288,7 +1457,7 @@ export function SettingsModal({
                                 ai: { openaiApiKey: e.target.value },
                               });
                             }}
-                            className="h-8 flex-1 rounded border border-paper-border bg-paper-bg px-2.5 font-mono text-[12px] text-paper-ink outline-none focus:border-paper-accent"
+                            className="h-8 flex-1 rounded border border-paper-border bg-paper-bg px-2.5 font-display text-[12px] text-paper-ink outline-none focus:border-paper-accent"
                           />
                           <button
                             type="button"

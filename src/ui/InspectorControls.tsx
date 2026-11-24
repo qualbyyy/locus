@@ -102,7 +102,7 @@ export function NumberField({
       }}
       className={
         className ??
-        'h-7 w-full rounded border border-paper-border bg-paper-bg px-2 font-mono text-[12px] text-paper-ink outline-none focus:border-paper-accent'
+        'h-7 w-full rounded border border-paper-border bg-paper-bg px-2 font-display text-[12px] text-paper-ink outline-none focus:border-paper-accent'
       }
     />
   );
@@ -161,7 +161,7 @@ export function HexColorRow({
             e.currentTarget.blur();
           }
         }}
-        className="h-7 flex-1 rounded border border-paper-border bg-paper-bg px-2 font-mono text-[12px] text-paper-ink outline-none focus:border-paper-accent"
+        className="h-7 flex-1 rounded border border-paper-border bg-paper-bg px-2 font-display text-[12px] text-paper-ink outline-none focus:border-paper-accent"
       />
     </div>
   );

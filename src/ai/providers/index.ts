@@ -68,22 +68,4 @@ export function getAiModelLabel(ai: AIConfig): string {
   return `${PROVIDER_LABELS[ai.provider]} · ${model || 'модель не выбрана'}`;
 }
 
-export function supportsVision(ai: AIConfig): boolean {
-  const model = getAiModelName(ai).trim().toLowerCase();
-  if (!model) return false;
 
-  if (ai.provider === 'gemini') {
-    return /^gemini/.test(model) && !/embedding|aqa/.test(model);
-  }
-  if (ai.provider === 'anthropic') {
-    return /claude-(3|4|sonnet|opus|haiku|instant)/.test(model);
-  }
-  if (ai.provider === 'ollama') {
-    return /(llava|bakllava|moondream|minicpm-v|vision|qwen2\.5-vl|qwen2\.6-vl|qwen3-vl|gemma3|llama3\.2-vision|granite[\w.-]*vision)/.test(
-      model
-    );
-  }
-  return /(gpt-4o|gpt-4\.1|gpt-4-turbo|gpt-5|o3|o4|vision|llava|pixtral|qwen[\w.-]*vl|qwen[\w.-]*vision|gemma3|claude|gemini)/.test(
-    model
-  );
-}

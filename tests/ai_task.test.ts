@@ -93,18 +93,7 @@ describe('AI background task store', () => {
     expect(useAiTaskStore.getState().minimized).toBe(true);
   });
 
-  it('blocks image attachments when the model has no vision support', async () => {
-    const settings = useSettingsStore.getState().settings;
-    useSettingsStore.setState({
-      settings: {
-        ...settings,
-        ai: {
-          ...settings.ai,
-          provider: 'ollama',
-          ollamaModel: 'qwen2.5-coder:7b',
-        },
-      },
-    });
+  it('sends images to the model and surfaces the provider vision error', async () => {
     useAiTaskStore.getState().addAttachment({
       id: 'img_1',
       name: 'ref.png',
@@ -112,12 +101,14 @@ describe('AI background task store', () => {
       dataUrl: 'data:image/png;base64,QUJD',
       dataBase64: 'QUJD',
     });
+    runMock.mockRejectedValue(new Error('This model does not support image input'));
 
     await useAiTaskStore.getState().start('Опиши картинку');
 
-    expect(runMock).not.toHaveBeenCalled();
+    const options = runMock.mock.calls[0]?.[0] as { attachments?: unknown[] };
+    expect(options.attachments).toHaveLength(1);
     expect(useAiTaskStore.getState().status).toBe('error');
-    expect(useAiTaskStore.getState().error).toContain('не поддерживает изображения');
+    expect(useAiTaskStore.getState().error).toContain('Модель не приняла изображение');
     expect(useAiTaskStore.getState().attachments).toHaveLength(1);
   });
 

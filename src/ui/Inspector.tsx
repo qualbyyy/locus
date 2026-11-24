@@ -173,7 +173,7 @@ function ArtboardPresetSelect({
               >
                 <div className="min-w-0">
                   <div className="truncate font-medium">{preset.label}</div>
-                  <div className="font-mono text-[10px] text-paper-muted">
+                  <div className="font-display text-[10px] text-paper-muted">
                     {preset.width} × {preset.height} • {preset.dpi} DPI
                   </div>
                 </div>
@@ -305,7 +305,7 @@ export function Inspector({
             <label className="flex flex-col gap-1">
               <div className="flex items-center justify-between text-[11px] text-paper-muted">
                 <span>Точки / лучи</span>
-                <span className="font-mono text-paper-ink">{smartShapeOptions.points}</span>
+                <span className="font-display text-paper-ink">{smartShapeOptions.points}</span>
               </div>
               <Slider
                 value={smartShapeOptions.points}
@@ -322,7 +322,7 @@ export function Inspector({
             <label className="flex flex-col gap-1">
               <div className="flex items-center justify-between text-[11px] text-paper-muted">
                 <span>Неровность (Wobble)</span>
-                <span className="font-mono text-paper-ink">
+                <span className="font-display text-paper-ink">
                   {smartShapeOptions.wobble.toFixed(2)}
                 </span>
               </div>
@@ -351,7 +351,7 @@ export function Inspector({
             <label className="flex flex-col gap-1">
               <div className="flex items-center justify-between text-[11px] text-paper-muted">
                 <span>Внутренний радиус</span>
-                <span className="font-mono text-paper-ink">
+                <span className="font-display text-paper-ink">
                   {smartShapeOptions.innerRadiusRatio.toFixed(2)}
                 </span>
               </div>
@@ -476,7 +476,7 @@ export function Inspector({
             <div className="flex flex-col gap-2 border-t border-paper-border pt-2.5">
               <div className="flex items-center justify-between text-[11px]">
                 <span className="text-paper-muted">Исходный размер</span>
-                <span className="font-mono text-paper-ink">
+                <span className="font-display text-paper-ink">
                   {singleLayer.width} × {singleLayer.height} px
                 </span>
               </div>

@@ -899,7 +899,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       >
         <canvas ref={canvasRef} className="block h-full w-full outline-none" />
         {textEditorOverlay}
-        <div className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-2 rounded border border-paper-border bg-paper-panel px-2.5 py-1 text-[11px] text-paper-muted font-mono">
+        <div className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-2 rounded border border-paper-border bg-paper-panel px-2.5 py-1 text-[11px] text-paper-muted font-display">
           <span>
             {scene.width} × {scene.height} px
           </span>

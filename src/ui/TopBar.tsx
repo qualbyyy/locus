@@ -144,7 +144,7 @@ export function TopBar({
           <span className="hidden whitespace-nowrap text-paper-muted lg:inline">
             Команда ИИ…
           </span>
-          <kbd className="rounded border border-paper-border bg-paper-panel px-1 py-0.2 font-mono text-[10px] text-paper-muted">
+          <kbd className="rounded border border-paper-border bg-paper-panel px-1 py-0.2 font-display text-[10px] text-paper-muted">
             Ctrl+K
           </kbd>
         </button>
@@ -155,7 +155,7 @@ export function TopBar({
           type="button"
           onClick={onFitArtboard}
           title="Вписать артборд (Ctrl+0)"
-          className="flex h-7 min-w-12 items-center justify-center rounded border border-paper-border bg-paper-bg px-2 font-mono text-[12px] text-paper-ink hover:bg-paper-hover"
+          className="flex h-7 min-w-12 items-center justify-center rounded border border-paper-border bg-paper-bg px-2 font-display text-[12px] text-paper-ink hover:bg-paper-hover"
         >
           {zoomPercent}%
         </button>

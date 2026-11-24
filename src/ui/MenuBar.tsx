@@ -138,7 +138,7 @@ function MenuDropdown({
                 <ChevronRight className="h-3.5 w-3.5 text-paper-muted" strokeWidth={1.75} />
               ) : (
                 item.shortcut && (
-                  <span className="font-mono text-[10px] text-paper-muted">
+                  <span className="font-display text-[10px] text-paper-muted">
                     {item.shortcut}
                   </span>
                 )
@@ -165,7 +165,7 @@ function MenuDropdown({
                     >
                       <span className="whitespace-nowrap">{sub.label}</span>
                       {sub.shortcut && (
-                        <span className="font-mono text-[10px] text-paper-muted">
+                        <span className="font-display text-[10px] text-paper-muted">
                           {sub.shortcut}
                         </span>
                       )}

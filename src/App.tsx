@@ -90,7 +90,7 @@ import { Inspector } from './ui/Inspector';
 import { LayersPanel } from './ui/LayersPanel';
 import type { MenuBarActions, MenuBarState } from './ui/MenuBar';
 import { RasterExportModal } from './ui/RasterExportModal';
-import { SettingsModal } from './ui/SettingsModal';
+import { SettingsModal, type SettingsTabId } from './ui/SettingsModal';
 import { StartModal } from './ui/StartModal';
 import { Toolbar } from './ui/Toolbar';
 import { TopBar } from './ui/TopBar';
@@ -150,6 +150,8 @@ export function App() {
 
   const [isStartModalOpen, setIsStartModalOpen] = useState(true);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] =
+    useState<SettingsTabId | null>(null);
   const [isCommandBarOpen, setIsCommandBarOpen] = useState(false);
   const [rasterExportOpen, setRasterExportOpen] = useState(false);
   const [rasterExportFormat, setRasterExportFormat] = useState<'png' | 'jpg'>('png');
@@ -171,6 +173,11 @@ export function App() {
 
   const canvasRef = useRef<PaperCanvasHandle | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
+
+  const openSettingsTab = useCallback((tab: SettingsTabId | null = null) => {
+    setSettingsInitialTab(tab);
+    setIsSettingsModalOpen(true);
+  }, []);
 
   useEffect(() => {
     void useSettingsStore.getState().loadSettings();
@@ -614,6 +621,7 @@ export function App() {
 
       if (action === 'app.openSettings' && !isStartModalOpen && !editable) {
         event.preventDefault();
+        setSettingsInitialTab(null);
         setIsSettingsModalOpen((open) => !open);
         return;
       }
@@ -1069,7 +1077,7 @@ export function App() {
       },
       onDuplicate: () => duplicateLayers(useEditorStore.getState().selectedIds, 16, 16),
       onDelete: () => deleteLayers(useEditorStore.getState().selectedIds),
-      onOpenSettings: () => setIsSettingsModalOpen(true),
+      onOpenSettings: () => openSettingsTab(null),
       onRotateBy: (deg) => rotateLayersBy(useEditorStore.getState().selectedIds, deg),
       onFlip: (axis) => flipLayers(useEditorStore.getState().selectedIds, axis),
       onReorder: (mode) => {
@@ -1129,6 +1137,7 @@ export function App() {
       handleToggleGrid,
       handleToggleSnap,
       openCommandBar,
+      openSettingsTab,
       showNotice,
     ]
   );
@@ -1345,7 +1354,7 @@ export function App() {
         onRedo={redoCommand}
         onOpenCommandBar={openCommandBar}
         onFitArtboard={handleFitArtboard}
-        onOpenSettings={() => setIsSettingsModalOpen(true)}
+        onOpenSettings={() => openSettingsTab(null)}
       />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -1496,9 +1505,9 @@ export function App() {
       <CommandBar
         isOpen={isCommandBarOpen}
         onClose={closeCommandBar}
-        onOpenSettings={() => {
+        onOpenSettings={(tab) => {
           setIsCommandBarOpen(false);
-          setIsSettingsModalOpen(true);
+          openSettingsTab(tab ?? null);
         }}
       />
 
@@ -1516,7 +1525,11 @@ export function App() {
 
       <SettingsModal
         isOpen={isSettingsModalOpen}
-        onClose={() => setIsSettingsModalOpen(false)}
+        initialTab={settingsInitialTab}
+        onClose={() => {
+          setIsSettingsModalOpen(false);
+          setSettingsInitialTab(null);
+        }}
         onRestoreDraft={handleRestoreDraft}
       />
 

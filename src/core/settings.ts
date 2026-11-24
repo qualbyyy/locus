@@ -9,6 +9,11 @@ import {
   THEME_PRESETS,
   type ThemeId,
 } from './themes';
+import {
+  FONT_PRESET_IDS,
+  useCustomFontStore,
+  type FontPresetId,
+} from './typography';
 import type { AIConfig, AIProviderType, Scene } from './types';
 
 export const SETTINGS_FILE_PATH = 'settings.json';
@@ -21,6 +26,8 @@ export interface AppSettings {
   themeId: ThemeId;
   accentColor: string;
   customCanvasBg: string | null;
+  fontPreset: FontPresetId;
+  customFontFamily: string;
   uiScale: UiScale;
   showGrid: boolean;
   gridSize: number;
@@ -41,7 +48,7 @@ export interface AppSettings {
 }
 
 export const DEFAULT_AI_CONFIG: AIConfig = {
-  provider: 'gemini',
+  provider: 'openai',
   geminiApiKey: '',
   geminiModel: 'gemini-2.5-flash',
   anthropicApiKey: '',
@@ -58,6 +65,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   themeId: 'paper',
   accentColor: '#da7756',
   customCanvasBg: null,
+  fontPreset: 'paper',
+  customFontFamily: '',
   uiScale: 'normal',
   showGrid: false,
   gridSize: 16,
@@ -113,6 +122,17 @@ export function sanitizeSettings(raw: unknown): AppSettings {
       ? src.customCanvasBg
       : null;
 
+  const fontPreset: FontPresetId =
+    typeof src.fontPreset === 'string' &&
+    FONT_PRESET_IDS.includes(src.fontPreset as FontPresetId)
+      ? (src.fontPreset as FontPresetId)
+      : DEFAULT_SETTINGS.fontPreset;
+
+  const customFontFamily =
+    typeof src.customFontFamily === 'string'
+      ? src.customFontFamily.trim().slice(0, 80)
+      : DEFAULT_SETTINGS.customFontFamily;
+
   const uiScale: UiScale = src.uiScale === 'compact' ? 'compact' : 'normal';
 
   const customShortcuts: Record<string, string> = {};
@@ -147,6 +167,8 @@ export function sanitizeSettings(raw: unknown): AppSettings {
     themeId,
     accentColor,
     customCanvasBg,
+    fontPreset,
+    customFontFamily,
     uiScale,
     showGrid: readBool(src.showGrid, DEFAULT_SETTINGS.showGrid),
     gridSize: Math.round(readFinite(src.gridSize, DEFAULT_SETTINGS.gridSize, 4, 128)),
@@ -220,6 +242,8 @@ function applyRuntimeSideEffects(settings: AppSettings): void {
     accentColor: settings.accentColor,
     customCanvasBg: settings.customCanvasBg,
     uiScale: settings.uiScale,
+    fontPreset: settings.fontPreset,
+    customFontFamily: settings.customFontFamily,
   });
   setUndoLimit(settings.undoLimit);
 }
@@ -264,6 +288,10 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
     const next = sanitizeSettings(parsed);
     set({ settings: next, loaded: true });
     applyRuntimeSideEffects(next);
+    void useCustomFontStore
+      .getState()
+      .load()
+      .then(() => applyRuntimeSideEffects(useSettingsStore.getState().settings));
     return next;
   },
 

@@ -435,7 +435,7 @@ export function ColorField({
                   setOpen(false);
                 }
               }}
-              className="h-6 min-w-0 flex-1 rounded border border-paper-border bg-paper-bg px-1.5 font-mono text-[11px] text-paper-ink outline-none focus:border-paper-accent"
+              className="h-6 min-w-0 flex-1 rounded border border-paper-border bg-paper-bg px-1.5 font-display text-[11px] text-paper-ink outline-none focus:border-paper-accent"
             />
           </div>
         </div>

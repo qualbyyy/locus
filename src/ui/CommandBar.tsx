@@ -1,11 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { ArrowUp, Loader2, Paperclip, Settings2, Sparkles, Square, X } from 'lucide-react';
-import {
-  getAiModelLabel,
-  getAiModelName,
-  getAiProviderIssue,
-  supportsVision,
-} from '../ai/providers';
+import { getAiModelLabel, getAiProviderIssue } from '../ai/providers';
 import { TOOL_LABELS } from '../ai/registry';
 import { useAiTaskStore } from '../ai/taskStore';
 import { bytesToDataUrl, inferImageMimeType } from '../core/assets';
@@ -16,7 +11,7 @@ import { pickOpenFile } from '../platform/io';
 export interface CommandBarProps {
   isOpen: boolean;
   onClose: () => void;
-  onOpenSettings?: () => void;
+  onOpenSettings?: (tab?: 'ai') => void;
 }
 
 export function CommandBar({
@@ -47,9 +42,7 @@ export function CommandBar({
   const isRunning = status === 'running';
 
   const providerIssue = useMemo(() => getAiProviderIssue(ai), [ai]);
-  const visionSupported = useMemo(() => supportsVision(ai), [ai]);
   const hasImages = attachments.length > 0;
-  const visionBlocked = hasImages && !visionSupported;
 
   const handleClose = useCallback(() => {
     if (useAiTaskStore.getState().status === 'running') {
@@ -130,9 +123,10 @@ export function CommandBar({
 
   const submit = useCallback(() => {
     const value = prompt.trim();
-    if (!value || isRunning || visionBlocked) return;
+    if (!value || isRunning) return;
     void start(value);
-  }, [isRunning, prompt, start, visionBlocked]);
+    if (providerIssue) onOpenSettings?.('ai');
+  }, [isRunning, onOpenSettings, prompt, providerIssue, start]);
 
   if (!isOpen) return null;
 
@@ -174,70 +168,68 @@ export function CommandBar({
         </div>
 
         <div className="flex flex-col gap-3 p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            {attachments.map((attachment) => (
-              <div
-                key={attachment.id}
-                title={`${attachment.name} · ${attachment.mimeType}`}
-                className="relative h-12 w-12 overflow-hidden rounded border border-paper-border bg-paper-bg"
-              >
-                <img
-                  src={attachment.dataUrl}
-                  alt={attachment.name}
-                  className="h-full w-full object-cover"
-                />
-                <button
-                  type="button"
-                  disabled={isRunning}
-                  onClick={() => removeAttachment(attachment.id)}
-                  aria-label={`Убрать ${attachment.name}`}
-                  className="absolute right-0 top-0 flex h-4 w-4 items-center justify-center rounded-bl bg-paper-panel/90 text-paper-muted hover:text-paper-danger disabled:opacity-40"
-                >
-                  <X className="h-2.5 w-2.5" strokeWidth={2} />
-                </button>
-              </div>
-            ))}
+          <div className="relative">
+            <textarea
+              ref={textareaRef}
+              value={prompt}
+              rows={4}
+              onChange={(event) => setPrompt(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  submit();
+                }
+              }}
+              className="w-full resize-none rounded border border-paper-border bg-paper-bg px-3 py-2 pb-9 pr-11 text-[13px] leading-relaxed text-paper-ink outline-none placeholder:text-paper-muted focus:border-paper-accent"
+            />
             <button
               type="button"
               onClick={() => void handleAttach()}
               disabled={isRunning || attachments.length >= 4}
               title="Прикрепить изображение"
               aria-label="Прикрепить изображение"
-              className="flex h-12 w-12 items-center justify-center rounded border border-dashed border-paper-border bg-paper-bg text-paper-muted hover:border-paper-accent hover:text-paper-ink disabled:cursor-default disabled:opacity-40"
+              className="absolute bottom-1.5 right-1.5 flex h-7 w-7 items-center justify-center rounded text-paper-muted transition-colors hover:text-paper-accent disabled:cursor-default disabled:opacity-40"
             >
               <Paperclip className="h-4 w-4" strokeWidth={1.75} />
             </button>
-            {hasImages && (
-              <span className="text-[11px] text-paper-muted">
-                {attachments.length}/4
-              </span>
-            )}
           </div>
 
-          {visionBlocked && (
-            <div className="rounded border border-paper-danger/40 bg-paper-danger/5 px-2.5 py-1.5 text-[11px] text-paper-danger">
-              Модель «{getAiModelName(ai)}» не поддерживает изображения. Выберите
-              vision-модель в настройках (Ctrl+,) или уберите вложения.
+          {(hasImages || attachError) && (
+            <div className="flex flex-col gap-1.5">
+              {hasImages && (
+                <div className="flex flex-wrap items-center gap-2">
+                  {attachments.map((attachment) => (
+                    <div
+                      key={attachment.id}
+                      title={`${attachment.name} · ${attachment.mimeType}`}
+                      className="relative h-12 w-12 overflow-hidden rounded border border-paper-border bg-paper-bg"
+                    >
+                      <img
+                        src={attachment.dataUrl}
+                        alt={attachment.name}
+                        className="h-full w-full object-cover"
+                      />
+                      <button
+                        type="button"
+                        disabled={isRunning}
+                        onClick={() => removeAttachment(attachment.id)}
+                        aria-label={`Убрать ${attachment.name}`}
+                        className="absolute right-0 top-0 flex h-4 w-4 items-center justify-center rounded-bl bg-paper-panel/90 text-paper-muted hover:text-paper-danger disabled:opacity-40"
+                      >
+                        <X className="h-2.5 w-2.5" strokeWidth={2} />
+                      </button>
+                    </div>
+                  ))}
+                  <span className="text-[11px] text-paper-muted">
+                    {attachments.length}/4
+                  </span>
+                </div>
+              )}
+              {attachError && (
+                <div className="text-[11px] text-paper-danger">{attachError}</div>
+              )}
             </div>
           )}
-
-          {attachError && (
-            <div className="text-[11px] text-paper-danger">{attachError}</div>
-          )}
-
-          <textarea
-            ref={textareaRef}
-            value={prompt}
-            rows={3}
-            onChange={(event) => setPrompt(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                submit();
-              }
-            }}
-            className="resize-none rounded border border-paper-border bg-paper-bg px-3 py-2 text-[13px] leading-relaxed text-paper-ink outline-none placeholder:text-paper-muted focus:border-paper-accent"
-          />
 
           {log.length > 0 && (
             <ul className="flex max-h-44 flex-col gap-1 overflow-y-auto rounded border border-paper-border bg-paper-bg px-2.5 py-2">
@@ -295,7 +287,7 @@ export function CommandBar({
               {(providerIssue || error.includes('настройк')) && onOpenSettings && (
                 <button
                   type="button"
-                  onClick={onOpenSettings}
+                  onClick={() => onOpenSettings('ai')}
                   className="flex items-center gap-1 rounded border border-paper-border bg-paper-panel px-2 py-1 text-[11px] text-paper-ink hover:bg-paper-hover"
                 >
                   <Settings2 className="h-3.5 w-3.5" strokeWidth={1.75} />
@@ -321,7 +313,7 @@ export function CommandBar({
               <button
                 type="button"
                 onClick={submit}
-                disabled={!prompt.trim() || visionBlocked}
+                disabled={!prompt.trim()}
                 className="flex items-center gap-1.5 rounded bg-paper-accent px-3 py-1 text-[12px] font-medium text-white hover:bg-paper-accent-hover disabled:cursor-default disabled:opacity-40"
               >
                 <ArrowUp className="h-3.5 w-3.5" strokeWidth={2} />

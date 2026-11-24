@@ -197,7 +197,7 @@ export function RasterExportModal({
                 <span className="text-[12px] text-paper-muted">Рендер превью…</span>
               )}
             </div>
-            <div className="flex items-center justify-between font-mono text-[11px] text-paper-muted">
+            <div className="flex items-center justify-between font-display text-[11px] text-paper-muted">
               <span>
                 {outputDims.w} × {outputDims.h} px
               </span>
@@ -288,7 +288,7 @@ export function RasterExportModal({
               <div className="flex flex-col gap-1">
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="font-medium text-paper-muted">Качество JPEG</span>
-                  <span className="font-mono text-paper-ink">{quality}%</span>
+                  <span className="font-display text-paper-ink">{quality}%</span>
                 </div>
                 <Slider
                   value={quality}
