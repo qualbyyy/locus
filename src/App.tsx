@@ -1,11 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import { inferImageMimeType, registerAssetFromBytes } from './core/assets';
 import {
   copyLayerStyle,
   copySelectedLayers,
+  hasCopiedLayers,
   pasteLayers,
   pasteLayerStyle,
 } from './core/clipboard';
+import {
+  buildContextMenuModel,
+  runTextContextAction,
+  type ContextMenuActionId,
+  type ContextMenuArea,
+} from './core/contextMenu';
 import {
   alignLayers,
   booleanLayers,
@@ -65,6 +79,7 @@ import {
   readFileBytes,
   subscribeFileDrop,
 } from './platform/io';
+import { ContextMenu } from './ui/ContextMenu';
 import { EffectModal, type EffectModalTarget } from './ui/EffectModal';
 import { Inspector } from './ui/Inspector';
 import { LayersPanel } from './ui/LayersPanel';
@@ -78,6 +93,14 @@ import { TopBar } from './ui/TopBar';
 function stripFileExtension(fileName: string): string {
   const cleaned = fileName.replace(/\.[^.]+$/, '').trim();
   return cleaned || 'Изображение';
+}
+
+function findEditableElement(target: EventTarget | null): HTMLElement | null {
+  if (!(target instanceof HTMLElement)) return null;
+  const element = target.closest(
+    'input, textarea, select, [contenteditable="true"], [contenteditable=""]'
+  );
+  return element instanceof HTMLElement ? element : null;
 }
 
 function isEditableElement(target: EventTarget | null): boolean {
@@ -130,6 +153,13 @@ export function App() {
   const [isSpacePanning, setIsSpacePanning] = useState(false);
   const [isFileDragHover, setIsFileDragHover] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    area: ContextMenuArea;
+    layerIds: string[];
+    editableElement: HTMLElement | null;
+  } | null>(null);
 
   const canvasRef = useRef<PaperCanvasHandle | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
@@ -1019,6 +1049,101 @@ export function App() {
     [showNotice]
   );
 
+  const handleRootContextMenu = useCallback(
+    (event: ReactMouseEvent) => {
+      event.preventDefault();
+      const editableElement = findEditableElement(event.target);
+      if (editableElement) {
+        setContextMenu({
+          x: event.clientX,
+          y: event.clientY,
+          area: 'editable',
+          layerIds: [],
+          editableElement,
+        });
+        return;
+      }
+      const row = (event.target as HTMLElement | null)?.closest('[data-layer-id]');
+      const rowId =
+        row instanceof HTMLElement ? row.dataset.layerId ?? null : null;
+      const current = useEditorStore.getState().selectedIds;
+      const layerIds = rowId
+        ? current.includes(rowId)
+          ? current
+          : [rowId]
+        : current;
+      setContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        area: 'app',
+        layerIds,
+        editableElement: null,
+      });
+    },
+    []
+  );
+
+  const handleContextMenuAction = useCallback(
+    (action: ContextMenuActionId) => {
+      const menu = contextMenu;
+      setContextMenu(null);
+      if (!menu) return;
+
+      if (menu.area === 'editable' && menu.editableElement) {
+        if (
+          action === 'cut' ||
+          action === 'copy' ||
+          action === 'paste' ||
+          action === 'selectAll'
+        ) {
+          void runTextContextAction(action, menu.editableElement);
+        }
+        return;
+      }
+
+      const ids = menu.layerIds;
+      switch (action) {
+        case 'copy': {
+          const count = copySelectedLayers(ids);
+          if (count > 0) showNotice(`Скопировано слоёв: ${count}`);
+          return;
+        }
+        case 'cut': {
+          if (copySelectedLayers(ids) > 0) deleteLayers(ids);
+          return;
+        }
+        case 'paste': {
+          if (pasteLayers({ inPlace: false }).length === 0) {
+            showNotice('Буфер обмена пуст');
+          }
+          return;
+        }
+        case 'duplicate':
+          if (ids.length > 0) duplicateLayers(ids, 16, 16);
+          return;
+        case 'delete':
+          if (ids.length > 0) deleteLayers(ids);
+          return;
+        case 'bringForward':
+          ids.forEach((id) => reorderLayer(id, 'forward'));
+          return;
+        case 'sendBackward':
+          ids.forEach((id) => reorderLayer(id, 'backward'));
+          return;
+        case 'selectAll':
+          selectAllLayers();
+          return;
+        case 'deselect':
+          deselectAllLayers();
+          return;
+        case 'ai':
+          showNotice('ИИ CommandBar (Ctrl+K) появится на Этапе 5');
+          return;
+      }
+    },
+    [contextMenu, showNotice]
+  );
+
   const handleCreateClipMask = useCallback(
     (ids: string[]) => {
       const result = createClipMaskFromSelection(ids);
@@ -1043,6 +1168,7 @@ export function App() {
 
   return (
     <div
+      onContextMenu={handleRootContextMenu}
       onDragOver={(e) => {
         if (isTauri()) return;
         if (e.dataTransfer?.types.includes('Files')) {
@@ -1157,6 +1283,15 @@ export function App() {
                 : `Цвет заливки: ${hex}`
             )
           }
+          onOpenContextMenu={({ x, y, layerId }) =>
+            setContextMenu({
+              x,
+              y,
+              area: 'canvas',
+              layerIds: layerId ? [layerId] : [],
+              editableElement: null,
+            })
+          }
         />
 
         {(showLayers || showInspector) && (
@@ -1230,6 +1365,20 @@ export function App() {
           </aside>
         )}
       </div>
+
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={buildContextMenuModel({
+            area: contextMenu.area,
+            layerIds: contextMenu.layerIds,
+            hasCopiedLayers: hasCopiedLayers(),
+          })}
+          onAction={handleContextMenuAction}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
 
       {isFileDragHover && (
         <div className="pointer-events-none fixed inset-3 z-50 flex items-center justify-center rounded border border-dashed border-paper-accent bg-paper-bg/85">

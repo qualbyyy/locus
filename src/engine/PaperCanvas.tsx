@@ -24,7 +24,7 @@ import { createBlobTool } from './tools/blobTool';
 import { createEyedropperTool } from './tools/eyedropperTool';
 import { createNodeTool } from './tools/nodeTool';
 import { createPenTool } from './tools/penTool';
-import { createSelectTool } from './tools/selectTool';
+import { createSelectTool, findTopLayerAtPoint } from './tools/selectTool';
 import { createTextTool } from './tools/textTool';
 import type {
   CanvasToolController,
@@ -51,6 +51,11 @@ interface PaperCanvasProps {
   outlineMode?: boolean;
   onZoomChange: (zoomPercent: number) => void;
   onColorSampled?: (hex: string, target: 'fill' | 'stroke') => void;
+  onOpenContextMenu?: (payload: {
+    x: number;
+    y: number;
+    layerId: string | null;
+  }) => void;
 }
 
 interface PaperRig {
@@ -124,6 +129,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       outlineMode = false,
       onZoomChange,
       onColorSampled,
+      onOpenContextMenu,
     },
     ref
   ) {
@@ -145,6 +151,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     const isSpacePanningRef = useRef(isSpacePanning);
     const onZoomChangeRef = useRef(onZoomChange);
     const onColorSampledRef = useRef(onColorSampled);
+    const onOpenContextMenuRef = useRef(onOpenContextMenu);
     const overlayExtrasRef = useRef<OverlayExtras>({});
 
     const controllersRef = useRef<Partial<Record<ToolType, CanvasToolController>> | null>(
@@ -166,6 +173,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     isSpacePanningRef.current = isSpacePanning;
     onZoomChangeRef.current = onZoomChange;
     onColorSampledRef.current = onColorSampled;
+    onOpenContextMenuRef.current = onOpenContextMenu;
     editingTextRef.current = editingText;
 
     if (!controllersRef.current) {
@@ -623,7 +631,24 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
         }
       };
 
+      const handleContextMenu = (event: MouseEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const hit = findTopLayerAtPoint(
+          buildToolContext(rig),
+          toWorldPoint(event),
+          undefined,
+          { includeLocked: true }
+        );
+        onOpenContextMenuRef.current?.({
+          x: event.clientX,
+          y: event.clientY,
+          layerId: hit ? hit.id : null,
+        });
+      };
+
       canvas.addEventListener('wheel', handleWheel, { passive: false });
+      canvas.addEventListener('contextmenu', handleContextMenu);
       canvas.addEventListener('mousedown', handleMouseDown);
       canvas.addEventListener('dblclick', handleDoubleClick);
       window.addEventListener('mousemove', handleMouseMove);
@@ -633,6 +658,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       return () => {
         observer.disconnect();
         canvas.removeEventListener('wheel', handleWheel);
+        canvas.removeEventListener('contextmenu', handleContextMenu);
         canvas.removeEventListener('mousedown', handleMouseDown);
         canvas.removeEventListener('dblclick', handleDoubleClick);
         window.removeEventListener('mousemove', handleMouseMove);

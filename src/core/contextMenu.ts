@@ -28,12 +28,31 @@ export interface ContextMenuItem {
 
 export type ContextMenuModel = ContextMenuItem[];
 
+export type ContextMenuActionKind = 'clipboard' | 'scene' | 'selection' | 'ai';
+
+export const CONTEXT_MENU_ACTION_KINDS: Record<ContextMenuActionId, ContextMenuActionKind> = {
+  cut: 'clipboard',
+  copy: 'clipboard',
+  paste: 'clipboard',
+  selectAll: 'selection',
+  deselect: 'selection',
+  duplicate: 'scene',
+  delete: 'scene',
+  bringForward: 'scene',
+  sendBackward: 'scene',
+  ai: 'ai',
+};
+
+export function isObjectContextAction(action: ContextMenuActionId): boolean {
+  return CONTEXT_MENU_ACTION_KINDS[action] === 'scene' || action === 'ai';
+}
+
 export function buildContextMenuModel(target: ContextMenuTarget): ContextMenuModel {
   if (target.area === 'editable') {
     return [
       { id: 'cut', label: 'Вырезать' },
       { id: 'copy', label: 'Копировать' },
-      { id: 'paste', label: 'Вставить', disabled: !target.hasCopiedLayers },
+      { id: 'paste', label: 'Вставить' },
       { id: 'selectAll', label: 'Выделить всё', separatorBefore: true },
     ];
   }

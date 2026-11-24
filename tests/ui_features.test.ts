@@ -8,7 +8,9 @@ import {
   isCanvasZoomWheel,
 } from '../src/engine/zoom';
 import {
+  CONTEXT_MENU_ACTION_KINDS,
   buildContextMenuModel,
+  isObjectContextAction,
   runTextContextAction,
 } from '../src/core/contextMenu';
 
@@ -42,6 +44,26 @@ describe('UI features: context menu and canvas zoom', () => {
     });
   });
 
+  it('maps every object action kind explicitly', () => {
+    for (const action of [
+      'copy',
+      'cut',
+      'duplicate',
+      'delete',
+      'bringForward',
+      'sendBackward',
+      'ai',
+    ] as const) {
+      expect(CONTEXT_MENU_ACTION_KINDS[action]).toBeTruthy();
+    }
+
+    expect(isObjectContextAction('delete')).toBe(true);
+    expect(isObjectContextAction('bringForward')).toBe(true);
+    expect(isObjectContextAction('ai')).toBe(true);
+    expect(isObjectContextAction('selectAll')).toBe(false);
+    expect(isObjectContextAction('paste')).toBe(false);
+  });
+
   it('builds empty-area actions without object-only actions', () => {
     const items = buildContextMenuModel({
       area: 'canvas',
@@ -51,7 +73,9 @@ describe('UI features: context menu and canvas zoom', () => {
     const ids = items.map((item) => item.id);
 
     expect(ids).toEqual(expect.arrayContaining(['paste', 'selectAll', 'deselect']));
-    expect(ids).not.toEqual(expect.arrayContaining(['delete', 'ai', 'duplicate']));
+    expect(ids).not.toEqual(
+      expect.arrayContaining(['delete', 'ai', 'duplicate', 'bringForward', 'sendBackward'])
+    );
   });
 
   it('builds text editing actions for an editable target', () => {

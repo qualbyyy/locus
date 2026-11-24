@@ -114,6 +114,7 @@ export function LayersPanel({
             return (
               <li
                 key={layer.id}
+                data-layer-id={layer.id}
                 onClick={(e) => onSelectLayer(layer.id, e.shiftKey)}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
