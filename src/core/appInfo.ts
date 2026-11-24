@@ -16,18 +16,19 @@ export interface AppInfo {
 
 const unavailable = 'Не указано';
 const packageMetadata = packageJson as { version?: string; license?: string };
+const repositoryUrl = 'https://github.com/qualbyy/locus';
 
 export const APP_INFO: AppInfo = {
   name: 'Locus',
   version: packageMetadata.version || unavailable,
   build: 'Tauri / React',
   license: packageMetadata.license || unavailable,
-  creator: unavailable,
-  contacts: unavailable,
+  creator: 'qualbyy',
+  contacts: '@qualbyy (Telegram)',
   description: 'Локальный редактор векторной графики с автоматизацией рутинных задач.',
-  documentation: unavailable,
-  repository: unavailable,
-  issues: unavailable,
+  documentation: `${repositoryUrl}#readme`,
+  repository: repositoryUrl,
+  issues: `${repositoryUrl}/issues`,
   thirdParty: 'React, Paper.js, Zustand, Tauri и другие компоненты проекта.',
 };
 

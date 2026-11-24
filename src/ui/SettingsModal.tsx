@@ -320,7 +320,7 @@ function AboutRow({ label, value }: { label: string; value: string }) {
   return (
     <>
       <dt className="text-paper-muted">{label}</dt>
-      <dd className="text-paper-ink">{value}</dd>
+      <dd className="break-all text-paper-ink">{value}</dd>
     </>
   );
 }
