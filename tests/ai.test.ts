@@ -38,9 +38,9 @@ describe('AI tool registry', () => {
     resetDocument();
   });
 
-  it('exposes exactly 12 unique tool definitions', () => {
-    expect(TOOL_DEFINITIONS).toHaveLength(12);
-    expect(new Set(TOOL_DEFINITIONS.map((tool) => tool.name)).size).toBe(12);
+  it('exposes exactly 13 unique tool definitions', () => {
+    expect(TOOL_DEFINITIONS).toHaveLength(13);
+    expect(new Set(TOOL_DEFINITIONS.map((tool) => tool.name)).size).toBe(13);
     for (const tool of TOOL_DEFINITIONS) {
       expect(tool.parameters.type).toBe('object');
     }
@@ -89,6 +89,38 @@ describe('AI tool registry', () => {
     expect(updated.fill).toBe('#00ff88');
     expect(updated.opacity).toBe(0.5);
     expect(updated.stroke).toEqual({ color: '#000000', width: 3 });
+  });
+
+  it('creates open stroked lines for details such as whiskers', () => {
+    const line = exec('create_line', {
+      name: 'Усы',
+      points: [
+        { x: 100, y: 200 },
+        { x: 300, y: 180 },
+        { x: 500, y: 220 },
+      ],
+      smooth: true,
+      stroke: { color: '#ffffff', width: 6, lineCap: 'round' },
+    });
+    const layer = sceneLayers().find(
+      (item) => item.id === String(line.layerId)
+    ) as PathLayer;
+
+    expect(layer.type).toBe('path');
+    expect(layer.fill).toBeNull();
+    expect(layer.stroke).toEqual({ color: '#ffffff', width: 6, lineCap: 'round' });
+    expect(layer.subpaths).toHaveLength(1);
+    expect(layer.subpaths[0].closed).toBe(false);
+    expect(layer.subpaths[0].anchors).toHaveLength(3);
+    expect(layer.subpaths[0].anchors[0].smooth).toBe(true);
+
+    const withoutStroke = executeTool('create_line', {
+      points: [
+        { x: 0, y: 0 },
+        { x: 10, y: 10 },
+      ],
+    });
+    expect(withoutStroke.ok).toBe(false);
   });
 
   it('reports readable validation errors without touching the scene', () => {
@@ -255,7 +287,7 @@ describe('AI provider adapters', () => {
     expect((calls[0].init?.headers as Record<string, string>)['x-goog-api-key']).toBe(
       'gem-key'
     );
-    expect(body.tools[0].functionDeclarations).toHaveLength(12);
+    expect(body.tools[0].functionDeclarations).toHaveLength(13);
     expect(body.systemInstruction.parts[0].text).toBe('system');
   });
 

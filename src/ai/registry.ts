@@ -1,8 +1,10 @@
 import {
+  addLayer,
   alignLayers,
   booleanLayers,
   createShapeLayer,
   createTextLayer,
+  createLayerId,
   deleteLayers,
   duplicateLayers,
   reorderLayer,
@@ -54,6 +56,7 @@ export const TOOL_LABELS: Record<string, string> = {
   create_blob: 'Клякса',
   create_shape: 'Фигура',
   create_text: 'Текст',
+  create_line: 'Линия',
   update_layers: 'Изменение слоёв',
   delete_layers: 'Удаление слоёв',
   duplicate_layers: 'Дублирование',
@@ -321,6 +324,17 @@ function describeLayer(layer: Layer, action: string): Record<string, unknown> {
   };
 }
 
+function applyLayerExtras(layerId: string, args: Record<string, unknown>): void {
+  const rotation = optionalNumber(args, 'rotation', -3600, 3600, 0);
+  const opacity = optionalNumber(args, 'opacity', 0, 1, 1);
+  if (rotation !== 0 || opacity !== 1) {
+    updateLayers([layerId], {
+      ...(rotation !== 0 ? { rotation } : {}),
+      ...(opacity !== 1 ? { opacity } : {}),
+    });
+  }
+}
+
 function createBlob(args: Record<string, unknown>): Record<string, unknown> {
   const radius = requiredNumber(args, 'radius', 1, 5000);
   const points = Math.round(optionalNumber(args, 'points', 3, 24, 6));
@@ -336,6 +350,7 @@ function createBlob(args: Record<string, unknown>): Record<string, unknown> {
     stroke: optionalStroke(args, 'stroke'),
     name: optionalString(args, 'name', 200),
   });
+  applyLayerExtras(layer.id, args);
   return describeLayer(layer, 'Создана клякса');
 }
 
@@ -364,10 +379,7 @@ function createShape(args: Record<string, unknown>): Record<string, unknown> {
     name: optionalString(args, 'name', 200),
   });
 
-  const rotation = optionalNumber(args, 'rotation', -3600, 3600, 0);
-  if (rotation !== 0) {
-    updateLayers([layer.id], { rotation });
-  }
+  applyLayerExtras(layer.id, args);
   return describeLayer(layer, 'Создана фигура');
 }
 
@@ -389,11 +401,95 @@ function createText(args: Record<string, unknown>): Record<string, unknown> {
     name: optionalString(args, 'name', 200),
   });
 
-  const rotation = optionalNumber(args, 'rotation', -3600, 3600, 0);
-  if (rotation !== 0) {
-    updateLayers([layer.id], { rotation });
-  }
+  applyLayerExtras(layer.id, args);
   return describeLayer(layer, 'Создан текст');
+}
+
+function readPoints(raw: unknown): Array<{ x: number; y: number }> {
+  if (!Array.isArray(raw) || raw.length < 2) {
+    fail('points: нужно минимум 2 точки');
+  }
+  if (raw.length > 200) {
+    fail('points: не больше 200 точек');
+  }
+  return raw.map((item, index) => {
+    const point = asRecord(item, `points[${index}]`);
+    return {
+      x: readNumberValue(point.x, `points[${index}].x`, -100000, 100000),
+      y: readNumberValue(point.y, `points[${index}].y`, -100000, 100000),
+    };
+  });
+}
+
+function buildLineAnchors(
+  points: Array<{ x: number; y: number }>,
+  smooth: boolean,
+  closed: boolean
+) {
+  const count = points.length;
+  return points.map((point, index) => {
+    if (!smooth) {
+      return {
+        x: point.x,
+        y: point.y,
+        handleIn: { x: 0, y: 0 },
+        handleOut: { x: 0, y: 0 },
+        smooth: false,
+      };
+    }
+    const prev =
+      index > 0 ? points[index - 1] : closed ? points[count - 1] : points[0];
+    const next =
+      index < count - 1 ? points[index + 1] : closed ? points[0] : points[count - 1];
+    const dx = (next.x - prev.x) / 6;
+    const dy = (next.y - prev.y) / 6;
+    return {
+      x: point.x,
+      y: point.y,
+      handleIn: { x: -dx, y: -dy },
+      handleOut: { x: dx, y: dy },
+      smooth: true,
+    };
+  });
+}
+
+function createLine(args: Record<string, unknown>): Record<string, unknown> {
+  const points = readPoints(args.points);
+  const closed = optionalBoolean(args, 'closed', false);
+  const smooth = optionalBoolean(args, 'smooth', false);
+  const strokeRaw = args.stroke;
+  if (strokeRaw === undefined || strokeRaw === null) {
+    fail('stroke: укажите цвет и толщину обводки для линии');
+  }
+  const stroke = optionalStroke(args, 'stroke');
+  if (!stroke) {
+    fail('stroke: линия не может быть без обводки');
+  }
+  const fill = optionalColor(args, 'fill') ?? null;
+  const sameTypeCount =
+    useEditorStore.getState().scene.layers.filter((l) => l.type === 'path').length + 1;
+
+  const layer: PathLayer = {
+    id: createLayerId('path'),
+    name: optionalString(args, 'name', 200) || `Линия ${sameTypeCount}`,
+    type: 'path',
+    visible: true,
+    locked: false,
+    x: 0,
+    y: 0,
+    rotation: 0,
+    scaleX: 1,
+    scaleY: 1,
+    opacity: 1,
+    subpaths: [{ closed, anchors: buildLineAnchors(points, smooth, closed) }],
+    fillRule: 'nonzero',
+    fill,
+    stroke,
+  };
+
+  const prepared = addLayer(layer) as PathLayer;
+  applyLayerExtras(prepared.id, args);
+  return describeLayer(prepared, closed ? 'Создан замкнутый контур' : 'Создана линия');
 }
 
 interface LayerPatch {
@@ -738,6 +834,7 @@ const TOOL_HANDLERS: Record<string, ToolHandler> = {
   create_blob: createBlob,
   create_shape: createShape,
   create_text: createText,
+  create_line: createLine,
   update_layers: updateLayersTool,
   delete_layers: deleteLayersTool,
   duplicate_layers: duplicateLayersTool,
@@ -780,6 +877,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         radius: { type: 'number', description: 'Радиус кляксы в px' },
         points: { type: 'integer', description: 'Число узлов, 3..24' },
         wobble: { type: 'number', description: 'Органичность, 0..1' },
+        opacity: { type: 'number', description: 'Прозрачность, 0..1' },
         fill: { type: 'string', description: 'Заливка hex #rrggbb или "none"' },
         stroke: STROKE_SCHEMA,
       },
@@ -806,6 +904,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           description: 'Внутренний радиус star, 0.1..0.9',
         },
         rotation: { type: 'number', description: 'Поворот в градусах по часовой стрелке' },
+        opacity: { type: 'number', description: 'Прозрачность, 0..1' },
         fill: { type: 'string', description: 'Заливка hex #rrggbb или "none"' },
         stroke: STROKE_SCHEMA,
       },
@@ -834,8 +933,38 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         align: { type: 'string', enum: ['left', 'center', 'right'] },
         fill: { type: 'string', description: 'Цвет текста hex #rrggbb' },
         rotation: { type: 'number', description: 'Поворот в градусах' },
+        opacity: { type: 'number', description: 'Прозрачность, 0..1' },
       },
       required: ['content', 'x', 'y'],
+    },
+  },
+  {
+    name: 'create_line',
+    description:
+      'Нарисовать линию или открытый контур по точкам. Основной инструмент для усов, бровей, рта, контуров и любых тонких деталей: используйте обводку (stroke), а не заливку.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Имя слоя' },
+        points: {
+          type: 'array',
+          description: 'Точки в координатах артборда, минимум 2',
+          items: {
+            type: 'object',
+            properties: {
+              x: { type: 'number' },
+              y: { type: 'number' },
+            },
+            required: ['x', 'y'],
+          },
+        },
+        closed: { type: 'boolean', description: 'Замкнуть контур' },
+        smooth: { type: 'boolean', description: 'Сгладить линию кривыми Безье' },
+        opacity: { type: 'number', description: 'Прозрачность, 0..1' },
+        stroke: STROKE_SCHEMA,
+        fill: { type: 'string', description: 'Обычно "none"; hex — только для замкнутых' },
+      },
+      required: ['points', 'stroke'],
     },
   },
   {
