@@ -94,6 +94,7 @@ import { SettingsModal, type SettingsTabId } from './ui/SettingsModal';
 import { StartModal } from './ui/StartModal';
 import { Toolbar } from './ui/Toolbar';
 import { TopBar } from './ui/TopBar';
+import { UnsavedChangesModal } from './ui/UnsavedChangesModal';
 
 const BACKGROUND_LAYER_NAME = 'Фон артборда';
 
@@ -163,6 +164,8 @@ export function App() {
   const [isSpacePanning, setIsSpacePanning] = useState(false);
   const [isFileDragHover, setIsFileDragHover] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [isUnsavedOpen, setIsUnsavedOpen] = useState(false);
+  const [isSavingBeforeAction, setIsSavingBeforeAction] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -173,6 +176,7 @@ export function App() {
 
   const canvasRef = useRef<PaperCanvasHandle | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
+  const pendingActionRef = useRef<(() => void) | null>(null);
 
   const openSettingsTab = useCallback((tab: SettingsTabId | null = null) => {
     setSettingsInitialTab(tab);
@@ -214,6 +218,78 @@ export function App() {
     };
   }, []);
 
+  const guardUnsaved = useCallback((action: () => void) => {
+    const state = useEditorStore.getState();
+    if (!state.isDirty) {
+      action();
+      return;
+    }
+    pendingActionRef.current = action;
+    setIsUnsavedOpen(true);
+  }, []);
+
+  const resolveUnsaved = useCallback(
+    async (choice: 'discard' | 'save') => {
+      const action = pendingActionRef.current;
+      if (choice === 'discard') {
+        pendingActionRef.current = null;
+        setIsUnsavedOpen(false);
+        action?.();
+        return;
+      }
+
+      setIsSavingBeforeAction(true);
+      try {
+        const target = await saveProjectDialog();
+        if (target === null) return;
+        pendingActionRef.current = null;
+        setIsUnsavedOpen(false);
+        action?.();
+      } catch (err) {
+        showNotice(
+          err instanceof Error ? err.message : 'Не удалось сохранить проект'
+        );
+      } finally {
+        setIsSavingBeforeAction(false);
+      }
+    },
+    [showNotice]
+  );
+
+  const cancelUnsaved = useCallback(() => {
+    pendingActionRef.current = null;
+    setIsUnsavedOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void (async () => {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const win = getCurrentWindow();
+      const off = await win.onCloseRequested((event) => {
+        if (!useEditorStore.getState().isDirty) return;
+        event.preventDefault();
+        pendingActionRef.current = () => {
+          void win.destroy();
+        };
+        setIsUnsavedOpen(true);
+      });
+      if (disposed) {
+        off();
+      } else {
+        unlisten = off;
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   const handleFitArtboard = useCallback(() => {
     canvasRef.current?.fitArtboard();
   }, []);
@@ -242,6 +318,16 @@ export function App() {
       );
     }
   }, [showNotice]);
+
+  const requestOpenProject = useCallback(() => {
+    guardUnsaved(() => {
+      void handleOpenProject();
+    });
+  }, [guardUnsaved, handleOpenProject]);
+
+  const requestNewProject = useCallback(() => {
+    guardUnsaved(() => setIsStartModalOpen(true));
+  }, [guardUnsaved]);
 
   const handleOpenLocusPath = useCallback(
     async (path: string, name: string) => {
@@ -657,7 +743,7 @@ export function App() {
         }
         if (!event.shiftKey && event.code === 'KeyN') {
           event.preventDefault();
-          setIsStartModalOpen(true);
+          requestNewProject();
           return;
         }
         if (!editable && !event.shiftKey && event.code === 'KeyA') {
@@ -712,7 +798,7 @@ export function App() {
 
       if (action === 'file.open') {
         event.preventDefault();
-        void handleOpenProject();
+        requestOpenProject();
         return;
       }
 
@@ -907,12 +993,13 @@ export function App() {
   }, [
     handleCombineCompound,
     handleConvertToOutlines,
-    handleOpenProject,
     handlePlaceImage,
     handleSaveProject,
     handleSplitCompound,
     handleToggleGrid,
     handleToggleSnap,
+    requestNewProject,
+    requestOpenProject,
     activeEffectModal,
     isSettingsModalOpen,
     isStartModalOpen,
@@ -1039,8 +1126,8 @@ export function App() {
 
   const menuActions: MenuBarActions = useMemo(
     () => ({
-      onNewDocument: () => setIsStartModalOpen(true),
-      onOpenDocument: () => void handleOpenProject(),
+      onNewDocument: requestNewProject,
+      onOpenDocument: requestOpenProject,
       onSaveDocument: () => void handleSaveProject(),
       onImportImage: () => void handlePlaceImage(),
       onQuickExportPng: handleQuickExportPng,
@@ -1124,7 +1211,6 @@ export function App() {
       handleFitArtboard,
       handleOffsetLayers,
       handleOpenEffect,
-      handleOpenProject,
       handleOutlineStroke,
       handlePlaceImage,
       handleQuickExportPng,
@@ -1133,6 +1219,8 @@ export function App() {
       handleToggleSnap,
       openCommandBar,
       openSettingsTab,
+      requestNewProject,
+      requestOpenProject,
       showNotice,
     ]
   );
@@ -1512,7 +1600,7 @@ export function App() {
         isOpen={isStartModalOpen}
         onClose={() => setIsStartModalOpen(false)}
         onCreateDocument={handleCreateDocument}
-        onOpenProject={() => void handleOpenProject()}
+        onOpenProject={requestOpenProject}
       />
 
       <SettingsModal
@@ -1540,6 +1628,15 @@ export function App() {
         selectedIds={selectedIds}
         onClose={() => setActiveEffectModal(null)}
         onApplied={(label) => showNotice(`Применён эффект: ${label}`)}
+      />
+
+      <UnsavedChangesModal
+        isOpen={isUnsavedOpen}
+        documentName={scene.name}
+        isSaving={isSavingBeforeAction}
+        onCancel={cancelUnsaved}
+        onDiscard={() => void resolveUnsaved('discard')}
+        onSave={() => void resolveUnsaved('save')}
       />
     </div>
   );
