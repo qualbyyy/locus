@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { ArrowUp, Loader2, Settings2, Sparkles, Square, X } from 'lucide-react';
-import { isAbortError, runAiCommand, type AiToolLogEntry } from '../ai/executor';
 import { getAiModelLabel, getAiProviderIssue } from '../ai/providers';
 import { TOOL_LABELS } from '../ai/registry';
-import type { AiRunEvent } from '../ai/types';
+import { useAiTaskStore } from '../ai/taskStore';
 import { useSettingsStore } from '../core/settings';
 import { useEditorStore } from '../core/store';
 
@@ -11,13 +10,6 @@ export interface CommandBarProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenSettings?: () => void;
-}
-
-type CommandStatus = 'idle' | 'running' | 'done' | 'error';
-
-interface StepInfo {
-  step: number;
-  maxSteps: number;
 }
 
 export function CommandBar({
@@ -28,30 +20,42 @@ export function CommandBar({
   const ai = useSettingsStore((s) => s.settings.ai);
   const selectedCount = useEditorStore((s) => s.selectedIds.length);
 
+  const status = useAiTaskStore((s) => s.status);
+  const log = useAiTaskStore((s) => s.log);
+  const answer = useAiTaskStore((s) => s.answer);
+  const error = useAiTaskStore((s) => s.error);
+  const stepInfo = useAiTaskStore((s) => s.step);
+  const start = useAiTaskStore((s) => s.start);
+  const stop = useAiTaskStore((s) => s.stop);
+  const minimize = useAiTaskStore((s) => s.minimize);
+  const restore = useAiTaskStore((s) => s.restore);
+
   const [prompt, setPrompt] = useState('');
-  const [status, setStatus] = useState<CommandStatus>('idle');
-  const [log, setLog] = useState<AiToolLogEntry[]>([]);
-  const [answer, setAnswer] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [stepInfo, setStepInfo] = useState<StepInfo | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
   const isRunning = status === 'running';
 
   const providerIssue = useMemo(() => getAiProviderIssue(ai), [ai]);
 
   const handleClose = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
+    if (useAiTaskStore.getState().status === 'running') {
+      minimize();
+    }
     onClose();
-  }, [onClose]);
+  }, [minimize, onClose]);
 
   useEffect(() => {
     if (!isOpen) return;
+    restore();
+    const task = useAiTaskStore.getState();
+    if (task.prompt) {
+      setPrompt((prev) =>
+        task.status === 'running' || !prev.trim() ? task.prompt : prev
+      );
+    }
     const frame = requestAnimationFrame(() => textareaRef.current?.focus());
     return () => cancelAnimationFrame(frame);
-  }, [isOpen]);
+  }, [isOpen, restore]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -70,72 +74,11 @@ export function CommandBar({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, handleClose]);
 
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort();
-    };
-  }, []);
-
-  const submit = useCallback(async () => {
+  const submit = useCallback(() => {
     const value = prompt.trim();
     if (!value || isRunning) return;
-    if (providerIssue) {
-      setError(providerIssue);
-      setStatus('error');
-      return;
-    }
-
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    setStatus('running');
-    setError(null);
-    setAnswer('');
-    setLog([]);
-    setStepInfo(null);
-
-    try {
-      const result = await runAiCommand({
-        prompt: value,
-        ai,
-        signal: controller.signal,
-        onEvent: (event: AiRunEvent) => {
-          if (event.type === 'step') {
-            setStepInfo({ step: event.step, maxSteps: event.maxSteps });
-          } else if (event.type === 'tool') {
-            setLog((prev) => [
-              ...prev,
-              {
-                name: event.name,
-                args: event.args,
-                ok: event.ok,
-                summary: event.summary,
-                ...(event.error ? { error: event.error } : {}),
-              },
-            ]);
-          } else if (event.type === 'assistant' && event.text.trim()) {
-            setAnswer(event.text.trim());
-          }
-        },
-      });
-      setAnswer(result.text);
-      setStatus('done');
-    } catch (err) {
-      if (isAbortError(err)) {
-        setError('Выполнение остановлено');
-        setStatus('idle');
-      } else {
-        setError(err instanceof Error ? err.message : 'Не удалось выполнить команду');
-        setStatus('error');
-      }
-    } finally {
-      if (abortRef.current === controller) {
-        abortRef.current = null;
-      }
-      setStepInfo(null);
-    }
-  }, [ai, isRunning, prompt, providerIssue]);
+    void start(value);
+  }, [isRunning, prompt, start]);
 
   if (!isOpen) return null;
 
@@ -167,7 +110,8 @@ export function CommandBar({
             <button
               type="button"
               onClick={handleClose}
-              aria-label="Закрыть"
+              aria-label="Свернуть"
+              title="Свернуть — задача продолжится в фоне"
               className="flex h-6 w-6 items-center justify-center rounded text-paper-muted hover:bg-paper-hover hover:text-paper-ink"
             >
               <X className="h-4 w-4" strokeWidth={1.75} />
@@ -184,7 +128,7 @@ export function CommandBar({
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
-                void submit();
+                submit();
               }
             }}
             className="resize-none rounded border border-paper-border bg-paper-bg px-3 py-2 text-[13px] leading-relaxed text-paper-ink outline-none placeholder:text-paper-muted focus:border-paper-accent"
@@ -234,6 +178,12 @@ export function CommandBar({
             </div>
           )}
 
+          {status === 'stopped' && (
+            <div className="rounded border border-paper-border bg-paper-bg px-3 py-2 text-[12px] text-paper-muted">
+              Выполнение остановлено. Сцена сохранила уже сделанные шаги.
+            </div>
+          )}
+
           {error && (
             <div className="flex flex-wrap items-center gap-2 rounded border border-paper-danger/40 bg-paper-danger/5 px-3 py-2 text-[12px] text-paper-danger">
               <span className="min-w-0 flex-1">{error}</span>
@@ -256,7 +206,7 @@ export function CommandBar({
             {isRunning ? (
               <button
                 type="button"
-                onClick={() => abortRef.current?.abort()}
+                onClick={stop}
                 className="flex items-center gap-1.5 rounded border border-paper-danger/50 px-2.5 py-1 text-[12px] text-paper-danger hover:bg-paper-danger/10"
               >
                 <Square className="h-3 w-3" strokeWidth={2} />
@@ -265,7 +215,7 @@ export function CommandBar({
             ) : (
               <button
                 type="button"
-                onClick={() => void submit()}
+                onClick={submit}
                 disabled={!prompt.trim()}
                 className="flex items-center gap-1.5 rounded bg-paper-accent px-3 py-1 text-[12px] font-medium text-white hover:bg-paper-accent-hover disabled:cursor-default disabled:opacity-40"
               >

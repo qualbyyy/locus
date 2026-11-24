@@ -83,6 +83,7 @@ import {
   subscribeFileDrop,
 } from './platform/io';
 import { ContextMenu } from './ui/ContextMenu';
+import { AiTaskIndicator } from './ui/AiTaskIndicator';
 import { CommandBar } from './ui/CommandBar';
 import { EffectModal, type EffectModalTarget } from './ui/EffectModal';
 import { Inspector } from './ui/Inspector';
@@ -1495,6 +1496,8 @@ export function App() {
           setIsSettingsModalOpen(true);
         }}
       />
+
+      <AiTaskIndicator onOpen={openCommandBar} />
 
       <StartModal
         isOpen={isStartModalOpen}
