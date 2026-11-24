@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  APP_INFO,
+  formatDiagnostics,
+} from '../src/core/appInfo';
+import {
+  getWheelZoomFactor,
+  isCanvasZoomWheel,
+} from '../src/engine/zoom';
+import {
   buildContextMenuModel,
   runTextContextAction,
 } from '../src/core/contextMenu';
@@ -56,6 +64,42 @@ describe('UI features: context menu and canvas zoom', () => {
 
     expect(ids).toEqual(expect.arrayContaining(['cut', 'copy', 'paste', 'selectAll']));
     expect(ids).not.toEqual(expect.arrayContaining(['delete', 'ai', 'bringForward']));
+  });
+
+  it('recognizes ctrl and meta wheel gestures but not ordinary wheel', () => {
+    expect(isCanvasZoomWheel({ ctrlKey: true, metaKey: false })).toBe(true);
+    expect(isCanvasZoomWheel({ ctrlKey: false, metaKey: true })).toBe(true);
+    expect(isCanvasZoomWheel({ ctrlKey: false, metaKey: false })).toBe(false);
+  });
+
+  it('computes a stable zoom factor from wheel delta and speed', () => {
+    const zoomOut = getWheelZoomFactor(120, 1);
+    const zoomIn = getWheelZoomFactor(-120, 1.5);
+
+    expect(zoomOut).toBeLessThan(1);
+    expect(zoomIn).toBeGreaterThan(1);
+    expect(Number.isFinite(zoomOut)).toBe(true);
+    expect(Number.isFinite(zoomIn)).toBe(true);
+  });
+
+  it('formats safe diagnostic information without secrets', () => {
+    const diagnostics = formatDiagnostics({
+      appVersion: '0.1.0',
+      platform: 'Linux x86_64',
+      userAgent: 'TestBrowser/1.0',
+      mode: 'Browser',
+    });
+
+    expect(diagnostics).toContain('0.1.0');
+    expect(diagnostics).toContain('Linux x86_64');
+    expect(diagnostics).toContain('Browser');
+    expect(diagnostics).not.toContain('fake-api-key');
+  });
+
+  it('uses neutral labels when license or contacts are unavailable', () => {
+    expect(APP_INFO.license.trim().length).toBeGreaterThan(0);
+    expect(APP_INFO.creator.trim().length).toBeGreaterThan(0);
+    expect(APP_INFO.contacts.trim().length).toBeGreaterThan(0);
   });
 
   it('runs text actions against the active selection', async () => {
