@@ -172,6 +172,14 @@
   }
 }
 
+html[data-motion="off"] *:not(.animate-spin),
+html[data-motion="off"] *::before,
+html[data-motion="off"] *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+
 @layer base {
   html,
   body,

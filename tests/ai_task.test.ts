@@ -124,9 +124,10 @@ describe('AI background task store', () => {
     expect(useAiTaskStore.getState().minimized).toBe(false);
   });
 
-  it('uses rotating gerund status words instead of step numbers', () => {
+  it('uses rotating Russian status words instead of step numbers', () => {
     expect(AI_STATUS_WORDS.length).toBeGreaterThan(6);
-    expect(AI_STATUS_WORDS.every((word) => word.endsWith('ing'))).toBe(true);
+    expect(new Set(AI_STATUS_WORDS).size).toBe(AI_STATUS_WORDS.length);
+    expect(AI_STATUS_WORDS.every((word) => /^[А-ЯЁ][а-яё]+$/.test(word))).toBe(true);
     for (let i = 0; i < 10; i += 1) {
       const index = i % AI_STATUS_WORDS.length;
       expect(pickStatusWordIndex(index)).not.toBe(index);

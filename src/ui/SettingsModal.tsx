@@ -1084,6 +1084,15 @@ export function SettingsModal({
                 </div>
 
                 <ToggleRow
+                  label="Анимации интерфейса"
+                  hint="Отключите на слабом ПК — переходы и появления станут мгновенными"
+                  checked={settings.animationsEnabled}
+                  onChange={(animationsEnabled) =>
+                    updateSettings({ animationsEnabled })
+                  }
+                />
+
+                <ToggleRow
                   label="Счётчик слоёв и узлов внизу холста"
                   checked={settings.showPerfStats}
                   onChange={(showPerfStats) => updateSettings({ showPerfStats })}

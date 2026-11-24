@@ -3,6 +3,7 @@ import {
   DEFAULT_AI_CONFIG,
   DEFAULT_SETTINGS,
   sanitizeSettings,
+  useSettingsStore,
 } from '../src/core/settings';
 import { applyThemeToDom } from '../src/core/themes';
 import { FONT_PRESETS, getFontStacks } from '../src/core/typography';
@@ -49,5 +50,14 @@ describe('UI typography presets', () => {
     expect(root.style.getPropertyValue('--font-display')).toContain(
       'Playfair Display'
     );
+  });
+
+  it('toggles interface animations through settings', () => {
+    const store = useSettingsStore.getState();
+    expect(sanitizeSettings({}).animationsEnabled).toBe(true);
+    store.updateSettings({ animationsEnabled: false });
+    expect(document.documentElement.dataset.motion).toBe('off');
+    store.updateSettings({ animationsEnabled: true });
+    expect(document.documentElement.dataset.motion).toBe('on');
   });
 });

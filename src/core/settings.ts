@@ -30,6 +30,7 @@ export interface AppSettings {
   fontPreset: FontPresetId;
   customFontFamily: string;
   uiScale: UiScale;
+  animationsEnabled: boolean;
   showGrid: boolean;
   gridSize: number;
   gridOpacity: number;
@@ -69,6 +70,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fontPreset: 'paper',
   customFontFamily: '',
   uiScale: 'normal',
+  animationsEnabled: true,
   showGrid: false,
   gridSize: 16,
   gridOpacity: 0.16,
@@ -171,6 +173,10 @@ export function sanitizeSettings(raw: unknown): AppSettings {
     fontPreset,
     customFontFamily,
     uiScale,
+    animationsEnabled: readBool(
+      src.animationsEnabled,
+      DEFAULT_SETTINGS.animationsEnabled
+    ),
     showGrid: readBool(src.showGrid, DEFAULT_SETTINGS.showGrid),
     gridSize: Math.round(readFinite(src.gridSize, DEFAULT_SETTINGS.gridSize, 4, 128)),
     gridOpacity: Number(
@@ -246,6 +252,11 @@ function applyRuntimeSideEffects(settings: AppSettings): void {
     fontPreset: settings.fontPreset,
     customFontFamily: settings.customFontFamily,
   });
+  if (typeof document !== 'undefined') {
+    document.documentElement.dataset.motion = settings.animationsEnabled
+      ? 'on'
+      : 'off';
+  }
   setUndoLimit(settings.undoLimit);
 }
 
