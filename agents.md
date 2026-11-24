@@ -364,7 +364,7 @@ locus/
 │   ├── ai/
 │   │   ├── config.ts                   # Чтение/запись $APPCONFIG/locus/settings.json
 │   │   ├── context.ts                  # Компактный снимок сцены (метаданные + мировой bbox)
-│   │   ├── registry.ts                 # JSON Schema 14 инструментов и валидатор аргументов
+│   │   ├── registry.ts                 # JSON Schema 29 инструментов и валидатор аргументов
 │   │   ├── executor.ts                 # Tool-calling loop (до 5 шагов), батчинг Undo, AbortController
 │   │   └── providers/
 │   │       ├── gemini.ts               # Адаптер Gemini API (generateContent + functionDeclarations)
@@ -613,7 +613,7 @@ export interface BBox {
 3. Каждый вызов валидируется по схеме (`src/ai/registry.ts`) — неверные параметры возвращают модели структурированную ошибку без краша сцены.
 4. Перед серией tool calls история `zundo` ставится на паузу (`pause()`), после выполнения всей цепочки команд в `src/core/commands.ts` фиксируется **ровно один шаг Undo** (`resume()` + commit), чтобы пользователь мог отменить весь результат ИИ одним `Ctrl+Z`.
 
-### Базовый реестр инструментов (`src/ai/registry.ts` — 14 инструментов)
+### Реестр инструментов (`src/ai/registry.ts` — 29 инструментов)
 
 | Инструмент | Назначение |
 | :--- | :--- |
@@ -630,7 +630,21 @@ export interface BBox {
 | `randomize_anchors` | Добавить органическое искажение точкам фигур (`layerIds, intensity`) |
 | `align_layers` | Выровнять или распределить слои (`layerIds, mode`: `left`, `center`, `right`, `top`, `middle`, `bottom`, `distribute_h`, `distribute_v`, `artboard_center`) |
 | `apply_palette` | Перекрасить указанные слои или всю сцену в палитру (`colors: string[], layerIds?, includeBackground?`) |
-| `boolean_op` | Выполнить булеву операцию над `PathLayer` (`layerIds, operation: 'unite'\|'subtract'\|'intersect'`) |
+| `boolean_op` | Булева операция над `PathLayer` (`layerIds, operation: 'unite'\|'subtract'\|'intersect'\|'exclude'\|'divide'`) |
+| `flip_layers` | Отразить слои относительно общего центра (`layerIds?, axis: 'horizontal'\|'vertical'`) |
+| `mirror_duplicate` | Зеркальная копия относительно оси артборда — симметричные пары (`layerIds?, axis`) |
+| `repeat_layer` | Ряд, столбец, сетка или кольцо копий (`layerIds?, mode, count, gap?, columns?, radius?, sweep?`) |
+| `offset_path` | Параллельный контур: подложка, тень, стикер-обводка (`layerIds?, distance, copyBehind?, join?`) |
+| `outline_stroke` | Перевести обводку в залитый контур (`layerIds`) |
+| `combine_compound` / `split_compound` | Собрать составной контур / разбить на части (`layerIds`) |
+| `simplify_path` | Упростить контуры (`layerIds, tolerance?`) |
+| `round_corners` | Скруглить прямые углы контура (`layerIds?, radius`) |
+| `place_in_bounds` | Вписать слои в прямоугольник с сохранением пропорций (`layerIds?, x, y, width, height, mode?: 'fit'\|'fill'`) |
+| `set_artboard` | Размер, DPI, фон и имя документа (`width?, height?, dpi?, background?, name?`) |
+| `text_case` | Регистр текста (`layerIds?, mode: 'upper'\|'lower'\|'title'`) |
+| `rotate_layers` | Повернуть каждый слой на точный угол (`layerIds?, angle`) |
+| `select_layers` | Выделение: `ids`, `all`, `none`, `invert`, `similar_fill/stroke/type` (`mode, layerIds?`) |
+| `get_layer_geometry` | Прочитать anchors, усики, стили и мировой bbox слоёв (`layerIds?`; без него — выделение) |
 
 ---
 
@@ -689,25 +703,43 @@ export interface BBox {
   * [x] `tests/stage3_6.test.ts` проверяет темы и CSS-переменные, санитизацию и сохранение настроек, динамический `undoLimit`, отсутствие конфликтов хоткеев (`I`/`E`), буфер обмена/стили, привязки/Smart Guides, пипетку, сдвиг стрелками и реэкспорт `commands.ts`.
   * [x] `npx tsc --noEmit`, `npm test` (29/29), `npm run build` и `cargo check -j 2` — зелёные.
 
-### Этап 4. Сохранение проекта и экспорт (`.locus`, `.ai`, `.svg`, `.psd`)
+### Этап 4. Сохранение проекта и экспорт (`.locus`, `.ai`, `.svg`, `.psd`) — **ВЫПОЛНЕНО**
 * Реализовать `src/export/projectFile.ts`: сохранение и открытие `.locus` (ZIP) со сборкой неиспользуемых ассетов.
 * Реализовать `src/export/toSvg.ts`: прямой чистый SVG с `<clipPath>`, `subpaths`, текстом и картинками.
 * Реализовать `src/export/toAi.ts`: векторный PDF-поток через `pdf-lib` + `@pdf-lib/fontkit` с кривыми Безье, масками, картинками и кириллическими `.ttf` шрифтами.
 * Реализовать `src/export/rasterize.ts` и `src/export/toPsd.ts`: послойный и композитный offscreen-рендер через `ag-psd`.
 * **Критерии готовности и проверка:**
-  * `tests/export.test.ts` проверяет: round-trip `.locus` (сцена + бинарник картинки восстанавливаются без потерь), валидность XML/структуры `.svg`, непустые PDF-байты `%PDF-` для `.ai` с кириллицей, кривыми и маской, чтение обратно через `readPsd` из `ag-psd` для `.psd`.
-  * Ручная проверка открытием экспортированных `.svg`, `.ai` и `.psd` во внешнем просмотрщике / векторном редакторе.
+  * [x] `tests/export.test.ts` проверяет: round-trip `.locus` (сцена + бинарник картинки восстанавливаются без потерь), валидность XML/структуры `.svg`, непустые PDF-байты `%PDF-` для `.ai` с кириллицей, кривыми и маской, чтение обратно через `readPsd` из `ag-psd` для `.psd`.
+  * [ ] Ручная проверка открытием экспортированных `.svg`, `.ai` и `.psd` во внешнем просмотрщике / векторном редакторе (запускается пользователем вручную).
 
 ### Этап 5. Подключение ИИ (Gemini + OpenAI-compatible) — **ВЫПОЛНЕНО**
 * [x] Реализовать хранение настроек ИИ в `$APPCONFIG/locus/settings.json` (вкладка «ИИ» в `SettingsModal.tsx`): Gemini, Anthropic, Ollama и OpenAI-compatible провайдеры.
-* [x] Реализовать `src/ai/types.ts`, `src/ai/context.ts`, `src/ai/registry.ts` (14 инструментов + валидация аргументов), `src/ai/providers/{gemini,openai,anthropic,ollama,index}.ts`, `src/ai/executor.ts` и `src/ui/CommandBar.tsx` (`Ctrl+K`, контекстное меню «ИИ…», меню и верхняя панель).
+* [x] Реализовать `src/ai/types.ts`, `src/ai/context.ts`, `src/ai/registry.ts` (реестр инструментов + валидация аргументов; сейчас 29), `src/ai/providers/{gemini,openai,anthropic,ollama,index}.ts`, `src/ai/executor.ts` и `src/ui/CommandBar.tsx` (`Ctrl+K`, контекстное меню «ИИ…», меню и верхняя панель).
 * [x] Батчинг Undo: серия tool calls выполняется при `temporal.pause()`, после чего история схлопывается в ровно один шаг `Ctrl+Z`; `AbortController` останавливает выполнение (кнопка «Стоп»). Сворачивание окна не прерывает задачу: прогресс показывается в индикаторе внутри артборда.
 * [x] Вложения-изображения (PNG/JPEG/WebP, до 4 шт.) с превью; поддержка vision проверяется по модели, для неподдерживающих выводится явное сообщение. `report_plan` задаёт число шагов по плану модели.
 * **Критерии готовности и проверка:**
-  * [x] `tests/ai.test.ts` проверяет реестр и валидацию 14 инструментов, выполнение команд, контекст сцены, адаптеры четырёх провайдеров (мок fetch), цикл tool calling, ошибки аргументов, `AbortController` и слияние серии из 2+ команд ИИ в ровно 1 шаг `Ctrl+Z`.
+  * [x] `tests/ai.test.ts` проверяет реестр и валидацию инструментов, выполнение команд, контекст сцены, адаптеры четырёх провайдеров (мок fetch), цикл tool calling, ошибки аргументов, `AbortController` и слияние серии из 2+ команд ИИ в ровно 1 шаг `Ctrl+Z`; `tests/ai_tools_smoke.test.ts` исполняет все 29 инструментов в одной композиции.
   * [x] `npx tsc --noEmit`, `npm test` (75/75) и `npm run build` — зелёные.
   * [ ] Интеграционная проверка в запущенном приложении: выделение слоёв → команда в `Ctrl+K` → вызов инструментов ИИ → живое обновление холста → полный откат по `Ctrl+Z` (запускается пользователем вручную).
   * [ ] Финальный релизный прогон `npm run tauri build` (запускается пользователем вручную).
+
+### Этап 6. Полировка UI, защита несохранённого и расширение ИИ — **ВЫПОЛНЕНО**
+* [x] Собственные контекстные меню вместо браузерных (`src/core/contextMenu.ts`, `src/ui/ContextMenu.tsx`) для холста, слоёв, полей ввода и приложения; недоступные пункты не раскрывают подменю.
+* [x] Собственные контролы вместо нативных (`src/ui/controls.tsx`: Select, Checkbox, Slider, ColorField, Toggle) и меню `src/ui/MenuBar.tsx`.
+* [x] Масштаб колёсиком и `Ctrl`+колесом ограничен только холстом — интерфейс приложения больше не масштабируется (`src/engine/zoom.ts`).
+* [x] Вкладка «О приложении» в `SettingsModal`: логотип Locus, название, версия, автор, лицензия MIT, гиперссылки GitHub и Telegram; кнопка «Обучение» — заглушка внизу окна.
+* [x] `LICENSE` (MIT) и `README.md`.
+* [x] Настройки: темы и цвета, шрифтовые пресеты интерфейса (Golos Text по умолчанию), холст и привязки, «Технические» (лимит Undo, анимации, автозамена), горячие клавиши, вкладка «ИИ»; кнопка «Применить» и подтверждение по `Enter`.
+* [x] Фон рабочей области из своего изображения (`src/core/canvasBackdrop.ts`): бинарник `canvas-background.*` в `$APPCONFIG`, предпросмотр, fallback на data URL, неблокирующая запись.
+* [x] ИИ-провайдеры: Gemini, OpenAI-compatible, Anthropic, Ollama (`src/ai/providers/*`); актуальные пресеты моделей (`gpt-6-luna` по умолчанию, `gemini-4-hydrogen`, `claude-haiku-5-5`); исправлен enum в JSON-схемах, из-за которого Gemini отвечал `400`.
+* [x] Окно `Ctrl+K`: сворачивание с продолжением задачи в фоне, индикатор в артборде, вложения-изображения (vision), план и стримящийся текст мыслей серым блоком, русские статусы-слова, SSE-стриминг ответа, кнопка настроек-иконка и нежирный заголовок.
+* [x] Реестр инструментов ИИ расширен с 14 до 29: `mirror_duplicate`, `flip_layers`, `repeat_layer`, `offset_path`, `outline_stroke`, `combine_compound`, `split_compound`, `simplify_path`, `round_corners`, `place_in_bounds`, `set_artboard`, `text_case`, `rotate_layers`, `select_layers`, `get_layer_geometry`; новые команды `mirrorDuplicateLayers`, `repeatLayers`, `placeLayersInBounds`, `roundCornersLayers` и `roundPathCorners`.
+* [x] Предупреждение о несохранённых изменениях (`src/ui/UnsavedChangesModal.tsx`) при новом проекте, открытии и закрытии окна (`onCloseRequested`, права `core:window:allow-close` / `allow-destroy`): «Отменить» / «Не сохранять» / «Сохранить»; акцентная — «Сохранить», `Enter` = сохранить, `Esc` = отменить.
+* [x] Анимации интерфейса и тумблеры приведены к бумажной теме: трек без обводки, кружок по центру, отключение анимаций для слабых ПК через `html[data-motion="off"]`.
+* **Критерии готовности и проверка:**
+  * [x] `tests/ai.test.ts` и `tests/ai_tools_smoke.test.ts` — 29 инструментов, smoke-сценарий на одной композиции; `tests/geometry.test.ts` — скругление углов; `tests/commands.test.ts` — зеркальный дубль, повтор и вписывание в прямоугольник.
+  * [x] `npx tsc --noEmit`, `npm test` (93/93, 16 файлов), `npm run build` и `cargo check -j 2` — зелёные.
+  * [ ] Ручная проверка в окне: контекстные меню и собственные контролы, масштаб только холста, диалог несохранённых изменений при закрытии, новые инструменты ИИ (запускается пользователем вручную).
 
 ---
 
@@ -728,18 +760,24 @@ export interface BBox {
 * `продакшн этап 3` — реализация и верификация Этапа 3 (`assets.ts`, `booleans.ts`, `textTool.ts`, inline `<textarea>`, растры в `sync.ts`, нативный Drag & Drop, булевы/маски/выравнивание/типографика в `Inspector`/`LayersPanel`, 19 юнит-тестов).
 * `продакшн этап 3.5` — реализация и верификация Этапа 3.5 (`textOutlines.ts`, `letterSpacing`, регистр, `Ctrl+Shift+O`, `Ctrl+8`/`Ctrl+Shift+8`, `exclude`/`divide`, `offset`/`outlineStroke`/`simplify`/`flip`, `InspectorControls.tsx`, 23 юнит-теста).
 * `продакшн этап 3.6` — реализация и верификация Этапа 3.6 (`themes.ts`, `settings.ts`, `shortcuts.ts`, `clipboard.ts`, `snapping.ts`, `eyedropperTool.ts`, `SettingsModal.tsx`, декомпозиция `commands/` и `inspector/`, русские названия заливок/обводок, палитра документа, 29 юнит-тестов).
+* `продакшн этап 4` — экспорт `.locus` / `.ai` / `.svg` / `.psd` (`src/export/*`, `tests/export.test.ts`).
+* `продакшн этап 5` — ИИ-подключение: реестр инструментов, четыре провайдера, `CommandBar`, батчинг Undo, вложения, фон задачи.
+* `продакшн этап 6` — полировка UI (собственные меню и контролы, «О приложении», фон рабочей области, темы, анимации), расширение реестра ИИ до 29 инструментов и защита несохранённых изменений.
 
-### Что передавать при старте нового диалога (Этап 4 и далее)
+### Что передавать при старте нового диалога
 1. **Текущее состояние репозитория (`/home/qualbyy/Проекты/locus`):**
-   * Этапы 1, 2, 3, 3.5 и 3.6 выполнены и проверены (`tsc --noEmit`, `npm test` 29/29, `npm run build`, `cargo check -j 2`).
-   * Работают: `src/core/{types,fonts,assets,math,store,themes,settings,shortcuts,clipboard,commands}.ts` (`src/core/commands/*`), `src/platform/io.ts`, `src/engine/{PaperCanvas,geometry,booleans,textOutlines,snapping,sync,overlay}.ts`, `src/engine/tools/{types,selectTool,nodeTool,penTool,blobTool,textTool,eyedropperTool}.ts`, `src/ui/{TopBar,Toolbar,LayersPanel,Inspector,InspectorControls,StartModal,SettingsModal}.tsx` (`src/ui/inspector/*`), `src/App.tsx`, `src/index.css`.
-2. **Первая точка входа для следующего этапа (Этап 4):**
-   * Реализовать `src/export/projectFile.ts`: сохранение и открытие `.locus` (ZIP) со сборкой неиспользуемых ассетов (включая подключение кнопок Открыть/Сохранить и `.locus` в `App.tsx` / `onDragDropEvent`).
-   * Реализовать `src/export/toSvg.ts`, `src/export/toAi.ts` (`pdf-lib` + `@pdf-lib/fontkit` с кривыми Безье, масками, картинками и кириллическими `.ttf`), `src/export/rasterize.ts` и `src/export/toPsd.ts` (`ag-psd`).
-   * Добавить `tests/export.test.ts` (round-trip `.locus`, валидность `.svg`, PDF-байты `%PDF-` для `.ai`, обратное чтение `.psd` через `readPsd`).
+   * Этапы 1–6 выполнены и проверены (`tsc --noEmit`, `npm test` 93/93 в 16 файлах, `npm run build`, `cargo check -j 2`).
+   * Последние коммиты: `4de0dc7` (29 инструментов ИИ) и `51e694c` (диалог несохранённых изменений). Push не выполнялся.
+   * Работают: `src/core/{types,fonts,assets,math,store,themes,settings,shortcuts,clipboard,contextMenu,canvasBackdrop,commands}.ts` (`src/core/commands/*`), `src/platform/io.ts`, `src/engine/{PaperCanvas,geometry,booleans,textOutlines,snapping,zoom,sync,overlay}.ts`, `src/engine/tools/{types,selectTool,nodeTool,penTool,blobTool,textTool,eyedropperTool}.ts`, `src/export/{projectFile,toSvg,toAi,rasterize,toPsd}.ts`, `src/ai/{types,context,statusWords,taskStore,registry,executor}.ts` + `src/ai/providers/{gemini,openai,anthropic,ollama,index}.ts`, `src/ui/*` (включая `controls.tsx`, `MenuBar.tsx`, `ContextMenu.tsx`, `UnsavedChangesModal.tsx`, `SettingsModal.tsx`, `CommandBar.tsx`), `src/App.tsx`, `src/index.css`.
+2. **Возможные направления следующего этапа:**
+   * Запись геометрии из ИИ: инструмент `set_path_anchors` поверх `updatePathSubpaths`, чтобы модель деформировала существующий контур (сейчас есть только чтение `get_layer_geometry`).
+   * Стриминг для Gemini/Anthropic/Ollama (сейчас только OpenAI-compatible).
+   * Мультиартборд, градиенты и режимы наложения (Post-MVP по спецификации).
+   * Ручная проверка накопленного UI и финальный `npm run tauri build`.
 3. **Инварианты среды и сборки (не повторять отладку):**
    * Для `cargo check` / `cargo build` на этой машине (3.6 GiB RAM) использовать `-j 2`.
    * Для запуска окна на Linux/Wayland при проблемах с DMA-BUF использовать `WEBKIT_DISABLE_DMABUF_RENDERER=1 npm run tauri dev`.
    * Paper.js импортировать строго как `paper/dist/paper-core` с `applyMatrix = false`, `pivot = (0, 0)` и прямой матрицей из `getLayerMatrix()`, а для headless boolean-операций использовать `new scope.Project(undefined as unknown as HTMLCanvasElement)` и `compound.reorient(false, true)` для `evenodd`.
    * В `loadScene` не очищать `AssetRegistry` — сначала наполнить его из `.locus`, а очищать только в `clearAssets()` при `resetDocument()` или перед загрузкой нового `.locus`.
-   * В новом диалоге достаточно сослаться на `@[agents.md]` и указать номер этапа (например: «Продолжаем по `@[agents.md]`, начинаем Этап 4»).
+   * Новые инструменты ИИ добавлять в `src/ai/registry.ts`, обработчик — в `TOOL_HANDLERS`, подпись — в `TOOL_LABELS`, затем обновить счётчики в `tests/ai.test.ts` и сценарий `tests/ai_tools_smoke.test.ts` (он обязан исполнить каждый инструмент).
+   * В новом диалоге достаточно сослаться на `@[agents.md]` и указать номер этапа.
