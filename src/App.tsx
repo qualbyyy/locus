@@ -91,6 +91,7 @@ import { LayersPanel } from './ui/LayersPanel';
 import type { MenuBarActions, MenuBarState } from './ui/MenuBar';
 import { RasterExportModal } from './ui/RasterExportModal';
 import { SettingsModal, type SettingsTabId } from './ui/SettingsModal';
+import { TutorialModal } from './ui/tutorial/TutorialModal';
 import { StartModal } from './ui/StartModal';
 import { Toolbar } from './ui/Toolbar';
 import { TopBar } from './ui/TopBar';
@@ -1612,6 +1613,8 @@ export function App() {
         }}
         onRestoreDraft={handleRestoreDraft}
       />
+
+      <TutorialModal />
 
       <RasterExportModal
         isOpen={rasterExportOpen}
