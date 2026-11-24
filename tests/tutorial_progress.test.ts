@@ -59,6 +59,18 @@ describe('tutorial/progress', () => {
     expect(done.lastLessonId).toBe('a');
   });
 
+  it('ignores blank ids in public mutators', () => {
+    expect(markStepCompleted(DEFAULT_TUTORIAL_PROGRESS, '   ')).toBe(
+      DEFAULT_TUTORIAL_PROGRESS
+    );
+    expect(
+      markLessonCompleted(DEFAULT_TUTORIAL_PROGRESS, {
+        id: '   ',
+        steps: [{ id: '  ' }],
+      })
+    ).toBe(DEFAULT_TUTORIAL_PROGRESS);
+  });
+
   it('counts progress by steps and by lessons', () => {
     const partial = markStepCompleted(DEFAULT_TUTORIAL_PROGRESS, 'a1');
     expect(getLessonStats(partial, lessonA)).toEqual({

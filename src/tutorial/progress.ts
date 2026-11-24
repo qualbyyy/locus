@@ -72,8 +72,9 @@ export function sanitizeTutorialProgress(raw: unknown): TutorialProgress {
 }
 
 function appendUnique(list: string[], id: string): string[] {
-  if (list.includes(id)) return list;
-  const next = [...list, id];
+  const trimmedId = id.trim();
+  if (!trimmedId || list.includes(trimmedId)) return list;
+  const next = [...list, trimmedId];
   return next.length > MAX_TUTORIAL_PROGRESS_IDS
     ? next.slice(next.length - MAX_TUTORIAL_PROGRESS_IDS)
     : next;
@@ -97,12 +98,20 @@ export function markLessonCompleted(
   for (const step of lesson.steps) {
     completedStepIds = appendUnique(completedStepIds, step.id);
   }
-  return {
-    ...progress,
-    completedLessonIds: appendUnique(progress.completedLessonIds, lesson.id),
-    completedStepIds,
-    lastLessonId: lesson.id,
-  };
+
+  const lessonId = lesson.id.trim();
+  const completedLessonIds = lessonId
+    ? appendUnique(progress.completedLessonIds, lessonId)
+    : progress.completedLessonIds;
+  const lastLessonId = lessonId ? lessonId : progress.lastLessonId;
+  if (
+    completedStepIds === progress.completedStepIds &&
+    completedLessonIds === progress.completedLessonIds &&
+    lastLessonId === progress.lastLessonId
+  ) {
+    return progress;
+  }
+  return { ...progress, completedLessonIds, completedStepIds, lastLessonId };
 }
 
 export function dismissTutorialWelcome(

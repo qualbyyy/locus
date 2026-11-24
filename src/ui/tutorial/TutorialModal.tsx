@@ -31,7 +31,6 @@ import {
 import {
   getChapterStats,
   getLessonStats,
-  getOverallStats,
   markLessonCompleted,
   resetTutorialProgress,
   type TutorialProgress,
@@ -275,10 +274,18 @@ export function TutorialModal() {
     if (!isOpen) setConfirmReset(false);
   }, [isOpen]);
 
-  const overall = useMemo(
-    () => getOverallStats(progress, TUTORIAL_CHAPTERS),
+  const chapterStats = useMemo(
+    () =>
+      TUTORIAL_CHAPTERS.map((chapter) => getChapterStats(progress, chapter)),
     [progress]
   );
+  const completedChapters = chapterStats.filter(
+    (stats) => stats.totalLessons > 0 && stats.completedLessons === stats.totalLessons
+  ).length;
+  const chapterPercent =
+    TUTORIAL_CHAPTERS.length === 0
+      ? 100
+      : Math.round((completedChapters / TUTORIAL_CHAPTERS.length) * 100);
   const results = useMemo(
     () => searchTutorial(TUTORIAL_CHAPTERS, search),
     [search]
@@ -320,13 +327,13 @@ export function TutorialModal() {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-[11px] text-paper-muted">
-              {overall.completedLessons} из {overall.totalLessons} уроков ·{' '}
-              {overall.percent}%
+              {completedChapters} из {TUTORIAL_CHAPTERS.length} глав · {chapterPercent}%
             </span>
             <button
               type="button"
               onClick={closeAcademy}
               title="Закрыть (Esc)"
+              aria-label="Закрыть обучение"
               className="flex h-7 w-7 items-center justify-center rounded text-paper-muted hover:bg-paper-hover hover:text-paper-ink"
             >
               <X className="h-4 w-4" strokeWidth={1.75} />
@@ -396,6 +403,13 @@ export function TutorialModal() {
                 {results.length === 0 && (
                   <div className="rounded border border-paper-border bg-paper-bg/60 px-3 py-6 text-center text-[12px] text-paper-muted">
                     Ничего не найдено. Попробуй «маска», «шрифт» или «экспорт».
+                    <button
+                      type="button"
+                      onClick={() => setSearch('')}
+                      className="mt-2 rounded border border-paper-border bg-paper-panel px-2.5 py-1 text-[11px] text-paper-ink hover:bg-paper-hover"
+                    >
+                      Очистить поиск
+                    </button>
                   </div>
                 )}
                 {results.map((result) => (

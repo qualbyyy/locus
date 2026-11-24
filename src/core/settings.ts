@@ -284,6 +284,7 @@ export type SettingsPatch = Partial<Omit<AppSettings, 'ai'>> & {
 export interface SettingsStoreState {
   settings: AppSettings;
   loaded: boolean;
+  tutorialTouchedBeforeLoad: boolean;
   lastAutosaveAt: number | null;
   loadSettings: () => Promise<AppSettings>;
   updateSettings: (patch: SettingsPatch) => AppSettings;
@@ -295,6 +296,7 @@ export interface SettingsStoreState {
 export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   settings: sanitizeSettings(DEFAULT_SETTINGS),
   loaded: false,
+  tutorialTouchedBeforeLoad: false,
   lastAutosaveAt: null,
 
   loadSettings: async () => {
@@ -307,8 +309,12 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
     } catch {
       parsed = null;
     }
+    const preserveTutorial = get().tutorialTouchedBeforeLoad;
     const next = sanitizeSettings(parsed);
-    set({ settings: next, loaded: true });
+    if (preserveTutorial) {
+      next.tutorial = get().settings.tutorial;
+    }
+    set({ settings: next, loaded: true, tutorialTouchedBeforeLoad: false });
     applyRuntimeSideEffects(next);
     void useCustomFontStore
       .getState()
@@ -326,7 +332,11 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       ai: patch.ai ? { ...current.ai, ...patch.ai } : current.ai,
     };
     const next = sanitizeSettings(merged);
-    set({ settings: next, loaded: true });
+    if (patch.tutorial !== undefined) {
+      set({ settings: next, loaded: true, tutorialTouchedBeforeLoad: true });
+    } else {
+      set({ settings: next, loaded: true });
+    }
     applyRuntimeSideEffects(next);
     persistSettingsAsync(next);
     return next;
@@ -352,7 +362,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       ...DEFAULT_SETTINGS,
       tutorial: preservedTutorial,
     });
-    set({ settings: next, loaded: true });
+    set({ settings: next, loaded: true, tutorialTouchedBeforeLoad: true });
     applyRuntimeSideEffects(next);
     persistSettingsAsync(next);
     return next;
