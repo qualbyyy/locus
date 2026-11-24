@@ -727,7 +727,7 @@ export interface BBox {
 * [x] Собственные контекстные меню вместо браузерных (`src/core/contextMenu.ts`, `src/ui/ContextMenu.tsx`) для холста, слоёв, полей ввода и приложения; недоступные пункты не раскрывают подменю.
 * [x] Собственные контролы вместо нативных (`src/ui/controls.tsx`: Select, Checkbox, Slider, ColorField, Toggle) и меню `src/ui/MenuBar.tsx`.
 * [x] Масштаб колёсиком и `Ctrl`+колесом ограничен только холстом — интерфейс приложения больше не масштабируется (`src/engine/zoom.ts`).
-* [x] Вкладка «О приложении» в `SettingsModal`: логотип Locus, название, версия, автор, лицензия MIT, гиперссылки GitHub и Telegram; кнопка «Обучение» — заглушка внизу окна.
+* [x] Вкладка «О приложении» в `SettingsModal`: логотип Locus, название, версия, автор, лицензия MIT, гиперссылки GitHub и Telegram; кнопка «Обучение» открывает окно обучения.
 * [x] `LICENSE` (MIT) и `README.md`.
 * [x] Настройки: темы и цвета, шрифтовые пресеты интерфейса (Golos Text по умолчанию), холст и привязки, «Технические» (лимит Undo, анимации, автозамена), горячие клавиши, вкладка «ИИ»; кнопка «Применить» и подтверждение по `Enter`.
 * [x] Фон рабочей области из своего изображения (`src/core/canvasBackdrop.ts`): бинарник `canvas-background.*` в `$APPCONFIG`, предпросмотр, fallback на data URL, неблокирующая запись.
@@ -740,6 +740,19 @@ export interface BBox {
   * [x] `tests/ai.test.ts` и `tests/ai_tools_smoke.test.ts` — 29 инструментов, smoke-сценарий на одной композиции; `tests/geometry.test.ts` — скругление углов; `tests/commands.test.ts` — зеркальный дубль, повтор и вписывание в прямоугольник.
   * [x] `npx tsc --noEmit`, `npm test` (93/93, 16 файлов), `npm run build` и `cargo check -j 2` — зелёные.
   * [ ] Ручная проверка в окне: контекстные меню и собственные контролы, масштаб только холста, диалог несохранённых изменений при закрытии, новые инструменты ИИ (запускается пользователем вручную).
+
+### Этап 7. Встроенное обучение, Этап 1: «Академия» — **ВЫПОЛНЕНО**
+* [x] `src/tutorial/{content,targets,progress,search,store}.ts`: 12 глав, 25 уроков, 75 шагов, реестр целей подсветки, чистый поиск, стор окна, прогресс в `settings.json`.
+* [x] `src/ui/tutorial/TutorialModal.tsx`: окно «Обучение Locus» с поиском, главами, уроками, прогрессом, отметкой урока и подтверждаемым сбросом.
+* [x] Входы: кнопка «Обучение» в настройках, ссылка «Как это работает» в стартовом окне, «Справка → Обучение», клавиша `F1`.
+* [x] Прогресс переживает перезапуск; общий сброс настроек его сохраняет, отдельная кнопка сбрасывает. Одноразовая подсказка после первого документа.
+* [x] Пока окно открыто, однобуквенные инструменты не срабатывают, `Ctrl+K` и `Ctrl+,` не наслаивают окна.
+* [x] Защита от гонки: прогресс, записанный во время асинхронной загрузки настроек, не затирается.
+* **Критерии готовности и проверка:**
+  * [x] `tests/tutorial_{content,progress,search,store,shortcuts,settings_load}.test.ts` — 28 тестов; полный прогон 120/120 в 22 файлах.
+  * [x] `npx tsc --noEmit` и `npm run build` — зелёные.
+  * [ ] Ручная проверка в окне: входы, сохранение прогресса после перезапуска, одноразовая подсказка (запускается пользователем вручную).
+* [ ] Этап 2 обучения — подсветка «Показать в интерфейсе»; Этап 3 — песочница. Отдельные планы, ещё не начаты.
 
 ---
 
@@ -763,17 +776,18 @@ export interface BBox {
 * `продакшн этап 4` — экспорт `.locus` / `.ai` / `.svg` / `.psd` (`src/export/*`, `tests/export.test.ts`).
 * `продакшн этап 5` — ИИ-подключение: реестр инструментов, четыре провайдера, `CommandBar`, батчинг Undo, вложения, фон задачи.
 * `продакшн этап 6` — полировка UI (собственные меню и контролы, «О приложении», фон рабочей области, темы, анимации), расширение реестра ИИ до 29 инструментов и защита несохранённых изменений.
+* `продакшн этап 7` — встроенное обучение, Этап 1: окно «Академия» (12 глав, 25 уроков, 75 шагов), поиск, прогресс в настройках, входы из настроек/старта/«Справки»/`F1`, подсказка первого запуска. Этапы 2 (подсветка) и 3 (песочница) не начаты.
 
 ### Что передавать при старте нового диалога
 1. **Текущее состояние репозитория (`/home/qualbyy/Проекты/locus`):**
-   * Этапы 1–6 выполнены и проверены (`tsc --noEmit`, `npm test` 93/93 в 16 файлах, `npm run build`, `cargo check -j 2`).
-   * Последние коммиты: `4de0dc7` (29 инструментов ИИ) и `51e694c` (диалог несохранённых изменений). Push не выполнялся.
-   * Работают: `src/core/{types,fonts,assets,math,store,themes,settings,shortcuts,clipboard,contextMenu,canvasBackdrop,commands}.ts` (`src/core/commands/*`), `src/platform/io.ts`, `src/engine/{PaperCanvas,geometry,booleans,textOutlines,snapping,zoom,sync,overlay}.ts`, `src/engine/tools/{types,selectTool,nodeTool,penTool,blobTool,textTool,eyedropperTool}.ts`, `src/export/{projectFile,toSvg,toAi,rasterize,toPsd}.ts`, `src/ai/{types,context,statusWords,taskStore,registry,executor}.ts` + `src/ai/providers/{gemini,openai,anthropic,ollama,index}.ts`, `src/ui/*` (включая `controls.tsx`, `MenuBar.tsx`, `ContextMenu.tsx`, `UnsavedChangesModal.tsx`, `SettingsModal.tsx`, `CommandBar.tsx`), `src/App.tsx`, `src/index.css`.
+   * Этапы 1–7 выполнены и проверены (`tsc --noEmit`, `npm test` 120/120 в 22 файлах, `npm run build`, `cargo check -j 2`).
+   * Последние коммиты: `0b4c912` (фикс гонки прогресса и детали академии) и `33b7e05` (снят с учёта служебный отчёт). Ветка `feat/tutorial-academy` слита в `master` fast-forward и удалена. Push не выполнялся: remote не настроен.
+   * Работают: `src/core/{types,fonts,assets,math,store,themes,settings,shortcuts,clipboard,contextMenu,canvasBackdrop,commands}.ts` (`src/core/commands/*`), `src/platform/io.ts`, `src/engine/{PaperCanvas,geometry,booleans,textOutlines,snapping,zoom,sync,overlay}.ts`, `src/engine/tools/{types,selectTool,nodeTool,penTool,blobTool,textTool,eyedropperTool}.ts`, `src/export/{projectFile,toSvg,toAi,rasterize,toPsd}.ts`, `src/ai/{types,context,statusWords,taskStore,registry,executor}.ts` + `src/ai/providers/{gemini,openai,anthropic,ollama,index}.ts`, `src/tutorial/{content,targets,progress,search,store}.ts`, `src/ui/*` (включая `controls.tsx`, `MenuBar.tsx`, `ContextMenu.tsx`, `UnsavedChangesModal.tsx`, `SettingsModal.tsx`, `CommandBar.tsx`, `tutorial/TutorialModal.tsx`), `src/App.tsx`, `src/index.css`.
 2. **Возможные направления следующего этапа:**
-   * Запись геометрии из ИИ: инструмент `set_path_anchors` поверх `updatePathSubpaths`, чтобы модель деформировала существующий контур (сейчас есть только чтение `get_layer_geometry`).
-   * Стриминг для Gemini/Anthropic/Ollama (сейчас только OpenAI-compatible).
-   * Мультиартборд, градиенты и режимы наложения (Post-MVP по спецификации).
-   * Ручная проверка накопленного UI и финальный `npm run tauri build`.
+   * Обучение, Этап 2: `data-tour` на элементах интерфейса и оверлей подсветки по шагам; Этап 3: песочница с проверкой действий и восстановлением документа.
+   * ИИ-арт-директор: разбор композиции, контраста и палитры с применением правок одним `Ctrl+Z`.
+   * Рецепты действий, стили и шаблоны, линейки и направляющие, пакетный экспорт под соцсети.
+   * Запись геометрии из ИИ: инструмент `set_path_anchors` поверх `updatePathSubpaths` (сейчас есть только чтение `get_layer_geometry`).
 3. **Инварианты среды и сборки (не повторять отладку):**
    * Для `cargo check` / `cargo build` на этой машине (3.6 GiB RAM) использовать `-j 2`.
    * Для запуска окна на Linux/Wayland при проблемах с DMA-BUF использовать `WEBKIT_DISABLE_DMABUF_RENDERER=1 npm run tauri dev`.
