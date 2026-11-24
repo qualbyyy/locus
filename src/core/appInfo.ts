@@ -1,5 +1,10 @@
 import packageJson from '../../package.json';
 
+export interface AppContactLink {
+  label: string;
+  url: string;
+}
+
 export interface AppInfo {
   name: string;
   version: string;
@@ -7,6 +12,7 @@ export interface AppInfo {
   license: string;
   creator: string;
   contacts: string;
+  contactsLinks: AppContactLink[];
   description: string;
   documentation: string;
   repository: string;
@@ -24,7 +30,11 @@ export const APP_INFO: AppInfo = {
   build: 'Tauri / React',
   license: packageMetadata.license || unavailable,
   creator: 'qualbyy',
-  contacts: '@qualbyy (Telegram)',
+  contacts: '@qualbyy',
+  contactsLinks: [
+    { label: 'Telegram', url: 'https://t.me/qualbyy' },
+    { label: 'GitHub', url: 'https://github.com/qualbyy' },
+  ],
   description: 'Локальный редактор векторной графики с автоматизацией рутинных задач.',
   documentation: `${repositoryUrl}#readme`,
   repository: repositoryUrl,

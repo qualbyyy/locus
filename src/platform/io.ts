@@ -32,6 +32,18 @@ export async function httpFetch(
   return globalThis.fetch(input, init);
 }
 
+export async function openExternalUrl(url: string): Promise<void> {
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error('Поддерживаются только ссылки http и https');
+  }
+  if (isTauri()) {
+    const { openUrl } = await import('@tauri-apps/plugin-opener');
+    await openUrl(url);
+    return;
+  }
+  globalThis.open(url, '_blank', 'noopener,noreferrer');
+}
+
 export async function readFileBytes(path: string): Promise<Uint8Array> {
   if (!isTauri()) {
     throw new Error('Чтение локальных путей доступно только в приложении Locus');

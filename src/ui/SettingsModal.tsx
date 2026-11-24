@@ -39,8 +39,10 @@ import {
   APP_INFO,
   formatDiagnostics,
   getRuntimeDiagnostics,
+  type AppContactLink,
 } from '../core/appInfo';
 import { ACCENT_PRESETS, getThemePreset, THEME_PRESETS } from '../core/themes';
+import { openExternalUrl } from '../platform/io';
 import type { AIProviderType, Scene } from '../core/types';
 import {
   HexColorRow,
@@ -316,11 +318,37 @@ function AIModelField({
   );
 }
 
-function AboutRow({ label, value }: { label: string; value: string }) {
+function AboutRow({
+  label,
+  value,
+  links,
+  onOpenLink,
+}: {
+  label: string;
+  value?: string;
+  links?: AppContactLink[];
+  onOpenLink?: (url: string) => void;
+}) {
   return (
     <>
       <dt className="text-paper-muted">{label}</dt>
-      <dd className="break-all text-paper-ink">{value}</dd>
+      <dd className="break-all text-paper-ink">
+        {value}
+        {links && links.length > 0 && (
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            {links.map((link) => (
+              <button
+                key={link.url}
+                type="button"
+                onClick={() => onOpenLink?.(link.url)}
+                className="text-paper-accent underline underline-offset-2 hover:text-paper-accent-hover"
+              >
+                {link.label}
+              </button>
+            ))}
+          </span>
+        )}
+      </dd>
     </>
   );
 }
@@ -425,6 +453,15 @@ export function SettingsModal({
     window.addEventListener('keydown', handleCloseKeyDown);
     return () => window.removeEventListener('keydown', handleCloseKeyDown);
   }, [isOpen, onClose, recordingAction]);
+
+  const handleOpenLink = async (url: string) => {
+    try {
+      await openExternalUrl(url);
+      setAboutStatus(null);
+    } catch {
+      setAboutStatus('Не удалось открыть ссылку');
+    }
+  };
 
   const handleCopyDiagnostics = async () => {
     try {
@@ -1321,10 +1358,26 @@ export function SettingsModal({
                     <AboutRow label="Сборка" value={APP_INFO.build} />
                     <AboutRow label="Лицензия" value={APP_INFO.license} />
                     <AboutRow label="Создатель" value={APP_INFO.creator} />
-                    <AboutRow label="Контакты" value={APP_INFO.contacts} />
-                    <AboutRow label="Документация" value={APP_INFO.documentation} />
-                    <AboutRow label="Репозиторий" value={APP_INFO.repository} />
-                    <AboutRow label="Сообщить о проблеме" value={APP_INFO.issues} />
+                    <AboutRow
+                      label="Контакты"
+                      links={APP_INFO.contactsLinks}
+                      onOpenLink={(url) => void handleOpenLink(url)}
+                    />
+                    <AboutRow
+                      label="Документация"
+                      links={[{ label: 'README', url: APP_INFO.documentation }]}
+                      onOpenLink={(url) => void handleOpenLink(url)}
+                    />
+                    <AboutRow
+                      label="Репозиторий"
+                      links={[{ label: 'GitHub', url: APP_INFO.repository }]}
+                      onOpenLink={(url) => void handleOpenLink(url)}
+                    />
+                    <AboutRow
+                      label="Сообщить о проблеме"
+                      links={[{ label: 'Issues', url: APP_INFO.issues }]}
+                      onOpenLink={(url) => void handleOpenLink(url)}
+                    />
                   </dl>
                 </div>
 

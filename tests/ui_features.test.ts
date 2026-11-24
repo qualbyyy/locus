@@ -8,6 +8,7 @@ import {
   getWheelZoomFactor,
   isCanvasZoomWheel,
 } from '../src/engine/zoom';
+import { openExternalUrl } from '../src/platform/io';
 import {
   CONTEXT_MENU_ACTION_KINDS,
   buildContextMenuModel,
@@ -145,6 +146,19 @@ describe('UI features: context menu and canvas zoom', () => {
     const diagnostics = formatDiagnostics(runtime);
 
     expect(diagnostics).not.toContain('fake-api-key');
+  });
+
+  it('provides Telegram and GitHub contact links', () => {
+    const labels = APP_INFO.contactsLinks.map((link) => link.label);
+    expect(labels).toEqual(expect.arrayContaining(['Telegram', 'GitHub']));
+    for (const link of APP_INFO.contactsLinks) {
+      expect(link.url).toMatch(/^https:\/\//);
+    }
+    expect(APP_INFO.repository).toMatch(/^https:\/\//);
+  });
+
+  it('rejects non-http external links', async () => {
+    await expect(openExternalUrl('javascript:alert(1)')).rejects.toThrow();
   });
 
   it('uses neutral labels when license or contacts are unavailable', () => {
