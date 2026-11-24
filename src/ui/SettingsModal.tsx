@@ -123,7 +123,7 @@ function ToggleRow({
         }`}
       >
         <span
-          className={`h-3.5 w-3.5 rounded-full bg-white transition-transform duration-200 ease-out ${
+          className={`h-3.5 w-3.5 shrink-0 rounded-full bg-white transition-transform duration-200 ease-out ${
             checked ? 'translate-x-[1.125rem]' : 'translate-x-0'
           }`}
         />

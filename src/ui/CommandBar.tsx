@@ -23,6 +23,7 @@ export function CommandBar({
   const selectedCount = useEditorStore((s) => s.selectedIds.length);
 
   const status = useAiTaskStore((s) => s.status);
+  const log = useAiTaskStore((s) => s.log);
   const answer = useAiTaskStore((s) => s.answer);
   const streamText = useAiTaskStore((s) => s.streamText);
   const error = useAiTaskStore((s) => s.error);
@@ -40,6 +41,10 @@ export function CommandBar({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const isRunning = status === 'running';
   const statusWord = useRotatingStatusWord(isRunning);
+  const planText = useMemo(
+    () => log.find((entry) => entry.name === 'report_plan' && entry.ok)?.summary,
+    [log]
+  );
 
   const providerIssue = useMemo(() => getAiProviderIssue(ai), [ai]);
   const hasImages = attachments.length > 0;
@@ -239,10 +244,17 @@ export function CommandBar({
                   {statusWord}…
                 </span>
               </div>
-              {streamText && (
-                <div className="animate-rise whitespace-pre-wrap rounded border border-paper-border bg-paper-bg px-3 py-2 text-[12px] leading-relaxed">
-                  {streamText}
-                  <span className="ai-caret" />
+              {(planText || streamText) && (
+                <div className="animate-rise flex flex-col gap-1.5 rounded border border-paper-border bg-paper-bg/60 px-3 py-2 text-[12px] leading-relaxed text-paper-muted">
+                  {planText && (
+                    <div className="whitespace-pre-wrap">{planText}</div>
+                  )}
+                  {streamText && (
+                    <div className="whitespace-pre-wrap">
+                      {streamText}
+                      <span className="ai-caret" />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
