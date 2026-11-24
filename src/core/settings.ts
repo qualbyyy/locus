@@ -16,6 +16,11 @@ import {
   type FontPresetId,
 } from './typography';
 import type { AIConfig, AIProviderType, Scene } from './types';
+import {
+  DEFAULT_TUTORIAL_PROGRESS,
+  sanitizeTutorialProgress,
+  type TutorialProgress,
+} from '../tutorial/progress';
 
 export const SETTINGS_FILE_PATH = 'settings.json';
 export const AUTOSAVE_DRAFT_PATH = 'autosave-draft.json';
@@ -46,6 +51,7 @@ export interface AppSettings {
   wheelZoomSpeed: number;
   showPerfStats: boolean;
   customShortcuts: Record<string, string>;
+  tutorial: TutorialProgress;
   ai: AIConfig;
 }
 
@@ -86,6 +92,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   wheelZoomSpeed: 1,
   showPerfStats: false,
   customShortcuts: {},
+  tutorial: { ...DEFAULT_TUTORIAL_PROGRESS },
   ai: { ...DEFAULT_AI_CONFIG },
 };
 
@@ -148,6 +155,8 @@ export function sanitizeSettings(raw: unknown): AppSettings {
       }
     }
   }
+
+  const tutorial = sanitizeTutorialProgress(src.tutorial);
 
   const rawAi =
     src.ai && typeof src.ai === 'object'
@@ -213,6 +222,7 @@ export function sanitizeSettings(raw: unknown): AppSettings {
     ),
     showPerfStats: readBool(src.showPerfStats, DEFAULT_SETTINGS.showPerfStats),
     customShortcuts,
+    tutorial,
     ai: {
       provider,
       geminiApiKey: readString(rawAi.geminiApiKey, DEFAULT_AI_CONFIG.geminiApiKey),
@@ -337,7 +347,11 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   },
 
   resetSettings: () => {
-    const next = sanitizeSettings(DEFAULT_SETTINGS);
+    const preservedTutorial = get().settings.tutorial;
+    const next = sanitizeSettings({
+      ...DEFAULT_SETTINGS,
+      tutorial: preservedTutorial,
+    });
     set({ settings: next, loaded: true });
     applyRuntimeSideEffects(next);
     persistSettingsAsync(next);
