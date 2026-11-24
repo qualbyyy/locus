@@ -57,4 +57,51 @@ describe('tutorial/store', () => {
     expect(useTutorialStore.getState().activeChapterId).toBe('shapes');
     expect(useTutorialStore.getState().activeLessonId).toBeNull();
   });
+
+  it('restores the persisted lesson after resetting the tutorial store', () => {
+    useSettingsStore.setState({
+      settings: sanitizeSettings({
+        ...DEFAULT_SETTINGS,
+        tutorial: { ...DEFAULT_SETTINGS.tutorial, lastLessonId: 'layers.mask' },
+      }),
+      loaded: true,
+    });
+    useTutorialStore.setState({
+      isAcademyOpen: false,
+      activeChapterId: null,
+      activeLessonId: null,
+      search: '',
+    });
+
+    useTutorialStore.getState().openAcademy();
+
+    expect(useTutorialStore.getState().activeChapterId).toBe('layers');
+    expect(useTutorialStore.getState().activeLessonId).toBe('layers.mask');
+  });
+
+  it('clears an active lesson when opening an explicit chapter', () => {
+    useTutorialStore.getState().openLesson('layers.mask');
+    useTutorialStore.getState().openAcademy({ chapterId: 'shapes' });
+
+    expect(useTutorialStore.getState().activeChapterId).toBe('shapes');
+    expect(useTutorialStore.getState().activeLessonId).toBeNull();
+  });
+
+  it('does not store an unknown lesson from academy options', () => {
+    useTutorialStore.getState().openAcademy({ lessonId: 'missing.lesson' });
+
+    expect(useTutorialStore.getState().activeLessonId).toBeNull();
+    expect(useTutorialStore.getState().activeChapterId).toBe(
+      TUTORIAL_CHAPTERS[0].id
+    );
+  });
+
+  it('uses the lesson chapter when both academy options are provided', () => {
+    useTutorialStore
+      .getState()
+      .openAcademy({ lessonId: 'paths.compound', chapterId: 'shapes' });
+
+    expect(useTutorialStore.getState().activeLessonId).toBe('paths.compound');
+    expect(useTutorialStore.getState().activeChapterId).toBe('paths');
+  });
 });

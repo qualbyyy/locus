@@ -33,10 +33,9 @@ function chapterForLesson(lessonId: string): string | null {
   return null;
 }
 
-function lastChapterId(): string | null {
-  const lastLessonId = useSettingsStore.getState().settings.tutorial.lastLessonId;
-  if (!lastLessonId) return null;
-  return chapterForLesson(lastLessonId);
+function persistedLessonId(): string | null {
+  const lessonId = useSettingsStore.getState().settings.tutorial.lastLessonId;
+  return lessonId && TUTORIAL_LESSON_BY_ID[lessonId] ? lessonId : null;
 }
 
 export const useTutorialStore = create<TutorialStoreState>((set, get) => ({
@@ -47,14 +46,24 @@ export const useTutorialStore = create<TutorialStoreState>((set, get) => ({
 
   openAcademy: (options) => {
     const state = get();
-    const lessonId = options?.lessonId ?? state.activeLessonId ?? null;
-    const chapterId =
-      options?.chapterId ??
-      (lessonId ? chapterForLesson(lessonId) : null) ??
-      state.activeChapterId ??
-      lastChapterId() ??
-      TUTORIAL_CHAPTERS[0]?.id ??
-      null;
+    const requestedLessonId = options?.lessonId;
+    const lessonId = requestedLessonId
+      ? TUTORIAL_LESSON_BY_ID[requestedLessonId]
+        ? requestedLessonId
+        : null
+      : options
+        ? null
+        : state.activeLessonId && TUTORIAL_LESSON_BY_ID[state.activeLessonId]
+          ? state.activeLessonId
+          : persistedLessonId();
+    const requestedChapterId = options?.chapterId;
+    const chapterId = lessonId
+      ? chapterForLesson(lessonId)
+      : requestedChapterId && TUTORIAL_CHAPTER_BY_ID[requestedChapterId]
+        ? requestedChapterId
+        : state.activeChapterId && TUTORIAL_CHAPTER_BY_ID[state.activeChapterId]
+          ? state.activeChapterId
+          : TUTORIAL_CHAPTERS[0]?.id ?? null;
 
     set({
       isAcademyOpen: true,
