@@ -60,7 +60,10 @@ export function ContextMenu({
       role="menu"
       aria-label="Контекстное меню"
       data-context-menu="true"
-      onContextMenu={(event) => event.preventDefault()}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
       className="fixed z-[70] min-w-52 rounded border border-paper-border bg-paper-panel py-1 text-[12px] text-paper-ink"
       style={{ left: position.x, top: position.y }}
     >
