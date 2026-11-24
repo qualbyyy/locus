@@ -118,13 +118,13 @@ function ToggleRow({
         role="switch"
         aria-checked={checked}
         onClick={() => onChange(!checked)}
-        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+        className={`relative h-5 w-9 shrink-0 overflow-hidden rounded-full transition-colors ${
           checked ? 'bg-paper-accent' : 'bg-paper-muted/30'
         }`}
       >
         <span
-          className={`block h-3.5 w-3.5 rounded-full bg-white transition-transform duration-200 ease-out ${
-            checked ? 'translate-x-[20px]' : 'translate-x-0.5'
+          className={`absolute left-0.5 top-0.5 h-3.5 w-3.5 rounded-full bg-white transition-transform duration-200 ease-out ${
+            checked ? 'translate-x-[18px]' : 'translate-x-0'
           }`}
         />
       </button>
