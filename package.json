@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
+    "install:linux": "node scripts/install-linux-launcher.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
