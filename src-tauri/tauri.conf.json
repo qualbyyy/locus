@@ -32,7 +32,7 @@
       {
         "ext": ["locus"],
         "name": "Locus Project",
-        "description": "Проект векторного редактора Locus",
+        "description": "Locus vector graphics project",
         "mimeType": "application/vnd.locus.project",
         "role": "Editor"
       }
