@@ -64,7 +64,7 @@ describe('SVG import to editable Locus layers', () => {
     expect(line.subpaths[0].anchors).toHaveLength(2);
   });
 
-  it('inlines <style>, resolves currentColor/named colors, and simplifies gradients with a warning', async () => {
+  it('inlines <style>, resolves currentColor/named colors, and imports linear gradients', async () => {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" color="#334155">
       <defs>
         <linearGradient id="g1"><stop offset="0%" stop-color="#ec4899"/><stop offset="100%" stop-color="#8b5cf6"/></linearGradient>
@@ -95,8 +95,14 @@ describe('SVG import to editable Locus layers', () => {
     expect(transparentFill.stroke?.color).toBe('#ff0000');
 
     const gradBox = result.layers[3] as PathLayer;
-    expect(gradBox.fill).toBe('#ec4899');
-    expect(result.warnings).toContain('Градиенты упрощены до плоской заливки');
+    expect(typeof gradBox.fill).toBe('object');
+    expect(gradBox.fill).toMatchObject({
+      kind: 'linear',
+      stops: [
+        { offset: 0, color: '#ec4899' },
+        { offset: 1, color: '#8b5cf6' },
+      ],
+    });
   });
 
   it('scales viewBox coordinates and stroke widths without creating root clip mask layers', async () => {

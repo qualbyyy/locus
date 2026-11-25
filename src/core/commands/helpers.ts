@@ -1,3 +1,5 @@
+import { getSceneArtboards } from '../artboards';
+import { flattenLayers, mapLayerTree } from '../layerTree';
 import { useEditorStore } from '../store';
 import type { Layer, Scene, StrokeStyle } from '../types';
 
@@ -33,7 +35,9 @@ export function commitScene(recipe: (scene: Scene) => Scene): Scene {
 
 export function validateSelectionAgainstScene(scene: Scene): void {
   const state = useEditorStore.getState();
-  const layerMap = new Map(scene.layers.map((layer) => [layer.id, layer]));
+  const layerMap = new Map(
+    flattenLayers(scene.layers).map((layer) => [layer.id, layer])
+  );
   const nextSelectedIds = state.selectedIds.filter((id) => layerMap.has(id));
 
   let nextSelectedNode = state.selectedNode;
@@ -49,13 +53,32 @@ export function validateSelectionAgainstScene(scene: Scene): void {
     }
   }
 
+  let nextEditingGroupId = state.editingGroupId;
+  if (nextEditingGroupId) {
+    const groupTarget = layerMap.get(nextEditingGroupId);
+    if (!groupTarget || groupTarget.type !== 'group') {
+      nextEditingGroupId = null;
+    }
+  }
+
+  const artboards = getSceneArtboards(scene);
+  const nextActiveArtboardId = artboards.some(
+    (ab) => ab.id === state.activeArtboardId
+  )
+    ? state.activeArtboardId
+    : artboards[0].id;
+
   if (
     nextSelectedIds.length !== state.selectedIds.length ||
-    nextSelectedNode !== state.selectedNode
+    nextSelectedNode !== state.selectedNode ||
+    nextEditingGroupId !== state.editingGroupId ||
+    nextActiveArtboardId !== state.activeArtboardId
   ) {
     useEditorStore.setState({
       selectedIds: nextSelectedIds,
       selectedNode: nextSelectedNode,
+      editingGroupId: nextEditingGroupId,
+      activeArtboardId: nextActiveArtboardId,
     });
   }
 }
@@ -75,38 +98,80 @@ export function findSharedClipMaskId(
   return undefined;
 }
 
+function replaceInSiblingList(
+  layers: Layer[],
+  targetIds: Set<string>,
+  replacementLayers: Layer[]
+): { next: Layer[]; replaced: boolean } {
+  let highestIdx = -1;
+  layers.forEach((layer, idx) => {
+    if (targetIds.has(layer.id)) {
+      highestIdx = idx;
+    }
+  });
+
+  if (highestIdx !== -1) {
+    const next: Layer[] = [];
+    layers.forEach((layer, idx) => {
+      if (idx === highestIdx) {
+        next.push(...replacementLayers);
+      }
+      if (!targetIds.has(layer.id)) {
+        next.push(layer);
+      }
+    });
+    return { next, replaced: true };
+  }
+
+  for (let i = 0; i < layers.length; i += 1) {
+    const cur = layers[i];
+    if (cur.type !== 'group') continue;
+    const sub = replaceInSiblingList(cur.children, targetIds, replacementLayers);
+    if (sub.replaced) {
+      const next = [...layers];
+      next[i] = { ...cur, children: sub.next };
+      return { next, replaced: true };
+    }
+  }
+
+  return { next: layers, replaced: false };
+}
+
 /** Заменяет набор слоёв на месте самого верхнего из них, очищая ссылки на удалённые маски. */
 export function replaceLayersAtHighestIndex(
   targetIds: Set<string>,
   replacementLayers: Layer[]
 ): void {
   commitScene((scene) => {
-    let highestIdx = -1;
-    scene.layers.forEach((layer, idx) => {
-      if (targetIds.has(layer.id)) {
-        highestIdx = idx;
-      }
-    });
-    if (highestIdx === -1) return scene;
+    const { next, replaced } = replaceInSiblingList(
+      scene.layers,
+      targetIds,
+      replacementLayers
+    );
+    if (!replaced) return scene;
 
-    const nextLayers: Layer[] = [];
-    scene.layers.forEach((layer, idx) => {
-      if (idx === highestIdx) {
-        nextLayers.push(...replacementLayers);
+    const cleaned = mapLayerTree(next, (layer) => {
+      let nextLayer = layer;
+      if (nextLayer.clipMaskId && targetIds.has(nextLayer.clipMaskId)) {
+        const copy = { ...nextLayer };
+        delete copy.clipMaskId;
+        nextLayer = copy;
       }
-      if (targetIds.has(layer.id)) {
-        return;
+      if (
+        nextLayer.type === 'text' &&
+        nextLayer.pathId &&
+        targetIds.has(nextLayer.pathId)
+      ) {
+        const copy = { ...nextLayer };
+        delete copy.pathId;
+        delete copy.pathOffset;
+        delete copy.pathFlip;
+        nextLayer = copy;
       }
-      if (layer.clipMaskId && targetIds.has(layer.clipMaskId)) {
-        const cleaned = { ...layer };
-        delete cleaned.clipMaskId;
-        nextLayers.push(cleaned);
-      } else {
-        nextLayers.push(layer);
-      }
+      return nextLayer;
     });
 
-    return { ...scene, layers: nextLayers };
+    return { ...scene, layers: cleaned };
   });
 
   useEditorStore.setState({

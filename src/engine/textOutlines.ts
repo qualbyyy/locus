@@ -1,9 +1,24 @@
-import * as fontkitModule from '@pdf-lib/fontkit';
 import type { Font } from '@pdf-lib/fontkit';
 import paper from 'paper/dist/paper-core';
-import { loadFontBytes } from '../core/fonts';
-import { centerSubPathsAtOrigin, localToWorld } from '../core/math';
-import type { Point2D, SubPath, TextLayer } from '../core/types';
+import {
+  createFontkitFont,
+  loadFontBytes,
+  subscribeFonts,
+} from '../core/fonts';
+import {
+  centerSubPathsAtOrigin,
+  clamp,
+  getLayerMatrix,
+  invertMatrix,
+  localToWorld,
+  multiplyMatrices,
+} from '../core/math';
+import { getLayerWorldMatrix, getParentWorldMatrix } from '../core/layerTree';
+import type { Layer, PathLayer, Point2D, SubPath, TextLayer } from '../core/types';
+import { buildWorldSubPath } from './booleans';
+import { resolveEffectivePathGeometry } from './effects';
+
+export { createFontkitFont };
 
 interface FontkitPathCommand {
   command:
@@ -23,18 +38,9 @@ export interface TextOutlinesResult {
 }
 
 const fontObjectCache = new Map<string, Font>();
-
-export function createFontkitFont(bytes: Uint8Array): Font {
-  const mod = fontkitModule as unknown as {
-    create?: (buf: Uint8Array) => Font;
-    default?: { create: (buf: Uint8Array) => Font };
-  };
-  const fn = mod.create ?? mod.default?.create;
-  if (!fn) {
-    throw new Error('fontkit.create недоступен');
-  }
-  return fn(bytes);
-}
+subscribeFonts(() => {
+  fontObjectCache.clear();
+});
 
 async function getLoadedFont(
   family: TextLayer['fontFamily'],
@@ -138,7 +144,9 @@ function resolveGlyphOverlaps(
 }
 
 export async function convertTextLayerToOutlines(
-  layer: TextLayer
+  layer: TextLayer,
+  pathLayer?: PathLayer | null,
+  sceneLayers?: Layer[]
 ): Promise<TextOutlinesResult | null> {
   const font = await getLoadedFont(layer.fontFamily, layer.fontWeight);
   const k = layer.fontSize / Math.max(1, font.unitsPerEm);
@@ -153,146 +161,239 @@ export async function convertTextLayerToOutlines(
   const project = new scope.Project(undefined as unknown as HTMLCanvasElement);
 
   try {
-    lines.forEach((line, lineIdx) => {
-      if (!line.length) return;
-      const run = font.layout(line);
-      const count = run.glyphs.length;
-      if (count === 0) return;
+    const extractGlyphSubpaths = (
+      glyphPath: unknown,
+      toWorld: (gx: number, gy: number) => Point2D
+    ): SubPath[] => {
+      const rawCommands =
+        (glyphPath as { commands?: FontkitPathCommand[] } | null)?.commands ?? [];
+      const glyphSubpaths: SubPath[] = [];
+      let curSubpath: SubPath | null = null;
 
-      const lineWidth =
-        run.positions.reduce((sum, pos) => sum + pos.xAdvance * k, 0) +
-        Math.max(0, count - 1) * tracking;
-
-      let penX =
-        layer.align === 'center'
-          ? -lineWidth / 2
-          : layer.align === 'right'
-            ? -lineWidth
-            : 0;
-      const baselineY = layer.fontSize * 0.85 + lineIdx * step;
-
-      for (let j = 0; j < count; j++) {
-        const glyph = run.glyphs[j];
-        const pos = run.positions[j];
-        const originX = penX + pos.xOffset * k;
-        const originY = baselineY - pos.yOffset * k;
-
-        const toWorld = (gx: number, gy: number): Point2D =>
-          localToWorld(layer, {
-            x: originX + gx * k,
-            y: originY - gy * k,
-          });
-
-        const rawCommands =
-          (glyph.path as unknown as { commands?: FontkitPathCommand[] })
-            ?.commands ?? [];
-
-        const glyphSubpaths: SubPath[] = [];
-        let curSubpath: SubPath | null = null;
-
-        const finalizeSubpath = () => {
-          if (!curSubpath) return;
-          const anchors = curSubpath.anchors;
+      const finalizeSubpath = () => {
+        if (!curSubpath) return;
+        const anchors = curSubpath.anchors;
+        if (anchors.length >= 2) {
+          if (curSubpath.closed) {
+            const first = anchors[0];
+            const last = anchors[anchors.length - 1];
+            if (Math.hypot(last.x - first.x, last.y - first.y) <= 1e-4) {
+              first.handleIn = { x: last.handleIn.x, y: last.handleIn.y };
+              anchors.pop();
+            }
+          }
           if (anchors.length >= 2) {
-            if (curSubpath.closed) {
-              const first = anchors[0];
-              const last = anchors[anchors.length - 1];
-              if (Math.hypot(last.x - first.x, last.y - first.y) <= 1e-4) {
-                first.handleIn = { x: last.handleIn.x, y: last.handleIn.y };
-                anchors.pop();
-              }
+            for (const anchor of anchors) {
+              anchor.smooth = isCollinearOpposite(
+                anchor.handleIn,
+                anchor.handleOut
+              );
             }
-            if (anchors.length >= 2) {
-              for (const anchor of anchors) {
-                anchor.smooth = isCollinearOpposite(
-                  anchor.handleIn,
-                  anchor.handleOut
-                );
-              }
-              glyphSubpaths.push(curSubpath);
-            }
-          }
-          curSubpath = null;
-        };
-
-        for (const cmd of rawCommands) {
-          const { command, args } = cmd;
-          if (command === 'moveTo') {
-            finalizeSubpath();
-            const pt = toWorld(args[0], args[1]);
-            curSubpath = {
-              closed: false,
-              anchors: [
-                {
-                  x: pt.x,
-                  y: pt.y,
-                  handleIn: { x: 0, y: 0 },
-                  handleOut: { x: 0, y: 0 },
-                  smooth: false,
-                },
-              ],
-            };
-          } else if (command === 'lineTo' && curSubpath) {
-            const pt = toWorld(args[0], args[1]);
-            curSubpath.anchors.push({
-              x: pt.x,
-              y: pt.y,
-              handleIn: { x: 0, y: 0 },
-              handleOut: { x: 0, y: 0 },
-              smooth: false,
-            });
-          } else if (command === 'quadraticCurveTo' && curSubpath) {
-            const anchors = curSubpath.anchors;
-            const prev = anchors[anchors.length - 1];
-            const qWorld = toWorld(args[0], args[1]);
-            const p2World = toWorld(args[2], args[3]);
-            prev.handleOut = {
-              x: (2 / 3) * (qWorld.x - prev.x),
-              y: (2 / 3) * (qWorld.y - prev.y),
-            };
-            anchors.push({
-              x: p2World.x,
-              y: p2World.y,
-              handleIn: {
-                x: (2 / 3) * (qWorld.x - p2World.x),
-                y: (2 / 3) * (qWorld.y - p2World.y),
-              },
-              handleOut: { x: 0, y: 0 },
-              smooth: false,
-            });
-          } else if (command === 'bezierCurveTo' && curSubpath) {
-            const anchors = curSubpath.anchors;
-            const prev = anchors[anchors.length - 1];
-            const c1World = toWorld(args[0], args[1]);
-            const c2World = toWorld(args[2], args[3]);
-            const p3World = toWorld(args[4], args[5]);
-            prev.handleOut = {
-              x: c1World.x - prev.x,
-              y: c1World.y - prev.y,
-            };
-            anchors.push({
-              x: p3World.x,
-              y: p3World.y,
-              handleIn: {
-                x: c2World.x - p3World.x,
-                y: c2World.y - p3World.y,
-              },
-              handleOut: { x: 0, y: 0 },
-              smooth: false,
-            });
-          } else if (command === 'closePath' && curSubpath) {
-            curSubpath.closed = true;
-            finalizeSubpath();
+            glyphSubpaths.push(curSubpath);
           }
         }
+        curSubpath = null;
+      };
 
-        finalizeSubpath();
-        if (glyphSubpaths.length > 0) {
-          worldSubpaths.push(...resolveGlyphOverlaps(scope, glyphSubpaths));
+      for (const cmd of rawCommands) {
+        const { command, args } = cmd;
+        if (command === 'moveTo') {
+          finalizeSubpath();
+          const pt = toWorld(args[0], args[1]);
+          curSubpath = {
+            closed: false,
+            anchors: [
+              {
+                x: pt.x,
+                y: pt.y,
+                handleIn: { x: 0, y: 0 },
+                handleOut: { x: 0, y: 0 },
+                smooth: false,
+              },
+            ],
+          };
+        } else if (command === 'lineTo' && curSubpath) {
+          const pt = toWorld(args[0], args[1]);
+          curSubpath.anchors.push({
+            x: pt.x,
+            y: pt.y,
+            handleIn: { x: 0, y: 0 },
+            handleOut: { x: 0, y: 0 },
+            smooth: false,
+          });
+        } else if (command === 'quadraticCurveTo' && curSubpath) {
+          const anchors = curSubpath.anchors;
+          const prev = anchors[anchors.length - 1];
+          const qWorld = toWorld(args[0], args[1]);
+          const p2World = toWorld(args[2], args[3]);
+          prev.handleOut = {
+            x: (2 / 3) * (qWorld.x - prev.x),
+            y: (2 / 3) * (qWorld.y - prev.y),
+          };
+          anchors.push({
+            x: p2World.x,
+            y: p2World.y,
+            handleIn: {
+              x: (2 / 3) * (qWorld.x - p2World.x),
+              y: (2 / 3) * (qWorld.y - p2World.y),
+            },
+            handleOut: { x: 0, y: 0 },
+            smooth: false,
+          });
+        } else if (command === 'bezierCurveTo' && curSubpath) {
+          const anchors = curSubpath.anchors;
+          const prev = anchors[anchors.length - 1];
+          const c1World = toWorld(args[0], args[1]);
+          const c2World = toWorld(args[2], args[3]);
+          const p3World = toWorld(args[4], args[5]);
+          prev.handleOut = {
+            x: c1World.x - prev.x,
+            y: c1World.y - prev.y,
+          };
+          anchors.push({
+            x: p3World.x,
+            y: p3World.y,
+            handleIn: {
+              x: c2World.x - p3World.x,
+              y: c2World.y - p3World.y,
+            },
+            handleOut: { x: 0, y: 0 },
+            smooth: false,
+          });
+        } else if (command === 'closePath' && curSubpath) {
+          curSubpath.closed = true;
+          finalizeSubpath();
         }
-        penX += pos.xAdvance * k + tracking;
       }
-    });
+
+      finalizeSubpath();
+      return glyphSubpaths;
+    };
+
+    if (pathLayer) {
+      const hostSp = resolveEffectivePathGeometry(pathLayer).subpaths.find(
+        (sp) => sp.anchors.length >= 2
+      );
+      const curve = hostSp
+        ? buildWorldSubPath(
+            scope,
+            { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+            hostSp,
+            false
+          )
+        : null;
+      if (curve) {
+        const relMatrix = sceneLayers
+          ? multiplyMatrices(
+              invertMatrix(getParentWorldMatrix(sceneLayers, layer.id)),
+              getLayerWorldMatrix(sceneLayers, pathLayer.id)
+            )
+          : getLayerMatrix(pathLayer);
+        curve.transform(
+          new scope.Matrix(
+            relMatrix.a,
+            relMatrix.b,
+            relMatrix.c,
+            relMatrix.d,
+            relMatrix.tx,
+            relMatrix.ty
+          )
+        );
+        if (layer.pathFlip) {
+          curve.reverse();
+        }
+
+        const curveLen = curve.length;
+        const singleLine = (layer.content || '').replace(/\r?\n/g, ' ');
+        if (singleLine.length > 0 && curveLen > 1e-4) {
+          const run = font.layout(singleLine);
+          const count = run.glyphs.length;
+          const totalW =
+            run.positions.reduce((sum, pos) => sum + pos.xAdvance * k, 0) +
+            Math.max(0, count - 1) * tracking;
+          const baseOffset = (clamp(layer.pathOffset ?? 0, 0, 100) / 100) * curveLen;
+          const alignShift =
+            layer.align === 'center'
+              ? (curveLen - totalW) / 2
+              : layer.align === 'right'
+                ? curveLen - totalW
+                : 0;
+          let cursor = baseOffset + alignShift;
+
+          for (let j = 0; j < count; j += 1) {
+            const glyph = run.glyphs[j];
+            const pos = run.positions[j];
+            const adv = pos.xAdvance * k;
+            const mid = cursor + adv / 2;
+
+            let sampledAt = mid;
+            if (curve.closed) {
+              sampledAt = ((mid % curveLen) + curveLen) % curveLen;
+            } else if (mid < 0 || mid > curveLen) {
+              cursor += adv + tracking;
+              continue;
+            }
+
+            const anchorPt = curve.getPointAt(clamp(sampledAt, 0, curveLen));
+            const tangent = curve.getTangentAt(clamp(sampledAt, 0, curveLen));
+            if (anchorPt && tangent) {
+              const rad = Math.atan2(tangent.y, tangent.x);
+              const cos = Math.cos(rad);
+              const sin = Math.sin(rad);
+              const glyphSubpaths = extractGlyphSubpaths(glyph.path, (gx, gy) => {
+                const rx = pos.xOffset * k + gx * k - adv / 2;
+                const ry = -(pos.yOffset * k + gy * k);
+                return localToWorld(layer, {
+                  x: anchorPt.x + rx * cos - ry * sin,
+                  y: anchorPt.y + rx * sin + ry * cos,
+                });
+              });
+              if (glyphSubpaths.length > 0) {
+                worldSubpaths.push(...resolveGlyphOverlaps(scope, glyphSubpaths));
+              }
+            }
+            cursor += adv + tracking;
+          }
+        }
+      }
+    } else {
+      lines.forEach((line, lineIdx) => {
+        if (!line.length) return;
+        const run = font.layout(line);
+        const count = run.glyphs.length;
+        if (count === 0) return;
+
+        const lineWidth =
+          run.positions.reduce((sum, pos) => sum + pos.xAdvance * k, 0) +
+          Math.max(0, count - 1) * tracking;
+
+        let penX =
+          layer.align === 'center'
+            ? -lineWidth / 2
+            : layer.align === 'right'
+              ? -lineWidth
+              : 0;
+        const baselineY = layer.fontSize * 0.85 + lineIdx * step;
+
+        for (let j = 0; j < count; j++) {
+          const glyph = run.glyphs[j];
+          const pos = run.positions[j];
+          const originX = penX + pos.xOffset * k;
+          const originY = baselineY - pos.yOffset * k;
+
+          const glyphSubpaths = extractGlyphSubpaths(glyph.path, (gx, gy) =>
+            localToWorld(layer, {
+              x: originX + gx * k,
+              y: originY - gy * k,
+            })
+          );
+          if (glyphSubpaths.length > 0) {
+            worldSubpaths.push(...resolveGlyphOverlaps(scope, glyphSubpaths));
+          }
+          penX += pos.xAdvance * k + tracking;
+        }
+      });
+    }
   } finally {
     project.remove();
   }

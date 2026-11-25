@@ -3,12 +3,14 @@ import {
   toggleAnchorSmooth,
   updatePathSubpaths,
 } from '../../core/commands';
+import { findLayerById, getLayerWorldMatrix } from '../../core/layerTree';
 import {
+  applyMatrixToPoint,
+  applyMatrixToVector,
   cloneSubPaths,
-  localToWorld,
+  invertMatrix,
   snapVector45,
-  worldToLocal,
-  worldVectorToLocal,
+  type Matrix2D,
 } from '../../core/math';
 import { useEditorStore } from '../../core/store';
 import type { PathLayer, Point2D, SubPath } from '../../core/types';
@@ -28,6 +30,7 @@ type NodeDragState =
   | {
       kind: 'anchor';
       layer: PathLayer;
+      invWorldM: Matrix2D;
       subpathIndex: number;
       anchorIndex: number;
       initialAnchorWorld: Point2D;
@@ -37,6 +40,7 @@ type NodeDragState =
   | {
       kind: 'handleIn' | 'handleOut';
       layer: PathLayer;
+      invWorldM: Matrix2D;
       subpathIndex: number;
       anchorIndex: number;
       anchorWorld: Point2D;
@@ -70,11 +74,12 @@ function findNodeHitInOverlay(
 
 function getActiveEditablePathLayer(): PathLayer | null {
   const state = useEditorStore.getState();
-  const selectedSet = new Set(state.selectedIds);
-  const candidates = state.scene.layers.filter(
-    (l): l is PathLayer =>
-      l.type === 'path' && selectedSet.has(l.id) && l.visible && !l.locked
-  );
+  const candidates = state.selectedIds
+    .map((id) => findLayerById(state.scene.layers, id))
+    .filter(
+      (l): l is PathLayer =>
+        l !== null && l.type === 'path' && l.visible && !l.locked
+    );
   if (candidates.length === 0) return null;
   if (state.selectedNode) {
     const preferred = candidates.find(
@@ -155,7 +160,9 @@ export function createNodeTool(): CanvasToolController {
               anchorIndex: hitNode.anchorIndex,
             });
 
-            const anchorWorld = localToWorld(targetLayer, {
+            const worldM = getLayerWorldMatrix(state.scene.layers, targetLayer.id);
+            const invWorldM = invertMatrix(worldM);
+            const anchorWorld = applyMatrixToPoint(worldM, {
               x: anchor.x,
               y: anchor.y,
             });
@@ -164,6 +171,7 @@ export function createNodeTool(): CanvasToolController {
               drag = {
                 kind: 'anchor',
                 layer: targetLayer,
+                invWorldM,
                 subpathIndex: hitNode.subpathIndex,
                 anchorIndex: hitNode.anchorIndex,
                 initialAnchorWorld: anchorWorld,
@@ -178,6 +186,7 @@ export function createNodeTool(): CanvasToolController {
             drag = {
               kind: hitNode.kind,
               layer: targetLayer,
+              invWorldM,
               subpathIndex: hitNode.subpathIndex,
               anchorIndex: hitNode.anchorIndex,
               anchorWorld,
@@ -209,20 +218,23 @@ export function createNodeTool(): CanvasToolController {
             );
 
             if (inserted) {
-              const updatedLayer = useEditorStore
-                .getState()
-                .scene.layers.find((l): l is PathLayer => l.id === targetLayer.id);
+              const nextLayers = useEditorStore.getState().scene.layers;
+              const rawUpdated = findLayerById(nextLayers, targetLayer.id);
+              const updatedLayer =
+                rawUpdated?.type === 'path' ? rawUpdated : undefined;
               const insertedAnchor =
                 updatedLayer?.subpaths[inserted.subpathIndex]?.anchors[
                   inserted.anchorIndex
                 ];
               if (updatedLayer && insertedAnchor) {
+                const worldM = getLayerWorldMatrix(nextLayers, updatedLayer.id);
                 drag = {
                   kind: 'anchor',
                   layer: updatedLayer,
+                  invWorldM: invertMatrix(worldM),
                   subpathIndex: inserted.subpathIndex,
                   anchorIndex: inserted.anchorIndex,
-                  initialAnchorWorld: localToWorld(updatedLayer, {
+                  initialAnchorWorld: applyMatrixToPoint(worldM, {
                     x: insertedAnchor.x,
                     y: insertedAnchor.y,
                   }),
@@ -276,7 +288,7 @@ export function createNodeTool(): CanvasToolController {
           x: drag.initialAnchorWorld.x + delta.x,
           y: drag.initialAnchorWorld.y + delta.y,
         };
-        const localPt = worldToLocal(drag.layer, targetWorld);
+        const localPt = applyMatrixToPoint(drag.invWorldM, targetWorld);
         anchor.x = localPt.x;
         anchor.y = localPt.y;
       } else {
@@ -289,7 +301,7 @@ export function createNodeTool(): CanvasToolController {
         }
         drag.hasMoved = true;
 
-        const localVec = worldVectorToLocal(drag.layer, vecWorld);
+        const localVec = applyMatrixToVector(drag.invWorldM, vecWorld);
         if (drag.kind === 'handleIn') {
           anchor.handleIn = { x: localVec.x, y: localVec.y };
         } else {

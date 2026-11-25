@@ -1,6 +1,9 @@
+import { findArtboardAtPoint } from '../../core/artboards';
 import { updateLayers } from '../../core/commands';
+import { findLayerById } from '../../core/layerTree';
+import { getPrimaryColor } from '../../core/paint';
 import { useEditorStore } from '../../core/store';
-import type { PathLayer, Point2D, StrokeStyle } from '../../core/types';
+import type { Layer, PathLayer, Point2D, StrokeStyle } from '../../core/types';
 import { findTopLayerAtPoint } from './selectTool';
 import type { CanvasToolController, ToolContext, ToolPointerEvent } from './types';
 
@@ -46,16 +49,30 @@ export function createEyedropperTool(opts?: {
       const state = useEditorStore.getState();
       const hitLayer = findTopLayerAtPoint(ctx, event.point, undefined, {
         includeLocked: true,
+        deep: true,
       });
 
       let sampled: string | null = null;
       if (hitLayer) {
         if (hitLayer.type === 'path') {
-          sampled = event.altKey
+          const preferredPaint = event.altKey
             ? hitLayer.stroke?.color ?? hitLayer.fill
             : hitLayer.fill ?? hitLayer.stroke?.color ?? null;
+          if (typeof preferredPaint === 'string') {
+            sampled = preferredPaint;
+          } else if (preferredPaint) {
+            sampled =
+              sampleCanvasPixelHex(ctx, event.point) ??
+              getPrimaryColor(preferredPaint);
+          }
         } else if (hitLayer.type === 'text') {
-          sampled = hitLayer.fill;
+          if (typeof hitLayer.fill === 'string') {
+            sampled = hitLayer.fill;
+          } else {
+            sampled =
+              sampleCanvasPixelHex(ctx, event.point) ??
+              getPrimaryColor(hitLayer.fill);
+          }
         }
       }
 
@@ -63,22 +80,18 @@ export function createEyedropperTool(opts?: {
         sampled = sampleCanvasPixelHex(ctx, event.point);
       }
 
-      if (
-        !sampled &&
-        event.point.x >= 0 &&
-        event.point.x <= state.scene.width &&
-        event.point.y >= 0 &&
-        event.point.y <= state.scene.height
-      ) {
-        sampled = state.scene.background || '#ffffff';
+      if (!sampled) {
+        const ab = findArtboardAtPoint(state.scene, event.point);
+        if (ab) {
+          sampled = ab.background || '#ffffff';
+        }
       }
 
       if (!sampled) return;
 
-      const selectedSet = new Set(state.selectedIds);
-      const unlockedSelected = state.scene.layers.filter(
-        (l) => selectedSet.has(l.id) && !l.locked
-      );
+      const unlockedSelected = state.selectedIds
+        .map((id) => findLayerById(state.scene.layers, id))
+        .filter((l): l is Layer => l !== null && !l.locked);
       const targetMode: 'fill' | 'stroke' = event.altKey ? 'stroke' : 'fill';
 
       if (targetMode === 'stroke') {

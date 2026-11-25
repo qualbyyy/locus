@@ -202,6 +202,8 @@ export function Slider({
   max,
   step = 1,
   onChange,
+  onChangeStart,
+  onChangeEnd,
   className = '',
   ariaLabel,
   disabled,
@@ -211,6 +213,8 @@ export function Slider({
   max: number;
   step?: number;
   onChange: (value: number) => void;
+  onChangeStart?: () => void;
+  onChangeEnd?: () => void;
   className?: string;
   ariaLabel?: string;
   disabled?: boolean;
@@ -268,6 +272,7 @@ export function Slider({
         event.preventDefault();
         event.currentTarget.setPointerCapture(event.pointerId);
         setDragging(true);
+        onChangeStart?.();
         updateFromClientX(event.clientX);
       }}
       onPointerMove={(event) => {
@@ -278,9 +283,17 @@ export function Slider({
         if (event.currentTarget.hasPointerCapture(event.pointerId)) {
           event.currentTarget.releasePointerCapture(event.pointerId);
         }
-        setDragging(false);
+        if (dragging) {
+          setDragging(false);
+          onChangeEnd?.();
+        }
       }}
-      onPointerCancel={() => setDragging(false)}
+      onPointerCancel={() => {
+        if (dragging) {
+          setDragging(false);
+          onChangeEnd?.();
+        }
+      }}
       className={`relative flex h-5 w-full cursor-pointer items-center rounded outline-none focus-visible:ring-1 focus-visible:ring-paper-accent ${
         disabled ? 'cursor-default opacity-50' : ''
       } ${className}`}

@@ -1,21 +1,33 @@
 import paper from 'paper/dist/paper-core';
 import { inferImageMimeType, registerAssetFromBytes } from '../core/assets';
 import { createLayerId } from '../core/commands/helpers';
-import { BUILTIN_FONTS } from '../core/fonts';
+import { BUILTIN_FONTS, getProjectFonts } from '../core/fonts';
 import {
   applyMatrixToPoint,
   centerSubPathsAtOrigin,
   clamp,
   computeCombinedWorldBBox,
+  computeLayerLocalBBox,
   computeSubPathsBBox,
   type Matrix2D,
 } from '../core/math';
+import {
+  isBlendMode,
+  localPointToNormalized,
+  normalizeGradientStops,
+  sanitizeDashArray,
+} from '../core/paint';
 import type {
   AnchorPoint,
-  BuiltinFontFamily,
+  BBox,
+  BlendMode,
+  FontFamily,
+  GradientStop,
   ImageLayer,
   Layer,
+  Paint,
   PathLayer,
+  Point2D,
   StrokeStyle,
   SubPath,
   TextLayer,
@@ -51,6 +63,7 @@ interface ImportedItemMeta {
   lineDeltaY?: number;
   firstTspanOffsetX?: number;
   firstTspanOffsetY?: number;
+  blendMode?: BlendMode;
   svgImage?: SvgImageMeta;
 }
 
@@ -61,6 +74,7 @@ interface PendingImage {
   scaleX: number;
   scaleY: number;
   opacity: number;
+  blendMode?: BlendMode;
   visible: boolean;
   name: string;
   clipMaskId?: string;
@@ -449,6 +463,105 @@ function extractPaperColor(
   return { hex, alpha };
 }
 
+function extractPaperPaint(
+  color: paper.Color | null | undefined,
+  worldMatrix: paper.Matrix,
+  originOffset: Point2D,
+  localBox: BBox,
+  onFallback?: () => void
+): { paint: Paint; alpha: number } | null {
+  if (!color) return null;
+  if (
+    color.type === 'gradient' &&
+    color.gradient &&
+    color.origin &&
+    color.destination
+  ) {
+    const rawStops = color.gradient.stops ?? [];
+    const stops: GradientStop[] = [];
+    for (let i = 0; i < rawStops.length; i += 1) {
+      const stop = rawStops[i];
+      const stopColor =
+        typeof stop.color === 'string'
+          ? null
+          : stop.color;
+      if (!stopColor) continue;
+      const alpha = clamp(
+        Number.isFinite(stopColor.alpha) ? stopColor.alpha : 1,
+        0,
+        1
+      );
+      const hex = `#${toHexByte(stopColor.red ?? 0)}${toHexByte(stopColor.green ?? 0)}${toHexByte(stopColor.blue ?? 0)}`;
+      const offset = Number.isFinite(stop.offset)
+        ? clamp(stop.offset, 0, 1)
+        : i / Math.max(1, rawStops.length - 1);
+      stops.push({
+        offset,
+        color: hex,
+        ...(alpha < 0.999 ? { opacity: Number(alpha.toFixed(3)) } : {}),
+      });
+    }
+
+    if (stops.length >= 2) {
+      const worldOrigin = worldMatrix.transform(color.origin);
+      const worldDest = worldMatrix.transform(color.destination);
+      const start = localPointToNormalized(
+        {
+          x: worldOrigin.x - originOffset.x,
+          y: worldOrigin.y - originOffset.y,
+        },
+        localBox
+      );
+      const end = localPointToNormalized(
+        {
+          x: worldDest.x - originOffset.x,
+          y: worldDest.y - originOffset.y,
+        },
+        localBox
+      );
+      if (
+        Number.isFinite(start.x) &&
+        Number.isFinite(start.y) &&
+        Number.isFinite(end.x) &&
+        Number.isFinite(end.y)
+      ) {
+        return {
+          paint: {
+            kind: color.gradient.radial ? 'radial' : 'linear',
+            stops: normalizeGradientStops(stops),
+            start,
+            end,
+          },
+          alpha: 1,
+        };
+      }
+    }
+  }
+
+  const flat = extractPaperColor(color, onFallback);
+  return flat ? { paint: flat.hex, alpha: flat.alpha } : null;
+}
+
+function readNodeBlendMode(node: SVGElement): BlendMode | undefined {
+  const inlineProp = node.style?.mixBlendMode?.trim().toLowerCase();
+  if (isBlendMode(inlineProp) && inlineProp !== 'normal') {
+    return inlineProp;
+  }
+  const styleAttr = node.getAttribute('style');
+  if (styleAttr) {
+    const m = styleAttr.match(/mix-blend-mode\s*:\s*([^;]+)/i);
+    const val = m?.[1]?.trim().toLowerCase();
+    if (isBlendMode(val) && val !== 'normal') {
+      return val;
+    }
+  }
+  const attr = node.getAttribute('mix-blend-mode')?.trim().toLowerCase();
+  if (isBlendMode(attr) && attr !== 'normal') {
+    return attr;
+  }
+  return undefined;
+}
+
 function extractWorldSubPath(
   path: paper.Path,
   matrix: paper.Matrix
@@ -526,14 +639,17 @@ function mapLineJoin(raw: string | undefined): StrokeStyle['lineJoin'] {
   return 'round';
 }
 
-function resolveBuiltinFontFamily(raw: string | undefined): BuiltinFontFamily {
+function resolveFontFamily(raw: string | undefined): FontFamily {
   if (!raw) return 'Inter';
   const candidates = raw
     .split(',')
     .map((part) => part.trim().replace(/^["']|["']$/g, '').toLowerCase())
     .filter(Boolean);
 
+  const customFonts = getProjectFonts();
   for (const cand of candidates) {
+    const customMatch = customFonts.find((f) => f.family.toLowerCase() === cand);
+    if (customMatch) return customMatch.family;
     const match = BUILTIN_FONTS.find((f) => f.family.toLowerCase() === cand);
     if (match) return match.family;
   }
@@ -634,6 +750,18 @@ function scaleAndCenterLayers(
           ? {
               ...layer.stroke,
               width: Math.max(0.25, Number((layer.stroke.width * fitScale).toFixed(2))),
+              ...(layer.stroke.dashArray
+                ? {
+                    dashArray: layer.stroke.dashArray.map((d) =>
+                      Math.max(0.25, Number((d * fitScale).toFixed(2)))
+                    ),
+                  }
+                : {}),
+              ...(typeof layer.stroke.dashOffset === 'number'
+                ? {
+                    dashOffset: Number((layer.stroke.dashOffset * fitScale).toFixed(2)),
+                  }
+                : {}),
             }
           : null,
       };
@@ -759,6 +887,7 @@ export async function parseSvgToLayers(
           svgTag,
           svgName: svgName?.trim() || undefined,
           nonScalingStroke: node.getAttribute('vector-effect') === 'non-scaling-stroke',
+          blendMode: readNodeBlendMode(node),
         };
         if (svgTag === 'text') {
           Object.assign(meta, readSvgTextMeta(node));
@@ -779,9 +908,11 @@ export async function parseSvgToLayers(
       item: paper.Item,
       parentMatrix: paper.Matrix,
       effectiveOpacity: number,
+      effectiveBlendMode: BlendMode | undefined,
       effectiveVisible: boolean,
       clipMaskId: string | undefined,
-      asMask: boolean
+      asMask: boolean,
+      inheritedName?: string
     ): PathLayer | null => {
       const worldSubpaths = extractWorldSubPathsFromItem(scope, item, parentMatrix);
       if (!isValidSubPaths(worldSubpaths)) {
@@ -815,14 +946,22 @@ export async function parseSvgToLayers(
         };
       }
 
+      pathCounter += 1;
+      const { subpaths, offset } = centerSubPathsAtOrigin(worldSubpaths);
+      const localBox = computeSubPathsBBox(subpaths);
+
       const fillInfo =
         meta.svgTag === 'line'
           ? null
-          : extractPaperColor(item.fillColor, () =>
+          : extractPaperPaint(item.fillColor, worldMatrix, offset, localBox, () =>
               addWarning('Градиенты упрощены до плоской заливки')
             );
-      const strokeInfo = extractPaperColor(item.strokeColor, () =>
-        addWarning('Градиенты упрощены до плоской обводки')
+      const strokeInfo = extractPaperPaint(
+        item.strokeColor,
+        worldMatrix,
+        offset,
+        localBox,
+        () => addWarning('Градиенты упрощены до плоской обводки')
       );
 
       let stroke: StrokeStyle | null = null;
@@ -833,15 +972,29 @@ export async function parseSvgToLayers(
           const sy = Math.hypot(worldMatrix.c, worldMatrix.d);
           strokeScale = Math.sqrt(sx * sy) || 1;
         }
+        const rawDash = sanitizeDashArray(item.dashArray);
+        const dashArray = rawDash
+          ? rawDash.map((d) => Math.max(0.25, Number((d * strokeScale).toFixed(2))))
+          : undefined;
+        const dashOffset =
+          dashArray &&
+          typeof item.dashOffset === 'number' &&
+          Number.isFinite(item.dashOffset) &&
+          Math.abs(item.dashOffset) > 1e-4
+            ? Number((item.dashOffset * strokeScale).toFixed(2))
+            : undefined;
         stroke = {
-          color: strokeInfo.hex,
+          color: strokeInfo.paint,
           width: Math.max(0.25, Number((item.strokeWidth * strokeScale).toFixed(2))),
           lineCap: mapLineCap(item.strokeCap),
           lineJoin: mapLineJoin(item.strokeJoin),
+          ...(dashArray ? { dashArray } : {}),
+          ...(dashOffset !== undefined ? { dashOffset } : {}),
         };
       }
 
       if (!fillInfo && !stroke) {
+        pathCounter -= 1;
         return null;
       }
 
@@ -850,11 +1003,9 @@ export async function parseSvgToLayers(
           ? Math.min(1, (fillInfo.alpha + strokeInfo.alpha) / 2)
           : (fillInfo?.alpha ?? strokeInfo?.alpha ?? 1);
 
-      pathCounter += 1;
-      const { subpaths, offset } = centerSubPathsAtOrigin(worldSubpaths);
       return {
         id: createLayerId('path'),
-        name: meta.svgName || `Контур ${pathCounter}`,
+        name: meta.svgName || inheritedName || `Контур ${pathCounter}`,
         type: 'path',
         visible: effectiveVisible,
         locked: false,
@@ -864,9 +1015,10 @@ export async function parseSvgToLayers(
         scaleX: 1,
         scaleY: 1,
         opacity: clamp(effectiveOpacity * paintAlpha, 0, 1),
+        ...(effectiveBlendMode ? { blendMode: effectiveBlendMode } : {}),
         subpaths,
         fillRule: item.fillRule === 'evenodd' ? 'evenodd' : 'nonzero',
-        fill: fillInfo ? fillInfo.hex : null,
+        fill: fillInfo ? fillInfo.paint : null,
         stroke,
         ...(clipMaskId ? { clipMaskId } : {}),
       };
@@ -876,14 +1028,19 @@ export async function parseSvgToLayers(
       item: paper.Item,
       parentMatrix: paper.Matrix,
       parentOpacity: number,
+      parentBlendMode: BlendMode | undefined,
       parentVisible: boolean,
       clipMaskId: string | undefined,
       isRootSvgGroup: boolean,
-      targetList: CollectedEntry[]
+      targetList: CollectedEntry[],
+      parentName?: string
     ): void => {
       const worldMatrix = parentMatrix.appended(item.matrix);
       const effectiveOpacity = clamp(parentOpacity * (item.opacity ?? 1), 0, 1);
       const effectiveVisible = parentVisible && item.visible !== false;
+      const itemMeta = (item.data ?? {}) as ImportedItemMeta;
+      const effectiveBlendMode = itemMeta.blendMode ?? parentBlendMode;
+      const resolvedName = itemMeta.svgName || parentName;
 
       if (item instanceof scope.Group) {
         const children = item.children ?? [];
@@ -897,6 +1054,7 @@ export async function parseSvgToLayers(
                 children[i],
                 worldMatrix,
                 effectiveOpacity,
+                effectiveBlendMode,
                 effectiveVisible,
                 clipMaskId,
                 false,
@@ -910,21 +1068,25 @@ export async function parseSvgToLayers(
             children[0],
             worldMatrix,
             1,
+            undefined,
             effectiveVisible,
             clipMaskId,
             true
           );
           if (maskLayer) {
             const maskedChildren: CollectedEntry[] = [];
+            const singleMaskedName = children.length === 2 ? resolvedName : undefined;
             for (let i = 1; i < children.length; i += 1) {
               visit(
                 children[i],
                 worldMatrix,
                 effectiveOpacity,
+                effectiveBlendMode,
                 effectiveVisible,
                 maskLayer.id,
                 false,
-                maskedChildren
+                maskedChildren,
+                singleMaskedName
               );
             }
             if (maskedChildren.length > 0) {
@@ -934,15 +1096,19 @@ export async function parseSvgToLayers(
           }
         }
 
+        const singleChildName =
+          !isRootSvgGroup && children.length === 1 ? resolvedName : undefined;
         for (const child of children) {
           visit(
             child,
             worldMatrix,
             effectiveOpacity,
+            effectiveBlendMode,
             effectiveVisible,
             clipMaskId,
             false,
-            targetList
+            targetList,
+            singleChildName
           );
         }
         return;
@@ -957,9 +1123,11 @@ export async function parseSvgToLayers(
           item,
           parentMatrix,
           effectiveOpacity,
+          effectiveBlendMode,
           effectiveVisible,
           clipMaskId,
-          false
+          false,
+          parentName
         );
         if (layer) {
           targetList.push(layer);
@@ -995,18 +1163,27 @@ export async function parseSvgToLayers(
         const topPt = worldMatrix.transform(
           new scope.Point(offsetX, offsetY - rawFontSize * 0.85)
         );
-        const fillInfo = extractPaperColor(item.fillColor, () =>
-          addWarning('Градиенты в тексте упрощены до плоского цвета')
-        );
         const lineHeight =
           meta.lineDeltaY && meta.lineDeltaY > 0
             ? clamp(Number((meta.lineDeltaY / rawFontSize).toFixed(2)), 0.8, 3)
             : 1.2;
+        const fontFamily = resolveFontFamily(item.fontFamily);
+        const fontWeight = resolveFontWeight(item.fontWeight);
+        const align =
+          item.justification === 'center'
+            ? 'center'
+            : item.justification === 'right'
+              ? 'right'
+              : 'left';
+        const letterSpacing =
+          typeof meta.letterSpacing === 'number' && meta.letterSpacing !== 0
+            ? Number((meta.letterSpacing * bakedScale).toFixed(2))
+            : undefined;
 
         textCounter += 1;
-        const textLayer: TextLayer = {
+        const textLayerBase: TextLayer = {
           id: createLayerId('txt'),
-          name: meta.svgName || `Текст ${textCounter}`,
+          name: meta.svgName || parentName || `Текст ${textCounter}`,
           type: 'text',
           visible: effectiveVisible,
           locked: false,
@@ -1015,23 +1192,30 @@ export async function parseSvgToLayers(
           rotation: Number(rot.toFixed(3)),
           scaleX: Number(scaleX.toFixed(4)),
           scaleY: Number(scaleY.toFixed(4)),
-          opacity: clamp(effectiveOpacity * (fillInfo?.alpha ?? 1), 0, 1),
+          opacity: effectiveOpacity,
+          ...(effectiveBlendMode ? { blendMode: effectiveBlendMode } : {}),
           content,
           fontSize,
-          fontFamily: resolveBuiltinFontFamily(item.fontFamily),
-          fontWeight: resolveFontWeight(item.fontWeight),
+          fontFamily,
+          fontWeight,
           lineHeight,
-          ...(typeof meta.letterSpacing === 'number' && meta.letterSpacing !== 0
-            ? { letterSpacing: Number((meta.letterSpacing * bakedScale).toFixed(2)) }
-            : {}),
-          fill: fillInfo?.hex ?? '#1c1b1a',
-          align:
-            item.justification === 'center'
-              ? 'center'
-              : item.justification === 'right'
-                ? 'right'
-                : 'left',
+          ...(letterSpacing !== undefined ? { letterSpacing } : {}),
+          fill: '#1c1b1a',
+          align,
           ...(clipMaskId ? { clipMaskId } : {}),
+        };
+        const textLocalBox = computeLayerLocalBBox(textLayerBase);
+        const fillInfo = extractPaperPaint(
+          item.fillColor,
+          worldMatrix,
+          { x: topPt.x, y: topPt.y },
+          textLocalBox,
+          () => addWarning('Градиенты в тексте упрощены до плоского цвета')
+        );
+        const textLayer: TextLayer = {
+          ...textLayerBase,
+          opacity: clamp(effectiveOpacity * (fillInfo?.alpha ?? 1), 0, 1),
+          fill: fillInfo?.paint ?? '#1c1b1a',
         };
         targetList.push(textLayer);
         return;
@@ -1062,8 +1246,9 @@ export async function parseSvgToLayers(
           scaleX,
           scaleY,
           opacity: effectiveOpacity,
+          blendMode: effectiveBlendMode,
           visible: effectiveVisible,
-          name: meta.svgName || `Изображение ${imageCounter}`,
+          name: meta.svgName || parentName || `Изображение ${imageCounter}`,
           clipMaskId,
         });
         targetList.push({ __pendingImageIndex: idx });
@@ -1075,6 +1260,7 @@ export async function parseSvgToLayers(
         imported,
         new scope.Matrix(),
         1,
+        undefined,
         true,
         undefined,
         true,
@@ -1123,6 +1309,7 @@ export async function parseSvgToLayers(
       scaleX: Number(sx.toFixed(4)),
       scaleY: Number(sy.toFixed(4)),
       opacity: pending.opacity,
+      ...(pending.blendMode ? { blendMode: pending.blendMode } : {}),
       assetId: asset.id,
       width: asset.naturalWidth,
       height: asset.naturalHeight,

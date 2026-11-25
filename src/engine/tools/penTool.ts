@@ -1,5 +1,13 @@
 import { addLayer, createLayerId } from '../../core/commands';
-import { centerSubPathsAtOrigin, snapVector45 } from '../../core/math';
+import { flattenLayers, getScopeWorldMatrix } from '../../core/layerTree';
+import {
+  applyMatrixToPoint,
+  applyMatrixToVector,
+  centerSubPathsAtOrigin,
+  invertMatrix,
+  snapVector45,
+} from '../../core/math';
+import { clonePaint, cloneStroke } from '../../core/paint';
 import { useEditorStore } from '../../core/store';
 import type { AnchorPoint, PathLayer, Point2D, StrokeStyle } from '../../core/types';
 import type { CanvasToolController, ToolContext, ToolPointerEvent } from './types';
@@ -51,14 +59,28 @@ export function createPenTool(): CanvasToolController {
     }
 
     const state = useEditorStore.getState();
+    const invScope = invertMatrix(
+      getScopeWorldMatrix(state.scene.layers, state.editingGroupId)
+    );
+    const scopedAnchors = anchors.map((a) => {
+      const pt = applyMatrixToPoint(invScope, { x: a.x, y: a.y });
+      return {
+        x: pt.x,
+        y: pt.y,
+        handleIn: applyMatrixToVector(invScope, a.handleIn),
+        handleOut: applyMatrixToVector(invScope, a.handleOut),
+        smooth: a.smooth,
+      };
+    });
     const { subpaths, offset } = centerSubPathsAtOrigin([
-      { closed, anchors },
+      { closed, anchors: scopedAnchors },
     ]);
-    const pathCount = state.scene.layers.filter((l) => l.type === 'path').length + 1;
+    const pathCount =
+      flattenLayers(state.scene.layers).filter((l) => l.type === 'path').length + 1;
 
     const stroke =
-      state.defaultStroke ?? (closed ? null : { ...DEFAULT_PEN_STROKE });
-    const fill = closed ? state.defaultFill : null;
+      cloneStroke(state.defaultStroke) ?? (closed ? null : { ...DEFAULT_PEN_STROKE });
+    const fill = closed ? clonePaint(state.defaultFill) : null;
 
     const layer: PathLayer = {
       id: createLayerId('path'),
@@ -75,11 +97,11 @@ export function createPenTool(): CanvasToolController {
       subpaths,
       fillRule: 'nonzero',
       fill,
-      stroke: stroke ? { ...stroke } : null,
+      stroke,
     };
 
     reset(ctx);
-    addLayer(layer);
+    addLayer(layer, { parentGroupId: state.editingGroupId });
     return true;
   };
 

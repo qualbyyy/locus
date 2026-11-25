@@ -46,7 +46,10 @@ export function InspectorVectorOps({
   );
 
   return (
-    <div className="flex flex-col gap-2 border-t border-paper-border pt-2.5">
+    <div
+      data-tour="inspector.vectorOps"
+      className="flex flex-col gap-2 border-t border-paper-border pt-2.5"
+    >
       <div className="flex items-center justify-between">
         <span className="text-[11px] font-medium text-paper-muted">
           Операции с контуром
@@ -186,7 +189,10 @@ export function InspectorMultiVectorOps({
   onCombineCompound: (layerIds: string[]) => void;
 }) {
   return (
-    <div className="flex flex-col gap-1.5 border-t border-paper-border pt-2.5">
+    <div
+      data-tour="inspector.vectorOps"
+      className="flex flex-col gap-1.5 border-t border-paper-border pt-2.5"
+    >
       <span className="text-[11px] font-medium text-paper-muted">
         Булевы операции и контуры
       </span>

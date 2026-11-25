@@ -6,7 +6,9 @@ import {
 } from 'lucide-react';
 import type { AlignMode } from '../../core/commands';
 import { clamp } from '../../core/math';
-import type { Layer } from '../../core/types';
+import { BLEND_MODE_OPTIONS } from '../../core/paint';
+import type { BlendMode, Layer } from '../../core/types';
+import { Select } from '../controls';
 import { AlignSection, NumberField } from '../InspectorControls';
 
 interface InspectorTransformProps {
@@ -35,7 +37,7 @@ export function InspectorTransform({
   onReorderLayer,
 }: InspectorTransformProps) {
   return (
-    <>
+    <div data-tour="inspector.transform" className="flex flex-col gap-3">
       <div className="grid grid-cols-2 gap-2">
         <NumberField
           label="X"
@@ -84,6 +86,18 @@ export function InspectorTransform({
             onUpdateLayers([layer.id], {
               scaleY: Math.abs(scaleY) < 0.02 ? 0.02 : scaleY,
             })
+          }
+        />
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <span className="text-[11px] text-paper-muted">Режим наложения</span>
+        <Select
+          ariaLabel="Режим наложения"
+          value={layer.blendMode ?? 'normal'}
+          options={BLEND_MODE_OPTIONS}
+          onChange={(mode) =>
+            onUpdateLayers([layer.id], { blendMode: mode as BlendMode })
           }
         />
       </div>
@@ -138,6 +152,6 @@ export function InspectorTransform({
           </button>
         </div>
       </div>
-    </>
+    </div>
   );
 }

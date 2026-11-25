@@ -1,4 +1,13 @@
-export type ToolType = 'select' | 'node' | 'pen' | 'blob' | 'text' | 'eyedropper';
+export type ToolType =
+  | 'select'
+  | 'node'
+  | 'pen'
+  | 'blob'
+  | 'text'
+  | 'eyedropper'
+  | 'shapeBuilder'
+  | 'pencil'
+  | 'knife';
 
 export type SmartShapePreset = 'blob' | 'ellipse' | 'rect' | 'polygon' | 'star';
 
@@ -28,11 +37,47 @@ export interface SubPath {
   anchors: AnchorPoint[]; // В локальных координатах относительно центра (0, 0) PathLayer
 }
 
+export type BlendMode =
+  | 'normal'
+  | 'multiply'
+  | 'screen'
+  | 'overlay'
+  | 'darken'
+  | 'lighten'
+  | 'color-dodge'
+  | 'color-burn'
+  | 'hard-light'
+  | 'soft-light'
+  | 'difference'
+  | 'exclusion'
+  | 'hue'
+  | 'saturation'
+  | 'color'
+  | 'luminosity';
+
+export interface GradientStop {
+  offset: number;   // 0..1
+  color: string;    // '#rrggbb'
+  opacity?: number; // 0..1, по умолчанию 1
+}
+
+export interface GradientPaint {
+  kind: 'linear' | 'radial';
+  stops: GradientStop[]; // >= 2, отсортированы по offset
+  /** Нормализованные координаты (0..1) относительно локального bbox слоя (могут выходить за 0..1). */
+  start: Point2D;
+  end: Point2D;
+}
+
+export type Paint = string | GradientPaint;
+
 export interface StrokeStyle {
-  color: string;
+  color: Paint;
   width: number;
   lineCap?: 'butt' | 'round' | 'square';
   lineJoin?: 'miter' | 'round' | 'bevel';
+  dashArray?: number[];
+  dashOffset?: number;
 }
 
 export type WarpStyle =
@@ -94,7 +139,7 @@ export interface LayerEffects {
 export interface BaseLayer {
   id: string;
   name: string;
-  type: 'path' | 'text' | 'image';
+  type: 'path' | 'text' | 'image' | 'group';
   visible: boolean;
   locked: boolean;
   x: number;
@@ -103,6 +148,7 @@ export interface BaseLayer {
   scaleX: number;
   scaleY: number;
   opacity: number;    // 0..1
+  blendMode?: BlendMode;
   clipMaskId?: string; // ID PathLayer, который обрезает этот слой
   effects?: LayerEffects;
 }
@@ -111,7 +157,7 @@ export interface PathLayer extends BaseLayer {
   type: 'path';
   subpaths: SubPath[];
   fillRule: 'nonzero' | 'evenodd';
-  fill: string | null;
+  fill: Paint | null;
   stroke: StrokeStyle | null;
   isClipMask?: boolean;
 }
@@ -124,16 +170,21 @@ export type BuiltinFontFamily =
   | 'JetBrains Mono'
   | 'Unbounded';
 
+export type FontFamily = BuiltinFontFamily | (string & {});
+
 export interface TextLayer extends BaseLayer {
   type: 'text';
   content: string;
   fontSize: number;
-  fontFamily: BuiltinFontFamily;
+  fontFamily: FontFamily;
   fontWeight: 400 | 700;
   lineHeight: number;     // По умолчанию 1.2
   letterSpacing?: number; // px, по умолчанию 0
-  fill: string;
+  fill: Paint;
   align: 'left' | 'center' | 'right';
+  pathId?: string;
+  pathOffset?: number;    // 0..100%
+  pathFlip?: boolean;
 }
 
 export interface ImageLayer extends BaseLayer {
@@ -143,7 +194,28 @@ export interface ImageLayer extends BaseLayer {
   height: number;
 }
 
-export type Layer = PathLayer | TextLayer | ImageLayer;
+export interface GroupLayer extends BaseLayer {
+  type: 'group';
+  children: Layer[];
+}
+
+export type Layer = PathLayer | TextLayer | ImageLayer | GroupLayer;
+
+export interface Artboard {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  background: string;
+}
+
+export interface Guide {
+  id: string;
+  orientation: 'horizontal' | 'vertical';
+  position: number;
+}
 
 export interface Scene {
   version: 1;
@@ -152,6 +224,8 @@ export interface Scene {
   height: number;
   dpi: number;       // 72 по умолчанию, 300 для A4 Print
   background: string;
+  artboards?: Artboard[];
+  guides?: Guide[];
   layers: Layer[];   // Порядок отрисовки: снизу вверх (0 = самый нижний слой)
 }
 

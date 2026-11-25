@@ -1,15 +1,31 @@
+import { extractArtboardScene, getActiveArtboard } from '../core/artboards';
 import { getAssetImageElement } from '../core/assets';
 import {
-  computeCombinedWorldBBox,
+  findLayerById,
+  flattenLayers,
+  getParentWorldMatrix,
+} from '../core/layerTree';
+import {
+  IDENTITY_MATRIX,
+  computeLayerBBoxWithMatrix,
   computeLayerLocalBBox,
   computeSubPathsBBox,
+  degToRad,
   getLayerMatrix,
   type Matrix2D,
 } from '../core/math';
+import {
+  normalizeGradientStops,
+  resolveGradientEndpoints,
+  sanitizeDashArray,
+} from '../core/paint';
 import type {
   BBox,
+  BlendMode,
+  GroupLayer,
   Layer,
   LayerEffects,
+  Paint,
   PathLayer,
   Scene,
   SubPath,
@@ -21,6 +37,11 @@ import {
   hasRasterEffects,
   resolveEffectivePathGeometry,
 } from '../engine/effects';
+import {
+  computeTextOnPathLocalBBox,
+  computeTextOnPathPlacements,
+  resolveHostPathLayer,
+} from '../engine/textOnPath';
 import { subPathToCubicSegments } from './pathData';
 
 export interface RasterizeOptions {
@@ -36,6 +57,7 @@ export interface RasterExportOptions {
   backgroundColor: string;
   scope: 'artboard' | 'selection';
   selectedIds?: string[];
+  artboardId?: string;
 }
 
 export interface CompositeRasterOptions {
@@ -44,14 +66,12 @@ export interface CompositeRasterOptions {
   backgroundColor?: string;
   layerIds?: string[];
   padding?: number;
+  artboardId?: string;
 }
 
-/** Доступен ли реальный 2D-canvas (в jsdom — нет). */
+/** Доступен ли реальный 2D-canvas. */
 export function isCanvas2dSupported(): boolean {
   if (typeof document === 'undefined') return false;
-  if (typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent)) {
-    return false;
-  }
   try {
     const c = document.createElement('canvas');
     c.width = 1;
@@ -119,15 +139,42 @@ function applyEffectsToContext(ctx: CanvasRenderingContext2D, effects?: LayerEff
   }
 }
 
+function toCanvasCompositeOp(mode?: BlendMode): GlobalCompositeOperation {
+  if (!mode || mode === 'normal') return 'source-over';
+  return mode as GlobalCompositeOperation;
+}
+
+function toCanvasPaint(
+  ctx: CanvasRenderingContext2D,
+  paint: Paint,
+  box: BBox
+): string | CanvasGradient {
+  if (typeof paint === 'string') return paint;
+  const { origin, destination, radius } = resolveGradientEndpoints(paint, box);
+  const grad =
+    paint.kind === 'radial'
+      ? ctx.createRadialGradient(origin.x, origin.y, 0, origin.x, origin.y, radius)
+      : ctx.createLinearGradient(origin.x, origin.y, destination.x, destination.y);
+  for (const stop of normalizeGradientStops(paint.stops)) {
+    grad.addColorStop(stop.offset, colorWithOpacity(stop.color, stop.opacity ?? 1));
+  }
+  return grad;
+}
+
 export function paintPathLayer(ctx: CanvasRenderingContext2D, layer: PathLayer): void {
   const { subpaths, extrudeFaces } = resolveEffectivePathGeometry(layer);
   const hasFill = Boolean(layer.fill);
   const hasStroke = Boolean(layer.stroke && layer.stroke.width > 0);
   if (!hasFill && !hasStroke && extrudeFaces.length === 0) return;
 
+  const localBox = computeSubPathsBBox(subpaths);
+
   ctx.save();
   applyMatrix(ctx, getLayerMatrix(layer));
-  ctx.globalAlpha = layer.opacity;
+  ctx.globalAlpha = ctx.globalAlpha * layer.opacity;
+  if (layer.blendMode && layer.blendMode !== 'normal') {
+    ctx.globalCompositeOperation = toCanvasCompositeOp(layer.blendMode);
+  }
   applyEffectsToContext(ctx, layer.effects);
 
   for (const face of extrudeFaces) {
@@ -138,27 +185,61 @@ export function paintPathLayer(ctx: CanvasRenderingContext2D, layer: PathLayer):
 
   buildPath(ctx, subpaths);
   if (hasFill) {
-    ctx.fillStyle = layer.fill as string;
+    ctx.fillStyle = toCanvasPaint(ctx, layer.fill as Paint, localBox);
     ctx.fill(layer.fillRule === 'evenodd' ? 'evenodd' : 'nonzero');
   }
   if (hasStroke) {
-    ctx.strokeStyle = layer.stroke!.color;
+    ctx.strokeStyle = toCanvasPaint(ctx, layer.stroke!.color, localBox);
     ctx.lineWidth = layer.stroke!.width;
     ctx.lineCap = layer.stroke!.lineCap ?? 'round';
     ctx.lineJoin = layer.stroke!.lineJoin ?? 'round';
+    const dash = sanitizeDashArray(layer.stroke!.dashArray);
+    ctx.setLineDash(dash ?? []);
+    ctx.lineDashOffset = layer.stroke!.dashOffset ?? 0;
     ctx.stroke();
   }
   ctx.restore();
 }
 
-export function paintTextLayer(ctx: CanvasRenderingContext2D, layer: TextLayer): void {
+export function paintTextLayer(
+  ctx: CanvasRenderingContext2D,
+  layer: TextLayer,
+  sceneLayers?: Layer[]
+): void {
+  const hostPath = sceneLayers ? resolveHostPathLayer(sceneLayers, layer.pathId) : null;
+  const localBox = hostPath
+    ? computeTextOnPathLocalBBox(layer, hostPath, sceneLayers)
+    : computeLayerLocalBBox(layer);
   ctx.save();
   applyMatrix(ctx, getLayerMatrix(layer));
-  ctx.globalAlpha = layer.opacity;
+  ctx.globalAlpha = ctx.globalAlpha * layer.opacity;
+  if (layer.blendMode && layer.blendMode !== 'normal') {
+    ctx.globalCompositeOperation = toCanvasCompositeOp(layer.blendMode);
+  }
   applyEffectsToContext(ctx, layer.effects);
-  ctx.fillStyle = layer.fill;
+  ctx.fillStyle = toCanvasPaint(ctx, layer.fill, localBox);
   ctx.textBaseline = 'alphabetic';
   ctx.font = `${layer.fontWeight} ${layer.fontSize}px "${layer.fontFamily}", sans-serif`;
+
+  if (hostPath) {
+    const placements = computeTextOnPathPlacements(
+      layer,
+      hostPath,
+      (ch) => Math.max(layer.fontSize * 0.25, ctx.measureText(ch).width),
+      sceneLayers
+    );
+    ctx.textAlign = 'center';
+    for (const p of placements) {
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(degToRad(p.angleDeg));
+      ctx.fillText(p.char, 0, 0);
+      ctx.restore();
+    }
+    ctx.restore();
+    return;
+  }
+
   ctx.textAlign = layer.align;
   const lines = (layer.content || '').split('\n');
   lines.forEach((line, i) => {
@@ -199,7 +280,10 @@ export async function paintImageLayer(
   if (!img) return;
   ctx.save();
   applyMatrix(ctx, getLayerMatrix(layer));
-  ctx.globalAlpha = layer.opacity;
+  ctx.globalAlpha = ctx.globalAlpha * layer.opacity;
+  if (layer.blendMode && layer.blendMode !== 'normal') {
+    ctx.globalCompositeOperation = toCanvasCompositeOp(layer.blendMode);
+  }
   applyEffectsToContext(ctx, layer.effects);
   ctx.drawImage(img, -layer.width / 2, -layer.height / 2, layer.width, layer.height);
   ctx.restore();
@@ -227,91 +311,16 @@ export function clampBBoxToArtboard(box: BBox, scene: Scene): { left: number; to
   return { left, top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
 }
 
-/**
- * Растеризует один слой (без клип-масок) на offscreen canvas размером с его bbox.
- * Возвращает `null`, если bbox пуст или за пределами артборда.
- */
-export async function rasterizeLayer(
-  layer: Layer,
-  scene: Scene,
-  bboxOf: (l: Layer) => BBox,
-  scale = 1
-): Promise<RasterizedLayer | null> {
-  const box = clampBBoxToArtboard(bboxOf(layer), scene);
-  if (box.width <= 0 || box.height <= 0) return null;
-
-  const canvas = createCanvas(box.width * scale, box.height * scale);
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return null;
-
-  ctx.scale(scale, scale);
-  ctx.translate(-box.left, -box.top);
-
-  if (layer.type === 'path') paintPathLayer(ctx, layer);
-  else if (layer.type === 'text') paintTextLayer(ctx, layer);
-  else await paintImageLayer(ctx, layer);
-
-  return { canvas, left: box.left, top: box.top, width: box.width, height: box.height };
-}
-
-async function defaultPaintLayer(ctx: CanvasRenderingContext2D, layer: Layer): Promise<void> {
-  if (layer.type === 'path') paintPathLayer(ctx, layer);
-  else if (layer.type === 'text') paintTextLayer(ctx, layer);
-  else await paintImageLayer(ctx, layer);
-}
-
-/**
- * Композитный рендер всего документа или выделенных слоёв: фон, порядок слоёв, клип-маски.
- */
-export async function rasterizeComposite(
-  scene: Scene,
-  scaleOrOptions: number | CompositeRasterOptions = 1,
-  paintLayer: (ctx: CanvasRenderingContext2D, layer: Layer) => Promise<void> | void = defaultPaintLayer
-): Promise<HTMLCanvasElement> {
-  const opts: CompositeRasterOptions =
-    typeof scaleOrOptions === 'number' ? { scale: scaleOrOptions } : scaleOrOptions;
-  const scale = Math.max(0.05, opts.scale ?? 1);
-  const selectedSet =
-    opts.layerIds && opts.layerIds.length > 0 ? new Set(opts.layerIds) : null;
-
-  let originX = 0;
-  let originY = 0;
-  let width = scene.width;
-  let height = scene.height;
-
-  const targetLayers = selectedSet
-    ? scene.layers.filter((l) => selectedSet.has(l.id) && l.visible)
-    : scene.layers;
-
-  if (selectedSet && targetLayers.length > 0) {
-    const bbox = computeCombinedWorldBBox(targetLayers);
-    const maxEffectPad = targetLayers.reduce(
-      (max, l) => Math.max(max, getEffectsPadding(l.effects)),
-      0
-    );
-    const pad = (opts.padding ?? 0) + maxEffectPad;
-    originX = bbox.x - pad;
-    originY = bbox.y - pad;
-    width = Math.max(1, bbox.width + pad * 2);
-    height = Math.max(1, bbox.height + pad * 2);
-  }
-
-  const canvas = createCanvas(width * scale, height * scale);
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return canvas;
-
-  ctx.scale(scale, scale);
-  if (!opts.transparent) {
-    ctx.fillStyle = opts.backgroundColor ?? scene.background;
-    ctx.fillRect(0, 0, width, height);
-  }
-  if (originX !== 0 || originY !== 0) {
-    ctx.translate(-originX, -originY);
-  }
-
-  const byId = new Map(scene.layers.map((l) => [l.id, l] as const));
+export async function paintLayerList(
+  ctx: CanvasRenderingContext2D,
+  layers: Layer[],
+  paintLayer?: (ctx: CanvasRenderingContext2D, layer: Layer, sceneLayers?: Layer[]) => Promise<void> | void,
+  sceneLayers: Layer[] = layers
+): Promise<void> {
+  const renderFn = paintLayer ?? defaultPaintLayer;
+  const byId = new Map(layers.map((l) => [l.id, l] as const));
   const maskIds = new Set<string>();
-  for (const l of scene.layers) {
+  for (const l of layers) {
     if (l.type === 'path' && l.isClipMask) maskIds.add(l.id);
     if (l.clipMaskId && byId.get(l.clipMaskId)?.type === 'path') maskIds.add(l.clipMaskId);
   }
@@ -322,13 +331,13 @@ export async function rasterizeComposite(
     activeMask = null;
   };
 
-  for (const layer of scene.layers) {
+  for (const layer of layers) {
     if (maskIds.has(layer.id) || !layer.visible) continue;
-    if (selectedSet && !selectedSet.has(layer.id)) continue;
 
     const mask = layer.clipMaskId ? byId.get(layer.clipMaskId) : undefined;
     if (mask && mask.type === 'path' && mask !== activeMask) {
       closeClip();
+      ctx.save();
       ctx.save();
       applyMatrix(ctx, getLayerMatrix(mask));
       buildPath(ctx, mask.subpaths);
@@ -338,9 +347,153 @@ export async function rasterizeComposite(
     } else if (!mask) {
       closeClip();
     }
-    await paintLayer(ctx, layer);
+    await renderFn(ctx, layer, sceneLayers);
   }
   closeClip();
+}
+
+export async function paintGroupLayer(
+  ctx: CanvasRenderingContext2D,
+  group: GroupLayer,
+  paintLayer?: (ctx: CanvasRenderingContext2D, layer: Layer, sceneLayers?: Layer[]) => Promise<void> | void,
+  sceneLayers?: Layer[]
+): Promise<void> {
+  if (!group.visible || group.children.length === 0) return;
+  ctx.save();
+  applyMatrix(ctx, getLayerMatrix(group));
+  ctx.globalAlpha = ctx.globalAlpha * group.opacity;
+  if (group.blendMode && group.blendMode !== 'normal') {
+    ctx.globalCompositeOperation = toCanvasCompositeOp(group.blendMode);
+  }
+  applyEffectsToContext(ctx, group.effects);
+  await paintLayerList(ctx, group.children, paintLayer, sceneLayers ?? group.children);
+  ctx.restore();
+}
+
+/**
+ * Растеризует один слой (без клип-масок) на offscreen canvas размером с его bbox.
+ * Возвращает `null`, если bbox пуст или за пределами артборда.
+ */
+export async function rasterizeLayer(
+  layer: Layer,
+  scene: Scene,
+  bboxOf: (l: Layer) => BBox,
+  scale = 1,
+  parentMatrix: Matrix2D = IDENTITY_MATRIX
+): Promise<RasterizedLayer | null> {
+  const box = clampBBoxToArtboard(bboxOf(layer), scene);
+  if (box.width <= 0 || box.height <= 0) return null;
+
+  const canvas = createCanvas(box.width * scale, box.height * scale);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  ctx.scale(scale, scale);
+  ctx.translate(-box.left, -box.top);
+  applyMatrix(ctx, parentMatrix);
+
+  const isolatedLayer = { ...layer, blendMode: 'normal' as const };
+  if (isolatedLayer.type === 'path') paintPathLayer(ctx, isolatedLayer);
+  else if (isolatedLayer.type === 'text') paintTextLayer(ctx, isolatedLayer, scene.layers);
+  else if (isolatedLayer.type === 'group') {
+    await paintGroupLayer(ctx, isolatedLayer, defaultPaintLayer, scene.layers);
+  } else {
+    await paintImageLayer(ctx, isolatedLayer);
+  }
+
+  return { canvas, left: box.left, top: box.top, width: box.width, height: box.height };
+}
+
+export async function defaultPaintLayer(
+  ctx: CanvasRenderingContext2D,
+  layer: Layer,
+  sceneLayers?: Layer[]
+): Promise<void> {
+  if (layer.type === 'path') paintPathLayer(ctx, layer);
+  else if (layer.type === 'text') paintTextLayer(ctx, layer, sceneLayers);
+  else if (layer.type === 'group') {
+    await paintGroupLayer(ctx, layer, defaultPaintLayer, sceneLayers);
+  } else {
+    await paintImageLayer(ctx, layer);
+  }
+}
+
+/**
+ * Композитный рендер всего документа, артборда или выделенных слоёв.
+ */
+export async function rasterizeComposite(
+  scene: Scene,
+  scaleOrOptions: number | CompositeRasterOptions = 1,
+  paintLayer: (ctx: CanvasRenderingContext2D, layer: Layer, sceneLayers?: Layer[]) => Promise<void> | void = defaultPaintLayer
+): Promise<HTMLCanvasElement> {
+  const opts: CompositeRasterOptions =
+    typeof scaleOrOptions === 'number' ? { scale: scaleOrOptions } : scaleOrOptions;
+  const targetScene = opts.artboardId
+    ? extractArtboardScene(scene, getActiveArtboard(scene, opts.artboardId))
+    : scene;
+  const scale = Math.max(0.05, opts.scale ?? 1);
+  const selectedSet =
+    opts.layerIds && opts.layerIds.length > 0 ? new Set(opts.layerIds) : null;
+
+  let originX = 0;
+  let originY = 0;
+  let width = targetScene.width;
+  let height = targetScene.height;
+
+  const targetLayers = selectedSet
+    ? flattenLayers(targetScene.layers).filter((l) => selectedSet.has(l.id) && l.visible)
+    : targetScene.layers;
+
+  if (selectedSet && targetLayers.length > 0) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const layer of targetLayers) {
+      const parentM = getParentWorldMatrix(targetScene.layers, layer.id);
+      const b = computeLayerBBoxWithMatrix(layer, parentM);
+      if (b.x < minX) minX = b.x;
+      if (b.y < minY) minY = b.y;
+      if (b.x + b.width > maxX) maxX = b.x + b.width;
+      if (b.y + b.height > maxY) maxY = b.y + b.height;
+    }
+    const maxEffectPad = targetLayers.reduce(
+      (max, l) => Math.max(max, getEffectsPadding(l.effects)),
+      0
+    );
+    const pad = (opts.padding ?? 0) + maxEffectPad;
+    originX = minX - pad;
+    originY = minY - pad;
+    width = Math.max(1, maxX - minX + pad * 2);
+    height = Math.max(1, maxY - minY + pad * 2);
+  }
+
+  const canvas = createCanvas(width * scale, height * scale);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return canvas;
+
+  ctx.scale(scale, scale);
+  if (!opts.transparent) {
+    ctx.fillStyle = opts.backgroundColor ?? targetScene.background;
+    ctx.fillRect(0, 0, width, height);
+  }
+  if (originX !== 0 || originY !== 0) {
+    ctx.translate(-originX, -originY);
+  }
+
+  if (selectedSet) {
+    for (const id of selectedSet) {
+      const layer = findLayerById(targetScene.layers, id);
+      if (!layer || !layer.visible) continue;
+      const parentM = getParentWorldMatrix(targetScene.layers, layer.id);
+      ctx.save();
+      applyMatrix(ctx, parentM);
+      await paintLayer(ctx, layer, targetScene.layers);
+      ctx.restore();
+    }
+  } else {
+    await paintLayerList(ctx, targetScene.layers, paintLayer, targetScene.layers);
+  }
 
   return canvas;
 }
@@ -373,14 +526,19 @@ export async function rasterizeSceneToBytes(
 }> {
   const isJpg = options.format === 'jpg';
   const transparent = isJpg ? false : options.transparent;
+  const activeAb = options.artboardId
+    ? getActiveArtboard(scene, options.artboardId)
+    : null;
   const canvas = await rasterizeComposite(scene, {
     scale: options.scale,
     transparent,
-    backgroundColor: options.backgroundColor || scene.background || '#ffffff',
+    backgroundColor:
+      options.backgroundColor || activeAb?.background || scene.background || '#ffffff',
     layerIds:
       options.scope === 'selection' && options.selectedIds?.length
         ? options.selectedIds
         : undefined,
+    artboardId: options.scope === 'artboard' ? options.artboardId : undefined,
   });
   const bytes = await canvasToBytes(canvas, options.format, options.quality);
   return {
@@ -389,6 +547,57 @@ export async function rasterizeSceneToBytes(
     height: canvas.height,
     canvas,
   };
+}
+
+function paintGroupSync(ctx: CanvasRenderingContext2D, group: GroupLayer): void {
+  if (!group.visible || group.children.length === 0) return;
+  ctx.save();
+  applyMatrix(ctx, getLayerMatrix(group));
+  ctx.globalAlpha = ctx.globalAlpha * group.opacity;
+  applyEffectsToContext(ctx, group.effects);
+  const byId = new Map(group.children.map((l) => [l.id, l] as const));
+  const maskIds = new Set<string>();
+  for (const l of group.children) {
+    if (l.type === 'path' && l.isClipMask) maskIds.add(l.id);
+    if (l.clipMaskId && byId.get(l.clipMaskId)?.type === 'path') maskIds.add(l.clipMaskId);
+  }
+  let activeMask: PathLayer | null = null;
+  const closeClip = () => {
+    if (activeMask) ctx.restore();
+    activeMask = null;
+  };
+  for (const child of group.children) {
+    if (maskIds.has(child.id) || !child.visible) continue;
+    const mask = child.clipMaskId ? byId.get(child.clipMaskId) : undefined;
+    if (mask && mask.type === 'path' && mask !== activeMask) {
+      closeClip();
+      ctx.save();
+      ctx.save();
+      applyMatrix(ctx, getLayerMatrix(mask));
+      buildPath(ctx, mask.subpaths);
+      ctx.restore();
+      ctx.clip(mask.fillRule === 'evenodd' ? 'evenodd' : 'nonzero');
+      activeMask = mask;
+    } else if (!mask) {
+      closeClip();
+    }
+    if (child.type === 'path') paintPathLayer(ctx, child);
+    else if (child.type === 'text') paintTextLayer(ctx, child);
+    else if (child.type === 'group') paintGroupSync(ctx, child);
+    else {
+      const img = getAssetImageElement(child.assetId);
+      if (img) {
+        ctx.save();
+        applyMatrix(ctx, getLayerMatrix(child));
+        ctx.globalAlpha = ctx.globalAlpha * child.opacity;
+        applyEffectsToContext(ctx, child.effects);
+        ctx.drawImage(img, -child.width / 2, -child.height / 2, child.width, child.height);
+        ctx.restore();
+      }
+    }
+  }
+  closeClip();
+  ctx.restore();
 }
 
 /**
@@ -437,12 +646,15 @@ export function rasterizeLayerLocalWithEffects(
     scaleX: 1,
     scaleY: 1,
     opacity: 1,
+    blendMode: 'normal' as const,
   };
 
   if (localLayer.type === 'path') {
     paintPathLayer(ctx, localLayer);
   } else if (localLayer.type === 'text') {
     paintTextLayer(ctx, localLayer);
+  } else if (localLayer.type === 'group') {
+    paintGroupSync(ctx, localLayer);
   } else {
     const img = getAssetImageElement(localLayer.assetId);
     if (!img) return null;

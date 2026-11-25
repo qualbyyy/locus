@@ -20,6 +20,11 @@ declare namespace paper {
   interface PointText {
     tracking?: number;
   }
+
+  interface Color {
+    origin?: Point;
+    destination?: Point;
+  }
 }
 
 declare module 'paper/dist/paper-core' {

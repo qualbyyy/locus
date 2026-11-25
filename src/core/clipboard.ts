@@ -1,12 +1,35 @@
 import { addLayer, createLayerId, runCommandBatch, updateLayers } from './commands';
+import {
+  cloneLayerSubtreeWithNewIds,
+  findLayerById,
+  flattenLayers,
+} from './layerTree';
+import { clonePaint, cloneStroke } from './paint';
 import { useEditorStore } from './store';
-import type { Layer, PathLayer, StrokeStyle } from './types';
+import { sceneToSvg } from '../export/toSvg';
+import type {
+  BaseLayer,
+  BlendMode,
+  Layer,
+  LayerEffects,
+  Paint,
+  PathLayer,
+  StrokeStyle,
+} from './types';
 
 export interface CopiedLayerStyle {
-  fill: string | null;
+  fill: Paint | null;
   stroke: StrokeStyle | null;
   opacity: number;
   fillRule?: 'nonzero' | 'evenodd';
+  blendMode?: BlendMode;
+  effects?: LayerEffects;
+}
+
+function cloneEffects(effects: LayerEffects): LayerEffects {
+  return typeof globalThis.structuredClone === 'function'
+    ? globalThis.structuredClone(effects)
+    : (JSON.parse(JSON.stringify(effects)) as LayerEffects);
 }
 
 let copiedLayers: Layer[] = [];
@@ -39,7 +62,9 @@ export function copySelectedLayers(layerIds?: string[]): number {
   if (ids.length === 0) return 0;
 
   const idSet = new Set(ids);
-  const targets = state.scene.layers.filter((layer) => idSet.has(layer.id));
+  const targets = flattenLayers(state.scene.layers).filter((layer) =>
+    idSet.has(layer.id)
+  );
   if (targets.length === 0) return 0;
 
   copiedLayers = targets.map(cloneLayer);
@@ -73,23 +98,27 @@ export function pasteLayers(opts?: {
 
   const inPlace = Boolean(opts?.inPlace);
   const offset = inPlace ? 0 : (pasteStreak + 1) * (opts?.offsetStep ?? 16);
-  const existingIds = new Set(useEditorStore.getState().scene.layers.map((l) => l.id));
+  const state = useEditorStore.getState();
+  const existingIds = new Set(flattenLayers(state.scene.layers).map((l) => l.id));
+  const targetParentId = state.editingGroupId;
 
-  const idMap = new Map<string, string>();
-  for (const src of copiedLayers) {
-    idMap.set(src.id, createLayerId(src.type));
-  }
-
+  const rootIdMap = new Map<string, string>();
   const referencedMaskNewIds = new Set<string>();
   const prepared: Layer[] = copiedLayers.map((src) => {
-    const copy = cloneLayer(src);
-    copy.id = idMap.get(src.id)!;
-    copy.name = `${src.name} копия`;
+    const origMaskId = src.clipMaskId;
+    const copy = cloneLayerSubtreeWithNewIds(src, createLayerId, ' копия');
+    rootIdMap.set(src.id, copy.id);
     copy.x += offset;
     copy.y += offset;
+    if (origMaskId) {
+      copy.clipMaskId = origMaskId;
+    }
+    return copy;
+  });
 
+  for (const copy of prepared) {
     if (copy.clipMaskId) {
-      const remappedMask = idMap.get(copy.clipMaskId);
+      const remappedMask = rootIdMap.get(copy.clipMaskId);
       if (remappedMask) {
         copy.clipMaskId = remappedMask;
         referencedMaskNewIds.add(remappedMask);
@@ -97,8 +126,7 @@ export function pasteLayers(opts?: {
         delete copy.clipMaskId;
       }
     }
-    return copy;
-  });
+  }
 
   for (const item of prepared) {
     if (item.type === 'path' && item.isClipMask && !referencedMaskNewIds.has(item.id)) {
@@ -109,7 +137,7 @@ export function pasteLayers(opts?: {
   const created: Layer[] = [];
   runCommandBatch(() => {
     for (const copy of prepared) {
-      created.push(addLayer(copy, { select: false }));
+      created.push(addLayer(copy, { select: false, parentGroupId: targetParentId }));
     }
   });
 
@@ -131,33 +159,41 @@ export function copyLayerStyle(layerId?: string): CopiedLayerStyle | null {
   const targetId = layerId ?? state.selectedIds[0];
   if (!targetId) return null;
 
-  const layer = state.scene.layers.find((l) => l.id === targetId);
+  const layer = findLayerById(state.scene.layers, targetId);
   if (!layer) return null;
 
   if (layer.type === 'path') {
     copiedStyle = {
-      fill: layer.fill,
-      stroke: layer.stroke ? { ...layer.stroke } : null,
+      fill: clonePaint(layer.fill),
+      stroke: cloneStroke(layer.stroke),
       opacity: layer.opacity,
       fillRule: layer.fillRule,
+      blendMode: layer.blendMode,
+      effects: layer.effects ? cloneEffects(layer.effects) : undefined,
     };
   } else if (layer.type === 'text') {
     copiedStyle = {
-      fill: layer.fill,
+      fill: clonePaint(layer.fill),
       stroke: null,
       opacity: layer.opacity,
+      blendMode: layer.blendMode,
+      effects: layer.effects ? cloneEffects(layer.effects) : undefined,
     };
   } else {
     copiedStyle = {
       fill: null,
       stroke: null,
       opacity: layer.opacity,
+      blendMode: layer.blendMode,
+      effects: layer.effects ? cloneEffects(layer.effects) : undefined,
     };
   }
 
   return {
     ...copiedStyle,
-    stroke: copiedStyle.stroke ? { ...copiedStyle.stroke } : null,
+    fill: clonePaint(copiedStyle.fill),
+    stroke: cloneStroke(copiedStyle.stroke),
+    ...(copiedStyle.effects ? { effects: cloneEffects(copiedStyle.effects) } : {}),
   };
 }
 
@@ -169,19 +205,31 @@ export function pasteLayerStyle(layerIds?: string[]): number {
   if (ids.length === 0) return 0;
 
   const idSet = new Set(ids);
-  const targets = state.scene.layers.filter((l) => idSet.has(l.id) && !l.locked);
+  const targets = flattenLayers(state.scene.layers).filter(
+    (l) => idSet.has(l.id) && !l.locked
+  );
   if (targets.length === 0) return 0;
 
   const style = copiedStyle;
   updateLayers(
     targets.map((t) => t.id),
     (layer) => {
+      const common: Pick<BaseLayer, 'opacity' | 'blendMode' | 'effects'> = {
+        opacity: style.opacity,
+        blendMode: style.blendMode ?? 'normal',
+      };
+      if (style.effects) {
+        common.effects = cloneEffects(style.effects);
+      } else {
+        common.effects = undefined;
+      }
+
       if (layer.type === 'path') {
         const nextPath: PathLayer = {
           ...layer,
-          fill: style.fill,
-          stroke: style.stroke ? { ...style.stroke } : null,
-          opacity: style.opacity,
+          ...common,
+          fill: clonePaint(style.fill),
+          stroke: cloneStroke(style.stroke),
           ...(style.fillRule ? { fillRule: style.fillRule } : {}),
         };
         return nextPath;
@@ -189,23 +237,64 @@ export function pasteLayerStyle(layerIds?: string[]): number {
       if (layer.type === 'text') {
         return {
           ...layer,
-          opacity: style.opacity,
-          ...(style.fill !== null ? { fill: style.fill } : {}),
+          ...common,
+          ...(style.fill !== null ? { fill: clonePaint(style.fill) } : {}),
         };
       }
       return {
         ...layer,
-        opacity: style.opacity,
+        ...common,
       };
     }
   );
 
   if (targets.some((t) => t.type === 'path')) {
     useEditorStore.setState({
-      defaultFill: style.fill,
-      defaultStroke: style.stroke ? { ...style.stroke } : null,
+      defaultFill: clonePaint(style.fill),
+      defaultStroke: cloneStroke(style.stroke),
     });
   }
 
   return targets.length;
+}
+
+export async function copySelectionAsSvg(
+  layerIds?: string[]
+): Promise<string | null> {
+  const state = useEditorStore.getState();
+  const ids = layerIds ?? state.selectedIds;
+  if (ids.length === 0) return null;
+
+  const svg = await sceneToSvg(state.scene, {
+    layerIds: ids,
+    includeBackground: false,
+  });
+
+  let copied = false;
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(svg);
+      copied = true;
+    } catch {
+      copied = false;
+    }
+  }
+
+  if (!copied && typeof document !== 'undefined') {
+    const ta = document.createElement('textarea');
+    ta.value = svg;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    ta.style.pointerEvents = 'none';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+    } finally {
+      document.body.removeChild(ta);
+    }
+  }
+
+  return svg;
 }

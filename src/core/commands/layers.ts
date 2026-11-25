@@ -1,16 +1,35 @@
 import { generateSmartShape } from '../../engine/geometry';
+import { getActiveArtboard } from '../artboards';
 import {
+  applyGroupTransformToChild,
+  cloneLayerSubtreeWithNewIds,
+  filterLayerTree,
+  findLayerById,
+  flattenLayers,
+  getParentGroupId,
+  getParentWorldMatrix,
+  getScopeLayers,
+  mapLayerTree,
+  updateGroupChildren,
+} from '../layerTree';
+import {
+  IDENTITY_MATRIX,
+  applyMatrixToVector,
   clamp,
   computeCombinedWorldBBox,
-  computeLayerWorldBBox,
+  computeLayerBBoxWithMatrix,
+  invertMatrix,
   normalizePathLayer,
 } from '../math';
+import { clonePaint, cloneStroke, paintEquals } from '../paint';
 import { useEditorStore } from '../store';
 import type {
   AssetEntry,
+  GroupLayer,
   ImageLayer,
   Layer,
   LayerEffects,
+  Paint,
   PathLayer,
   Scene,
   SmartShapeOptions,
@@ -21,6 +40,7 @@ import {
   DEFAULT_RESTORE_STROKE,
   commitScene,
   createLayerId,
+  findSharedClipMaskId,
   validateSelectionAgainstScene,
 } from './helpers';
 
@@ -43,12 +63,23 @@ const PRESET_LABELS: Record<SmartShapePreset, string> = {
   star: 'Звезда',
 };
 
-export function addLayer(layer: Layer, opts?: { select?: boolean }): Layer {
+export function addLayer(
+  layer: Layer,
+  opts?: { select?: boolean; parentGroupId?: string | null }
+): Layer {
   const prepared = layer.type === 'path' ? normalizePathLayer(layer) : layer;
-  commitScene((scene) => ({
-    ...scene,
-    layers: [...scene.layers, prepared],
-  }));
+  commitScene((scene) => {
+    const requestedParent = opts?.parentGroupId ?? null;
+    const parentExists =
+      requestedParent !== null &&
+      findLayerById(scene.layers, requestedParent)?.type === 'group';
+    const targetParent = parentExists ? requestedParent : null;
+    const nextLayers = updateGroupChildren(scene.layers, targetParent, (list) => [
+      ...list,
+      prepared,
+    ]);
+    return { ...scene, layers: nextLayers };
+  });
 
   if (opts?.select !== false) {
     useEditorStore.setState({
@@ -59,17 +90,28 @@ export function addLayer(layer: Layer, opts?: { select?: boolean }): Layer {
   return prepared;
 }
 
-export function addLayers(layers: Layer[], opts?: { select?: boolean }): Layer[] {
+export function addLayers(
+  layers: Layer[],
+  opts?: { select?: boolean; parentGroupId?: string | null }
+): Layer[] {
   if (layers.length === 0) {
     return [];
   }
   const prepared = layers.map((layer) =>
     layer.type === 'path' ? normalizePathLayer(layer) : layer
   );
-  commitScene((scene) => ({
-    ...scene,
-    layers: [...scene.layers, ...prepared],
-  }));
+  commitScene((scene) => {
+    const requestedParent = opts?.parentGroupId ?? null;
+    const parentExists =
+      requestedParent !== null &&
+      findLayerById(scene.layers, requestedParent)?.type === 'group';
+    const targetParent = parentExists ? requestedParent : null;
+    const nextLayers = updateGroupChildren(scene.layers, targetParent, (list) => [
+      ...list,
+      ...prepared,
+    ]);
+    return { ...scene, layers: nextLayers };
+  });
 
   if (opts?.select !== false) {
     useEditorStore.setState({
@@ -87,11 +129,12 @@ export function createShapeLayer(params: {
   width: number;
   height: number;
   options?: Partial<SmartShapeOptions>;
-  fill?: string | null;
+  fill?: Paint | null;
   stroke?: StrokeStyle | null;
   name?: string;
   seed?: number;
   select?: boolean;
+  parentGroupId?: string | null;
 }): PathLayer {
   const state = useEditorStore.getState();
   const mergedOptions: SmartShapeOptions = {
@@ -110,7 +153,7 @@ export function createShapeLayer(params: {
   const fill = params.fill !== undefined ? params.fill : state.defaultFill;
   const stroke = params.stroke !== undefined ? params.stroke : state.defaultStroke;
   const sameTypeCount =
-    state.scene.layers.filter((l) => l.type === 'path').length + 1;
+    flattenLayers(state.scene.layers).filter((l) => l.type === 'path').length + 1;
 
   const layer: PathLayer = {
     id: createLayerId('path'),
@@ -126,11 +169,14 @@ export function createShapeLayer(params: {
     opacity: 1,
     subpaths,
     fillRule: 'nonzero',
-    fill,
-    stroke: stroke ? { ...stroke } : null,
+    fill: clonePaint(fill),
+    stroke: cloneStroke(stroke),
   };
 
-  return addLayer(layer, { select: params.select }) as PathLayer;
+  return addLayer(layer, {
+    select: params.select,
+    parentGroupId: params.parentGroupId,
+  }) as PathLayer;
 }
 
 export function createImageLayer(params: {
@@ -142,25 +188,23 @@ export function createImageLayer(params: {
   name?: string;
   fitToArtboard?: boolean;
   select?: boolean;
+  parentGroupId?: string | null;
 }): ImageLayer {
   const state = useEditorStore.getState();
-  const { scene } = state;
+  const { scene, activeArtboardId } = state;
+  const ab = getActiveArtboard(scene, activeArtboardId);
   const sameTypeCount =
-    scene.layers.filter((l) => l.type === 'image').length + 1;
+    flattenLayers(scene.layers).filter((l) => l.type === 'image').length + 1;
 
   const width = Math.max(1, Math.round(params.width));
   const height = Math.max(1, Math.round(params.height));
   let scale = 1;
   if (
     params.fitToArtboard !== false &&
-    (width > scene.width * 0.85 || height > scene.height * 0.85)
+    (width > ab.width * 0.85 || height > ab.height * 0.85)
   ) {
     scale = Number(
-      Math.min(
-        1,
-        (scene.width * 0.85) / width,
-        (scene.height * 0.85) / height
-      ).toFixed(4)
+      Math.min(1, (ab.width * 0.85) / width, (ab.height * 0.85) / height).toFixed(4)
     );
   }
 
@@ -170,8 +214,8 @@ export function createImageLayer(params: {
     type: 'image',
     visible: true,
     locked: false,
-    x: params.x ?? scene.width / 2,
-    y: params.y ?? scene.height / 2,
+    x: params.x ?? ab.x + ab.width / 2,
+    y: params.y ?? ab.y + ab.height / 2,
     rotation: 0,
     scaleX: scale,
     scaleY: scale,
@@ -181,7 +225,10 @@ export function createImageLayer(params: {
     height,
   };
 
-  return addLayer(layer, { select: params.select }) as ImageLayer;
+  return addLayer(layer, {
+    select: params.select,
+    parentGroupId: params.parentGroupId,
+  }) as ImageLayer;
 }
 
 export function replaceImageLayerAsset(
@@ -192,7 +239,7 @@ export function replaceImageLayerAsset(
 
   commitScene((scene) => {
     let changed = false;
-    const nextLayers = scene.layers.map((layer) => {
+    const nextLayers = mapLayerTree(scene.layers, (layer) => {
       if (layer.id !== layerId || layer.type !== 'image') {
         return layer;
       }
@@ -232,7 +279,7 @@ export function updateLayers(
   const targetSet = new Set(layerIds);
   const nextScene = commitScene((scene) => {
     let changed = false;
-    const nextLayers = scene.layers.map((layer) => {
+    const nextLayers = mapLayerTree(scene.layers, (layer) => {
       if (!targetSet.has(layer.id)) return layer;
 
       const updated =
@@ -251,11 +298,11 @@ export function updateLayers(
   if (typeof patch !== 'function') {
     const pathPatch = patch as Partial<PathLayer>;
     if ('fill' in pathPatch && pathPatch.fill !== undefined) {
-      useEditorStore.setState({ defaultFill: pathPatch.fill });
+      useEditorStore.setState({ defaultFill: clonePaint(pathPatch.fill) });
     }
     if ('stroke' in pathPatch && pathPatch.stroke !== undefined) {
       useEditorStore.setState({
-        defaultStroke: pathPatch.stroke ? { ...pathPatch.stroke } : null,
+        defaultStroke: cloneStroke(pathPatch.stroke),
       });
     }
   }
@@ -274,13 +321,18 @@ export function nudgeLayers(
   const idSet = new Set(layerIds);
   return commitScene((scene) => {
     let changed = false;
-    const nextLayers = scene.layers.map((layer) => {
+    const nextLayers = mapLayerTree(scene.layers, (layer) => {
       if (!idSet.has(layer.id) || layer.locked) return layer;
       changed = true;
+      const parentM = getParentWorldMatrix(scene.layers, layer.id);
+      const localDelta =
+        parentM === IDENTITY_MATRIX
+          ? { x: dx, y: dy }
+          : applyMatrixToVector(invertMatrix(parentM), { x: dx, y: dy });
       return {
         ...layer,
-        x: layer.x + dx,
-        y: layer.y + dy,
+        x: layer.x + localDelta.x,
+        y: layer.y + localDelta.y,
       };
     });
     return changed ? { ...scene, layers: nextLayers } : scene;
@@ -292,18 +344,39 @@ export function deleteLayers(layerIds: string[]): Scene {
 
   const removeSet = new Set(layerIds);
   const nextScene = commitScene((scene) => {
-    const remaining = scene.layers.filter((layer) => !removeSet.has(layer.id));
-    if (remaining.length === scene.layers.length) {
-      return scene;
-    }
-
-    const cleaned = remaining.map((layer) => {
-      if (layer.clipMaskId && removeSet.has(layer.clipMaskId)) {
-        const next = { ...layer };
-        delete next.clipMaskId;
-        return next;
+    const deletedAllIds = new Set<string>();
+    for (const node of flattenLayers(scene.layers)) {
+      if (removeSet.has(node.id)) {
+        for (const sub of flattenLayers([node])) {
+          deletedAllIds.add(sub.id);
+        }
       }
-      return layer;
+    }
+    if (deletedAllIds.size === 0) return scene;
+
+    const remaining = filterLayerTree(
+      scene.layers,
+      (layer) => !removeSet.has(layer.id)
+    );
+    const cleaned = mapLayerTree(remaining, (layer) => {
+      let nextLayer = layer;
+      if (nextLayer.clipMaskId && deletedAllIds.has(nextLayer.clipMaskId)) {
+        const copy = { ...nextLayer };
+        delete copy.clipMaskId;
+        nextLayer = copy;
+      }
+      if (
+        nextLayer.type === 'text' &&
+        nextLayer.pathId &&
+        deletedAllIds.has(nextLayer.pathId)
+      ) {
+        const copy = { ...nextLayer };
+        delete copy.pathId;
+        delete copy.pathOffset;
+        delete copy.pathFlip;
+        nextLayer = copy;
+      }
+      return nextLayer;
     });
 
     return { ...scene, layers: cleaned };
@@ -311,17 +384,6 @@ export function deleteLayers(layerIds: string[]): Scene {
 
   validateSelectionAgainstScene(nextScene);
   return nextScene;
-}
-
-function cloneLayerWithNewId(layer: Layer): Layer {
-  const cloned =
-    typeof globalThis.structuredClone === 'function'
-      ? globalThis.structuredClone(layer)
-      : (JSON.parse(JSON.stringify(layer)) as Layer);
-
-  cloned.id = createLayerId(layer.type);
-  cloned.name = `${layer.name} копия`;
-  return cloned;
 }
 
 export function duplicateLayers(
@@ -334,20 +396,35 @@ export function duplicateLayers(
   const created: Layer[] = [];
 
   commitScene((scene) => {
-    const nextLayers: Layer[] = [];
-    for (const layer of scene.layers) {
-      nextLayers.push(layer);
-      if (sourceSet.has(layer.id)) {
-        const copy = cloneLayerWithNewId(layer);
-        copy.x += offsetX;
-        copy.y += offsetY;
-        if (copy.type === 'path' && copy.isClipMask) {
-          copy.isClipMask = false;
+    const duplicateInList = (layers: Layer[]): Layer[] => {
+      let changed = false;
+      const next: Layer[] = [];
+      for (const rawLayer of layers) {
+        let layer = rawLayer;
+        if (layer.type === 'group') {
+          const nextChildren = duplicateInList(layer.children);
+          if (nextChildren !== layer.children) {
+            layer = { ...layer, children: nextChildren };
+            changed = true;
+          }
         }
-        created.push(copy);
-        nextLayers.push(copy);
+        next.push(layer);
+        if (sourceSet.has(layer.id)) {
+          changed = true;
+          const copy = cloneLayerSubtreeWithNewIds(layer, createLayerId, ' копия');
+          copy.x += offsetX;
+          copy.y += offsetY;
+          if (copy.type === 'path' && copy.isClipMask) {
+            copy.isClipMask = false;
+          }
+          created.push(copy);
+          next.push(copy);
+        }
       }
-    }
+      return changed ? next : layers;
+    };
+
+    const nextLayers = duplicateInList(scene.layers);
     return created.length > 0 ? { ...scene, layers: nextLayers } : scene;
   });
 
@@ -366,41 +443,185 @@ export function reorderLayer(
   targetIndex?: number
 ): Scene {
   return commitScene((scene) => {
-    const currentIndex = scene.layers.findIndex((l) => l.id === layerId);
-    if (currentIndex === -1) return scene;
+    const parentId = getParentGroupId(scene.layers, layerId);
+    const nextLayers = updateGroupChildren(scene.layers, parentId, (siblings) => {
+      const currentIndex = siblings.findIndex((l) => l.id === layerId);
+      if (currentIndex === -1) return siblings;
 
-    const lastIndex = scene.layers.length - 1;
-    let nextIndex = currentIndex;
+      const lastIndex = siblings.length - 1;
+      let nextIndex = currentIndex;
 
-    switch (mode) {
-      case 'front':
-        nextIndex = lastIndex;
-        break;
-      case 'back':
-        nextIndex = 0;
-        break;
-      case 'forward':
-        nextIndex = Math.min(lastIndex, currentIndex + 1);
-        break;
-      case 'backward':
-        nextIndex = Math.max(0, currentIndex - 1);
-        break;
-      case 'index':
-        nextIndex = clamp(
-          Math.round(targetIndex ?? currentIndex),
-          0,
-          lastIndex
-        );
-        break;
-    }
+      switch (mode) {
+        case 'front':
+          nextIndex = lastIndex;
+          break;
+        case 'back':
+          nextIndex = 0;
+          break;
+        case 'forward':
+          nextIndex = Math.min(lastIndex, currentIndex + 1);
+          break;
+        case 'backward':
+          nextIndex = Math.max(0, currentIndex - 1);
+          break;
+        case 'index':
+          nextIndex = clamp(
+            Math.round(targetIndex ?? currentIndex),
+            0,
+            lastIndex
+          );
+          break;
+      }
 
-    if (nextIndex === currentIndex) return scene;
+      if (nextIndex === currentIndex) return siblings;
 
-    const nextLayers = [...scene.layers];
-    const [moved] = nextLayers.splice(currentIndex, 1);
-    nextLayers.splice(nextIndex, 0, moved);
+      const copy = [...siblings];
+      const [moved] = copy.splice(currentIndex, 1);
+      copy.splice(nextIndex, 0, moved);
+      return copy;
+    });
+
+    return nextLayers === scene.layers ? scene : { ...scene, layers: nextLayers };
+  });
+}
+
+export function groupLayers(layerIds: string[]): GroupLayer | null {
+  if (layerIds.length === 0) return null;
+  let createdGroup: GroupLayer | null = null;
+
+  commitScene((scene) => {
+    const idSet = new Set(layerIds);
+    const all = flattenLayers(scene.layers);
+    const firstUnlocked = all.find((l) => idSet.has(l.id) && !l.locked);
+    if (!firstUnlocked) return scene;
+
+    const parentId = getParentGroupId(scene.layers, firstUnlocked.id);
+    const siblings = getScopeLayers(scene.layers, parentId);
+    const targets = siblings.filter((l) => idSet.has(l.id) && !l.locked);
+    if (targets.length === 0) return scene;
+
+    const targetIds = new Set(targets.map((l) => l.id));
+    const bbox = computeCombinedWorldBBox(targets);
+    const cx = bbox.x + bbox.width / 2;
+    const cy = bbox.y + bbox.height / 2;
+    const sharedMask = findSharedClipMaskId(targets, targetIds);
+    const groupCount = all.filter((l) => l.type === 'group').length + 1;
+
+    const children: Layer[] = targets.map((child) => {
+      const shifted: Layer = {
+        ...child,
+        x: child.x - cx,
+        y: child.y - cy,
+      };
+      if (sharedMask && shifted.clipMaskId === sharedMask) {
+        delete shifted.clipMaskId;
+      }
+      return shifted;
+    });
+
+    const group: GroupLayer = {
+      id: createLayerId('grp'),
+      name: `Группа ${groupCount}`,
+      type: 'group',
+      visible: true,
+      locked: false,
+      x: cx,
+      y: cy,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+      opacity: 1,
+      ...(sharedMask ? { clipMaskId: sharedMask } : {}),
+      children,
+    };
+    createdGroup = group;
+
+    const nextLayers = updateGroupChildren(scene.layers, parentId, (list) => {
+      let highestIdx = -1;
+      list.forEach((l, idx) => {
+        if (targetIds.has(l.id)) highestIdx = idx;
+      });
+      const rebuilt: Layer[] = [];
+      list.forEach((l, idx) => {
+        if (idx === highestIdx) {
+          rebuilt.push(group);
+        }
+        if (!targetIds.has(l.id)) {
+          rebuilt.push(l);
+        }
+      });
+      return rebuilt;
+    });
+
     return { ...scene, layers: nextLayers };
   });
+
+  if (createdGroup) {
+    useEditorStore.setState({
+      selectedIds: [(createdGroup as GroupLayer).id],
+      selectedNode: null,
+    });
+  }
+  return createdGroup;
+}
+
+export function ungroupLayers(layerIds: string[]): Layer[] {
+  if (layerIds.length === 0) return [];
+  const idSet = new Set(layerIds);
+  const released: Layer[] = [];
+  const prevState = useEditorStore.getState();
+  const prevEditingId = prevState.editingGroupId;
+  let nextEditingId = prevEditingId;
+
+  commitScene((scene) => {
+    const ungroupInList = (layers: Layer[]): Layer[] => {
+      let changed = false;
+      const next: Layer[] = [];
+      for (const layer of layers) {
+        if (layer.type !== 'group') {
+          next.push(layer);
+          continue;
+        }
+        const nextChildren = ungroupInList(layer.children);
+        const workingGroup =
+          nextChildren !== layer.children
+            ? { ...layer, children: nextChildren }
+            : layer;
+        if (nextChildren !== layer.children) {
+          changed = true;
+        }
+
+        if (idSet.has(workingGroup.id) && !workingGroup.locked) {
+          changed = true;
+          if (workingGroup.id === prevEditingId) {
+            nextEditingId = getParentGroupId(scene.layers, workingGroup.id);
+          }
+          for (const child of workingGroup.children) {
+            const expanded = applyGroupTransformToChild(workingGroup, child);
+            released.push(expanded);
+            next.push(expanded);
+          }
+        } else {
+          next.push(workingGroup);
+        }
+      }
+      return changed ? next : layers;
+    };
+
+    const nextLayers = ungroupInList(scene.layers);
+    return nextLayers === scene.layers ? scene : { ...scene, layers: nextLayers };
+  });
+
+  if (released.length > 0) {
+    useEditorStore.setState({
+      selectedIds: released.map((l) => l.id),
+      selectedNode: null,
+      editingGroupId: nextEditingId,
+    });
+  } else if (nextEditingId !== prevEditingId) {
+    useEditorStore.setState({ editingGroupId: nextEditingId });
+  }
+  return released;
 }
 
 function createsMaskCycle(
@@ -428,7 +649,7 @@ export function setClipMask(
   }
 
   return commitScene((scene) => {
-    const layersById = new Map(scene.layers.map((l) => [l.id, l]));
+    const layersById = new Map(flattenLayers(scene.layers).map((l) => [l.id, l]));
     if (maskLayerId !== null) {
       const maskLayer = layersById.get(maskLayerId);
       if (!maskLayer || maskLayer.type !== 'path') {
@@ -439,7 +660,7 @@ export function setClipMask(
     const targetSet = new Set(targetLayerIds);
     let changed = false;
 
-    const updated = scene.layers.map((layer) => {
+    const updated = mapLayerTree(scene.layers, (layer) => {
       if (targetSet.has(layer.id)) {
         if (maskLayerId === null) {
           if (layer.clipMaskId !== undefined) {
@@ -464,13 +685,13 @@ export function setClipMask(
     });
 
     const referencedMasks = new Set<string>();
-    for (const layer of updated) {
+    for (const layer of flattenLayers(updated)) {
       if (layer.clipMaskId) {
         referencedMasks.add(layer.clipMaskId);
       }
     }
 
-    const finalized = updated.map((layer) => {
+    const finalized = mapLayerTree(updated, (layer) => {
       if (layer.type !== 'path') return layer;
       if (maskLayerId !== null && layer.id === maskLayerId) {
         if (!layer.isClipMask && referencedMasks.has(layer.id)) {
@@ -498,7 +719,7 @@ export function setClipMask(
 export function releaseClipMask(maskLayerId: string): Scene {
   return commitScene((scene) => {
     let changed = false;
-    const nextLayers = scene.layers.map((layer) => {
+    const nextLayers = mapLayerTree(scene.layers, (layer) => {
       if (layer.clipMaskId === maskLayerId) {
         changed = true;
         const next = { ...layer };
@@ -525,7 +746,12 @@ export function releaseClipMask(maskLayerId: string): Scene {
 export function createClipMaskFromSelection(layerIds: string[]): PathLayer | null {
   const scene = useEditorStore.getState().scene;
   const selectedSet = new Set(layerIds);
-  const selectedInOrder = scene.layers.filter((l) => selectedSet.has(l.id));
+  const firstMatch = flattenLayers(scene.layers).find((l) => selectedSet.has(l.id));
+  if (!firstMatch) return null;
+
+  const parentId = getParentGroupId(scene.layers, firstMatch.id);
+  const siblings = getScopeLayers(scene.layers, parentId);
+  const selectedInOrder = siblings.filter((l) => selectedSet.has(l.id));
   if (selectedInOrder.length === 0) {
     return null;
   }
@@ -535,19 +761,17 @@ export function createClipMaskFromSelection(layerIds: string[]): PathLayer | nul
     if (candidate.type !== 'path') {
       return null;
     }
-    const idx = scene.layers.findIndex((l) => l.id === candidate.id);
+    const idx = siblings.findIndex((l) => l.id === candidate.id);
     if (idx <= 0) {
       return null;
     }
-    const below = scene.layers[idx - 1];
+    const below = siblings[idx - 1];
     if (below.id === candidate.id) {
       return null;
     }
     setClipMask(candidate.id, [below.id]);
-    const updated = useEditorStore
-      .getState()
-      .scene.layers.find((l): l is PathLayer => l.id === candidate.id && l.type === 'path');
-    return updated && updated.isClipMask ? updated : null;
+    const updated = findLayerById(useEditorStore.getState().scene.layers, candidate.id);
+    return updated?.type === 'path' && updated.isClipMask ? updated : null;
   }
 
   let maskCandidate: PathLayer | null = null;
@@ -570,10 +794,8 @@ export function createClipMaskFromSelection(layerIds: string[]): PathLayer | nul
   }
 
   setClipMask(maskCandidate.id, targetIds);
-  const updated = useEditorStore
-    .getState()
-    .scene.layers.find((l): l is PathLayer => l.id === maskCandidate.id && l.type === 'path');
-  return updated && updated.isClipMask ? updated : null;
+  const updated = findLayerById(useEditorStore.getState().scene.layers, maskCandidate.id);
+  return updated?.type === 'path' && updated.isClipMask ? updated : null;
 }
 
 export function alignLayers(layerIds: string[], mode: AlignMode): Scene {
@@ -581,22 +803,38 @@ export function alignLayers(layerIds: string[], mode: AlignMode): Scene {
     return useEditorStore.getState().scene;
   }
 
+  const activeArtboardId = useEditorStore.getState().activeArtboardId;
   return commitScene((scene) => {
+    const ab = getActiveArtboard(scene, activeArtboardId);
     const idSet = new Set(layerIds);
-    const targets = scene.layers.filter((l) => idSet.has(l.id) && !l.locked);
+    const targets = flattenLayers(scene.layers).filter(
+      (l) => idSet.has(l.id) && !l.locked
+    );
     if (targets.length === 0) {
       return scene;
     }
 
     const boxes = new Map(
-      targets.map((layer) => [layer.id, computeLayerWorldBBox(layer)])
+      targets.map((layer) => [
+        layer.id,
+        computeLayerBBoxWithMatrix(layer, getParentWorldMatrix(scene.layers, layer.id)),
+      ])
     );
     const deltas = new Map<string, { dx: number; dy: number }>();
 
     if (mode === 'artboard_center') {
-      const comb = computeCombinedWorldBBox(targets);
-      const dx = scene.width / 2 - (comb.x + comb.width / 2);
-      const dy = scene.height / 2 - (comb.y + comb.height / 2);
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const b of boxes.values()) {
+        if (b.x < minX) minX = b.x;
+        if (b.y < minY) minY = b.y;
+        if (b.x + b.width > maxX) maxX = b.x + b.width;
+        if (b.y + b.height > maxY) maxY = b.y + b.height;
+      }
+      const dx = ab.x + ab.width / 2 - (minX + (maxX - minX) / 2);
+      const dy = ab.y + ab.height / 2 - (minY + (maxY - minY) / 2);
       for (const layer of targets) {
         deltas.set(layer.id, { dx, dy });
       }
@@ -640,10 +878,20 @@ export function alignLayers(layerIds: string[], mode: AlignMode): Scene {
         }
       }
     } else {
-      const refBox =
-        targets.length === 1
-          ? { x: 0, y: 0, width: scene.width, height: scene.height }
-          : computeCombinedWorldBBox(targets);
+      let refBox = { x: ab.x, y: ab.y, width: ab.width, height: ab.height };
+      if (targets.length > 1) {
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const b of boxes.values()) {
+          if (b.x < minX) minX = b.x;
+          if (b.y < minY) minY = b.y;
+          if (b.x + b.width > maxX) maxX = b.x + b.width;
+          if (b.y + b.height > maxY) maxY = b.y + b.height;
+        }
+        refBox = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+      }
 
       for (const layer of targets) {
         const b = boxes.get(layer.id)!;
@@ -674,16 +922,21 @@ export function alignLayers(layerIds: string[], mode: AlignMode): Scene {
     }
 
     let changed = false;
-    const nextLayers = scene.layers.map((layer) => {
+    const nextLayers = mapLayerTree(scene.layers, (layer) => {
       const d = deltas.get(layer.id);
       if (!d || (Math.abs(d.dx) <= 1e-6 && Math.abs(d.dy) <= 1e-6)) {
         return layer;
       }
       changed = true;
+      const parentM = getParentWorldMatrix(scene.layers, layer.id);
+      const localDelta =
+        parentM === IDENTITY_MATRIX
+          ? { x: d.dx, y: d.dy }
+          : applyMatrixToVector(invertMatrix(parentM), { x: d.dx, y: d.dy });
       return {
         ...layer,
-        x: layer.x + d.dx,
-        y: layer.y + d.dy,
+        x: layer.x + localDelta.x,
+        y: layer.y + localDelta.y,
       };
     });
 
@@ -699,14 +952,16 @@ export function flipLayers(
 
   return commitScene((scene) => {
     const idSet = new Set(layerIds);
-    const targets = scene.layers.filter((l) => idSet.has(l.id) && !l.locked);
+    const targets = flattenLayers(scene.layers).filter(
+      (l) => idSet.has(l.id) && !l.locked
+    );
     if (targets.length === 0) return scene;
 
     const comb = computeCombinedWorldBBox(targets);
     const pivotX = comb.x + comb.width / 2;
     const pivotY = comb.y + comb.height / 2;
 
-    const nextLayers = scene.layers.map((layer) => {
+    const nextLayers = mapLayerTree(scene.layers, (layer) => {
       if (!idSet.has(layer.id) || layer.locked) return layer;
       if (axis === 'horizontal') {
         return {
@@ -728,7 +983,7 @@ export function flipLayers(
   });
 }
 
-/** Дублирует слои зеркально относительно центральной оси артборда. */
+/** Дублирует слои зеркально относительно центральной оси активного артборда. */
 export function mirrorDuplicateLayers(
   layerIds: string[],
   axis: 'horizontal' | 'vertical'
@@ -736,30 +991,46 @@ export function mirrorDuplicateLayers(
   if (layerIds.length === 0) return [];
   const sourceSet = new Set(layerIds);
   const created: Layer[] = [];
+  const activeArtboardId = useEditorStore.getState().activeArtboardId;
 
   commitScene((scene) => {
-    const nextLayers: Layer[] = [];
-    for (const layer of scene.layers) {
-      nextLayers.push(layer);
-      if (!sourceSet.has(layer.id) || layer.locked) continue;
+    const ab = getActiveArtboard(scene, activeArtboardId);
+    const mirrorInList = (layers: Layer[]): Layer[] => {
+      let changed = false;
+      const next: Layer[] = [];
+      for (const rawLayer of layers) {
+        let layer = rawLayer;
+        if (layer.type === 'group') {
+          const nextChildren = mirrorInList(layer.children);
+          if (nextChildren !== layer.children) {
+            layer = { ...layer, children: nextChildren };
+            changed = true;
+          }
+        }
+        next.push(layer);
+        if (!sourceSet.has(layer.id) || layer.locked) continue;
 
-      const copy = cloneLayerWithNewId(layer);
-      copy.name = `${layer.name} отражение`;
-      if (axis === 'horizontal') {
-        copy.x = scene.width - layer.x;
-        copy.rotation = -layer.rotation;
-        copy.scaleX = -layer.scaleX;
-      } else {
-        copy.y = scene.height - layer.y;
-        copy.rotation = -layer.rotation;
-        copy.scaleY = -layer.scaleY;
+        changed = true;
+        const copy = cloneLayerSubtreeWithNewIds(layer, createLayerId, ' отражение');
+        if (axis === 'horizontal') {
+          copy.x = ab.x * 2 + ab.width - layer.x;
+          copy.rotation = -layer.rotation;
+          copy.scaleX = -layer.scaleX;
+        } else {
+          copy.y = ab.y * 2 + ab.height - layer.y;
+          copy.rotation = -layer.rotation;
+          copy.scaleY = -layer.scaleY;
+        }
+        if (copy.type === 'path' && copy.isClipMask) {
+          copy.isClipMask = false;
+        }
+        created.push(copy);
+        next.push(copy);
       }
-      if (copy.type === 'path' && copy.isClipMask) {
-        copy.isClipMask = false;
-      }
-      created.push(copy);
-      nextLayers.push(copy);
-    }
+      return changed ? next : layers;
+    };
+
+    const nextLayers = mirrorInList(scene.layers);
     return created.length > 0 ? { ...scene, layers: nextLayers } : scene;
   });
 
@@ -781,7 +1052,7 @@ export interface RepeatLayersOptions {
   sweep?: number;
 }
 
-/** Размножает слои рядом, сеткой или по кольцу вокруг центра артборда. */
+/** Размножает слои рядом, сеткой или по кольцу вокруг центра активного артборда. */
 export function repeatLayers(
   layerIds: string[],
   opts: RepeatLayersOptions
@@ -792,67 +1063,82 @@ export function repeatLayers(
   const columns = clamp(Math.round(opts.columns ?? 3), 2, 10);
   const sourceSet = new Set(layerIds);
   const created: Layer[] = [];
+  const activeArtboardId = useEditorStore.getState().activeArtboardId;
 
   commitScene((scene) => {
-    const nextLayers: Layer[] = [];
-    const artboardCenter = { x: scene.width / 2, y: scene.height / 2 };
+    const ab = getActiveArtboard(scene, activeArtboardId);
+    const artboardCenter = { x: ab.x + ab.width / 2, y: ab.y + ab.height / 2 };
     const sweep = clamp(opts.sweep ?? 360, -360, 360);
 
-    for (const layer of scene.layers) {
-      nextLayers.push(layer);
-      if (!sourceSet.has(layer.id) || layer.locked) continue;
+    const repeatInList = (layers: Layer[]): Layer[] => {
+      let changed = false;
+      const next: Layer[] = [];
+      for (const rawLayer of layers) {
+        let layer = rawLayer;
+        if (layer.type === 'group') {
+          const nextChildren = repeatInList(layer.children);
+          if (nextChildren !== layer.children) {
+            layer = { ...layer, children: nextChildren };
+            changed = true;
+          }
+        }
+        next.push(layer);
+        if (!sourceSet.has(layer.id) || layer.locked) continue;
 
-      const box = computeLayerWorldBBox(layer);
-      const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-      const stepX = box.width + gap;
-      const stepY = box.height + gap;
-      const rows = Math.ceil(count / columns);
-      const baseRadius =
-        opts.radius ??
-        Math.max(
-          Math.hypot(center.x - artboardCenter.x, center.y - artboardCenter.y),
-          Math.max(box.width, box.height) / 2
+        changed = true;
+        const box = computeLayerBBoxWithMatrix(layer, IDENTITY_MATRIX);
+        const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+        const stepX = box.width + gap;
+        const stepY = box.height + gap;
+        const rows = Math.ceil(count / columns);
+        const baseRadius =
+          opts.radius ??
+          Math.max(
+            Math.hypot(center.x - artboardCenter.x, center.y - artboardCenter.y),
+            Math.max(box.width, box.height) / 2
+          );
+        const baseAngle = Math.atan2(
+          center.y - artboardCenter.y,
+          center.x - artboardCenter.x
         );
-      const baseAngle = Math.atan2(
-        center.y - artboardCenter.y,
-        center.x - artboardCenter.x
-      );
 
-      for (let index = 1; index < count; index += 1) {
-        let targetCenter: { x: number; y: number };
+        for (let index = 1; index < count; index += 1) {
+          let targetCenter: { x: number; y: number };
 
-        if (opts.mode === 'row') {
-          targetCenter = { x: center.x + stepX * index, y: center.y };
-        } else if (opts.mode === 'column') {
-          targetCenter = { x: center.x, y: center.y + stepY * index };
-        } else if (opts.mode === 'grid') {
-          const col = index % columns;
-          const row = Math.floor(index / columns);
-          if (row >= rows) break;
-          targetCenter = {
-            x: center.x + stepX * col,
-            y: center.y + stepY * row,
-          };
-        } else {
-          const angle = baseAngle + ((Math.PI * 2 * sweep) / 360) * (index / count);
-          targetCenter = {
-            x: artboardCenter.x + Math.cos(angle) * baseRadius,
-            y: artboardCenter.y + Math.sin(angle) * baseRadius,
-          };
+          if (opts.mode === 'row') {
+            targetCenter = { x: center.x + stepX * index, y: center.y };
+          } else if (opts.mode === 'column') {
+            targetCenter = { x: center.x, y: center.y + stepY * index };
+          } else if (opts.mode === 'grid') {
+            const col = index % columns;
+            const row = Math.floor(index / columns);
+            if (row >= rows) break;
+            targetCenter = {
+              x: center.x + stepX * col,
+              y: center.y + stepY * row,
+            };
+          } else {
+            const angle = baseAngle + ((Math.PI * 2 * sweep) / 360) * (index / count);
+            targetCenter = {
+              x: artboardCenter.x + Math.cos(angle) * baseRadius,
+              y: artboardCenter.y + Math.sin(angle) * baseRadius,
+            };
+          }
+
+          const copy = cloneLayerSubtreeWithNewIds(layer, createLayerId, ` ${index + 1}`);
+          copy.x += targetCenter.x - center.x;
+          copy.y += targetCenter.y - center.y;
+          if (copy.type === 'path' && copy.isClipMask) {
+            copy.isClipMask = false;
+          }
+          created.push(copy);
+          next.push(copy);
         }
-
-        const copy = cloneLayerWithNewId(layer);
-        copy.name = `${layer.name} ${index + 1}`;
-        copy.x += targetCenter.x - center.x;
-        copy.y += targetCenter.y - center.y;
-        if (copy.type === 'path' && copy.isClipMask) {
-          copy.isClipMask = false;
-        }
-        created.push(copy);
-        nextLayers.push(copy);
       }
-    }
+      return changed ? next : layers;
+    };
 
+    const nextLayers = repeatInList(scene.layers);
     return created.length > 0 ? { ...scene, layers: nextLayers } : scene;
   });
 
@@ -878,9 +1164,10 @@ export function placeLayersInBounds(
 
   return commitScene((scene) => {
     let changed = false;
-    const nextLayers = scene.layers.map((layer) => {
+    const nextLayers = mapLayerTree(scene.layers, (layer) => {
       if (!idSet.has(layer.id) || layer.locked) return layer;
-      const current = computeLayerWorldBBox(layer);
+      const parentM = getParentWorldMatrix(scene.layers, layer.id);
+      const current = computeLayerBBoxWithMatrix(layer, parentM);
       if (current.width <= 1e-6 || current.height <= 1e-6) return layer;
 
       const scaleX = box.width / current.width;
@@ -893,15 +1180,19 @@ export function placeLayersInBounds(
         scaleX: layer.scaleX * k,
         scaleY: layer.scaleY * k,
       };
-      const next = computeLayerWorldBBox(scaled);
+      const next = computeLayerBBoxWithMatrix(scaled, parentM);
       const dx = box.x + box.width / 2 - (next.x + next.width / 2);
       const dy = box.y + box.height / 2 - (next.y + next.height / 2);
+      const localDelta =
+        parentM === IDENTITY_MATRIX
+          ? { x: dx, y: dy }
+          : applyMatrixToVector(invertMatrix(parentM), { x: dx, y: dy });
 
       changed = true;
       return {
         ...scaled,
-        x: scaled.x + dx,
-        y: scaled.y + dy,
+        x: scaled.x + localDelta.x,
+        y: scaled.y + localDelta.y,
       };
     });
     return changed ? { ...scene, layers: nextLayers } : scene;
@@ -913,7 +1204,7 @@ export function rotateLayersBy(layerIds: string[], deltaDeg: number): Scene {
   const idSet = new Set(layerIds);
   return commitScene((scene) => {
     let changed = false;
-    const nextLayers = scene.layers.map((layer) => {
+    const nextLayers = mapLayerTree(scene.layers, (layer) => {
       if (!idSet.has(layer.id) || layer.locked) return layer;
       changed = true;
       return { ...layer, rotation: layer.rotation + deltaDeg };
@@ -930,7 +1221,7 @@ export function updateLayerEffects(
   const idSet = new Set(layerIds);
   return commitScene((scene) => {
     let changed = false;
-    const nextLayers = scene.layers.map((layer) => {
+    const nextLayers = mapLayerTree(scene.layers, (layer) => {
       if (!idSet.has(layer.id) || layer.locked) return layer;
       changed = true;
       if (patch === null) {
@@ -956,8 +1247,10 @@ export function updateLayerEffects(
 }
 
 export function selectAllLayers(): void {
-  const { scene } = useEditorStore.getState();
-  const ids = scene.layers.filter((l) => l.visible && !l.locked).map((l) => l.id);
+  const { scene, editingGroupId } = useEditorStore.getState();
+  const ids = getScopeLayers(scene.layers, editingGroupId)
+    .filter((l) => l.visible && !l.locked)
+    .map((l) => l.id);
   useEditorStore.setState({ selectedIds: ids, selectedNode: null });
 }
 
@@ -966,41 +1259,37 @@ export function deselectAllLayers(): void {
 }
 
 export function invertSelection(): void {
-  const { scene, selectedIds } = useEditorStore.getState();
+  const { scene, selectedIds, editingGroupId } = useEditorStore.getState();
   const current = new Set(selectedIds);
-  const next = scene.layers
+  const next = getScopeLayers(scene.layers, editingGroupId)
     .filter((l) => l.visible && !l.locked && !current.has(l.id))
     .map((l) => l.id);
   useEditorStore.setState({ selectedIds: next, selectedNode: null });
 }
 
 export function selectSimilarLayers(criterion: 'fill' | 'stroke' | 'type'): number {
-  const { scene, selectedIds } = useEditorStore.getState();
+  const { scene, selectedIds, editingGroupId } = useEditorStore.getState();
   if (selectedIds.length === 0) return 0;
-  const refLayer = scene.layers.find((l) => l.id === selectedIds[0]);
+  const refLayer = findLayerById(scene.layers, selectedIds[0]);
   if (!refLayer) return 0;
 
   const refFill =
     refLayer.type === 'path' || refLayer.type === 'text'
-      ? (refLayer.fill ?? null)?.toLowerCase() ?? null
+      ? refLayer.fill ?? null
       : null;
   const refStroke =
-    refLayer.type === 'path'
-      ? (refLayer.stroke?.color ?? null)?.toLowerCase() ?? null
-      : null;
+    refLayer.type === 'path' ? refLayer.stroke?.color ?? null : null;
 
-  const matched = scene.layers
+  const matched = getScopeLayers(scene.layers, editingGroupId)
     .filter((l) => {
       if (!l.visible || l.locked) return false;
       if (criterion === 'type') return l.type === refLayer.type;
       if (criterion === 'fill') {
         if (l.type !== 'path' && l.type !== 'text') return false;
-        const f = (l.fill ?? null)?.toLowerCase() ?? null;
-        return f === refFill;
+        return paintEquals(l.fill ?? null, refFill);
       }
       if (l.type !== 'path') return false;
-      const s = (l.stroke?.color ?? null)?.toLowerCase() ?? null;
-      return s === refStroke;
+      return paintEquals(l.stroke?.color ?? null, refStroke);
     })
     .map((l) => l.id);
 

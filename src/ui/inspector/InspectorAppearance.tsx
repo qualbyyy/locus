@@ -1,6 +1,14 @@
-import { isValidHexColor } from '../../core/themes';
-import type { Layer, PathLayer, Scene, StrokeStyle } from '../../core/types';
-import { HexColorRow, NumberField, SegmentedButton } from '../InspectorControls';
+import { sanitizeDashArray } from '../../core/paint';
+import { useEditorStore } from '../../core/store';
+import type { Layer, PathLayer, StrokeStyle } from '../../core/types';
+import { NumberField, SegmentedButton } from '../InspectorControls';
+import {
+  collectDocumentColors,
+  DocumentColorSwatches,
+  PaintEditor,
+} from './PaintEditor';
+
+export { collectDocumentColors, DocumentColorSwatches };
 
 const DEFAULT_STROKE: StrokeStyle = {
   color: '#1c1b1a',
@@ -36,70 +44,6 @@ const FILL_RULE_OPTIONS: Array<{
   { value: 'evenodd', label: 'С вырезами', title: 'С вырезами (evenodd)' },
 ];
 
-export function collectDocumentColors(scene: Scene, maxColors = 16): string[] {
-  const seen = new Set<string>();
-  const add = (hex: string | null | undefined) => {
-    if (!hex) return;
-    const normalized = hex.trim().toLowerCase();
-    if (!isValidHexColor(normalized) || seen.has(normalized)) return;
-    seen.add(normalized);
-  };
-
-  for (const layer of scene.layers) {
-    if (layer.type === 'path') {
-      add(layer.fill);
-      add(layer.stroke?.color);
-    } else if (layer.type === 'text') {
-      add(layer.fill);
-    }
-    if (seen.size >= maxColors) break;
-  }
-
-  if (seen.size < maxColors) {
-    add(scene.background);
-  }
-
-  return Array.from(seen).slice(0, maxColors);
-}
-
-export function DocumentColorSwatches({
-  colors,
-  activeColor,
-  onSelect,
-}: {
-  colors: string[];
-  activeColor?: string | null;
-  onSelect: (hex: string) => void;
-}) {
-  if (colors.length === 0) return null;
-  const activeNormalized = activeColor?.toLowerCase() ?? null;
-
-  return (
-    <div className="mt-1.5 flex flex-col gap-1">
-      <span className="text-[10px] text-paper-muted">Цвета документа</span>
-      <div className="flex flex-wrap gap-1">
-        {colors.map((hex) => {
-          const isCurrent = activeNormalized === hex;
-          return (
-            <button
-              key={hex}
-              type="button"
-              title={`Применить ${hex}`}
-              onClick={() => onSelect(hex)}
-              style={{ backgroundColor: hex }}
-              className={`h-4 w-4 rounded-sm border transition-transform hover:scale-110 ${
-                isCurrent
-                  ? 'border-paper-accent ring-1 ring-paper-accent'
-                  : 'border-paper-border'
-              }`}
-            />
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 interface InspectorAppearanceProps {
   layer: PathLayer;
   documentColors: string[];
@@ -114,8 +58,15 @@ export function InspectorAppearance({
   documentColors,
   onUpdateLayers,
 }: InspectorAppearanceProps) {
+  const activeDash = layer.stroke ? sanitizeDashArray(layer.stroke.dashArray) : undefined;
+  const dashMode: 'solid' | 'dashed' | 'dotted' = !activeDash
+    ? 'solid'
+    : activeDash[0] <= 2
+      ? 'dotted'
+      : 'dashed';
+
   return (
-    <>
+    <div data-tour="inspector.appearance" className="flex flex-col gap-3">
       <div className="border-t border-paper-border pt-2.5">
         <div className="mb-1.5 flex items-center justify-between">
           <span className="text-[11px] font-medium text-paper-muted">Заливка</span>
@@ -139,17 +90,14 @@ export function InspectorAppearance({
         </div>
 
         {layer.fill !== null && (
-          <>
-            <HexColorRow
-              value={layer.fill}
-              onChange={(fill) => onUpdateLayers([layer.id], { fill })}
-            />
-            <DocumentColorSwatches
-              colors={documentColors}
-              activeColor={layer.fill}
-              onSelect={(fill) => onUpdateLayers([layer.id], { fill })}
-            />
-          </>
+          <PaintEditor
+            value={layer.fill}
+            documentColors={documentColors}
+            onFocusGradient={() =>
+              useEditorStore.getState().setActiveGradientTarget('fill')
+            }
+            onChange={(fill) => onUpdateLayers([layer.id], { fill })}
+          />
         )}
       </div>
 
@@ -181,33 +129,32 @@ export function InspectorAppearance({
 
         {layer.stroke !== null && (
           <div className="flex flex-col gap-2">
-            <div className="flex items-end gap-2">
-              <div className="flex-1">
-                <HexColorRow
-                  value={layer.stroke.color}
-                  onChange={(color) =>
-                    onUpdateLayers([layer.id], {
-                      stroke: { ...layer.stroke!, color },
-                    })
-                  }
-                />
-              </div>
-              <div className="w-16">
-                <NumberField
-                  label="Толщ."
-                  value={layer.stroke.width}
-                  min={0.5}
-                  max={200}
-                  step={0.5}
-                  decimals={1}
-                  onCommit={(width) =>
-                    onUpdateLayers([layer.id], {
-                      stroke: { ...layer.stroke!, width },
-                    })
-                  }
-                />
-              </div>
-            </div>
+            <PaintEditor
+              value={layer.stroke.color}
+              documentColors={documentColors}
+              onFocusGradient={() =>
+                useEditorStore.getState().setActiveGradientTarget('stroke')
+              }
+              onChange={(color) =>
+                onUpdateLayers([layer.id], {
+                  stroke: { ...layer.stroke!, color },
+                })
+              }
+            />
+
+            <NumberField
+              label="Толщина (px)"
+              value={layer.stroke.width}
+              min={0.5}
+              max={200}
+              step={0.5}
+              decimals={1}
+              onCommit={(width) =>
+                onUpdateLayers([layer.id], {
+                  stroke: { ...layer.stroke!, width },
+                })
+              }
+            />
 
             <div className="flex flex-col gap-1">
               <span className="text-[11px] text-paper-muted">Концы линии</span>
@@ -246,6 +193,88 @@ export function InspectorAppearance({
                 ))}
               </div>
             </div>
+
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[11px] text-paper-muted">Пунктир</span>
+              <div className="flex gap-1">
+                <SegmentedButton
+                  active={dashMode === 'solid'}
+                  label="Сплошная"
+                  onClick={() => {
+                    const { dashArray: _d, dashOffset: _o, ...rest } = layer.stroke!;
+                    onUpdateLayers([layer.id], { stroke: rest });
+                  }}
+                />
+                <SegmentedButton
+                  active={dashMode === 'dashed'}
+                  label="Пунктир"
+                  onClick={() =>
+                    onUpdateLayers([layer.id], {
+                      stroke: { ...layer.stroke!, dashArray: [8, 6] },
+                    })
+                  }
+                />
+                <SegmentedButton
+                  active={dashMode === 'dotted'}
+                  label="Точки"
+                  onClick={() =>
+                    onUpdateLayers([layer.id], {
+                      stroke: { ...layer.stroke!, dashArray: [1, 6] },
+                    })
+                  }
+                />
+              </div>
+
+              {activeDash && (
+                <div className="grid grid-cols-3 gap-1.5">
+                  <NumberField
+                    label="Штрих"
+                    value={activeDash[0]}
+                    min={0.5}
+                    max={500}
+                    step={0.5}
+                    decimals={1}
+                    onCommit={(dashLen) =>
+                      onUpdateLayers([layer.id], {
+                        stroke: {
+                          ...layer.stroke!,
+                          dashArray: [dashLen, activeDash[1] ?? activeDash[0]],
+                        },
+                      })
+                    }
+                  />
+                  <NumberField
+                    label="Пробел"
+                    value={activeDash[1] ?? activeDash[0]}
+                    min={0.5}
+                    max={500}
+                    step={0.5}
+                    decimals={1}
+                    onCommit={(gapLen) =>
+                      onUpdateLayers([layer.id], {
+                        stroke: {
+                          ...layer.stroke!,
+                          dashArray: [activeDash[0], gapLen],
+                        },
+                      })
+                    }
+                  />
+                  <NumberField
+                    label="Сдвиг"
+                    value={layer.stroke.dashOffset ?? 0}
+                    min={-500}
+                    max={500}
+                    step={1}
+                    decimals={1}
+                    onCommit={(dashOffset) =>
+                      onUpdateLayers([layer.id], {
+                        stroke: { ...layer.stroke!, dashOffset },
+                      })
+                    }
+                  />
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -264,6 +293,6 @@ export function InspectorAppearance({
           ))}
         </div>
       </div>
-    </>
+    </div>
   );
 }

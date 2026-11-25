@@ -18,6 +18,15 @@ export interface Matrix2D {
   ty: number;
 }
 
+export const IDENTITY_MATRIX: Matrix2D = {
+  a: 1,
+  b: 0,
+  c: 0,
+  d: 1,
+  tx: 0,
+  ty: 0,
+};
+
 export type LayerTransform = Pick<
   BaseLayer,
   'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY'
@@ -63,6 +72,45 @@ export function applyMatrixToPoint(m: Matrix2D, pt: Point2D): Point2D {
   return {
     x: m.a * pt.x + m.c * pt.y + m.tx,
     y: m.b * pt.x + m.d * pt.y + m.ty,
+  };
+}
+
+export function applyMatrixToVector(m: Matrix2D, vec: Point2D): Point2D {
+  return {
+    x: m.a * vec.x + m.c * vec.y,
+    y: m.b * vec.x + m.d * vec.y,
+  };
+}
+
+export function multiplyMatrices(p: Matrix2D, c: Matrix2D): Matrix2D {
+  return {
+    a: p.a * c.a + p.c * c.b,
+    b: p.b * c.a + p.d * c.b,
+    c: p.a * c.c + p.c * c.d,
+    d: p.b * c.c + p.d * c.d,
+    tx: p.a * c.tx + p.c * c.ty + p.tx,
+    ty: p.b * c.tx + p.d * c.ty + p.ty,
+  };
+}
+
+function clampDecomposedScale(val: number): number {
+  if (!Number.isFinite(val)) return 1;
+  if (Math.abs(val) < 0.02) return val < 0 ? -0.02 : 0.02;
+  return val;
+}
+
+export function decomposeMatrix(m: Matrix2D): LayerTransform {
+  const rawSx = Math.hypot(m.a, m.b);
+  const det = m.a * m.d - m.b * m.c;
+  const safeSx = rawSx > ZERO_EPS ? rawSx : ZERO_EPS;
+  const rawSy = det / safeSx;
+  const rot = rawSx > ZERO_EPS ? radToDeg(Math.atan2(m.b, m.a)) : 0;
+  return {
+    x: m.tx,
+    y: m.ty,
+    rotation: Math.abs(rot) < 1e-9 ? 0 : rot,
+    scaleX: clampDecomposedScale(rawSx),
+    scaleY: clampDecomposedScale(rawSy),
   };
 }
 
@@ -223,9 +271,9 @@ function isZeroHandle(pt: Point2D): boolean {
   return Math.abs(pt.x) <= ZERO_EPS && Math.abs(pt.y) <= ZERO_EPS;
 }
 
-function computeSubPathsBBoxWithTransform(
+function computeSubPathsBBoxWithMatrix(
   subpaths: SubPath[],
-  transform?: LayerTransform
+  matrix?: Matrix2D
 ): BBox {
   let minX = Infinity;
   let minY = Infinity;
@@ -233,8 +281,8 @@ function computeSubPathsBBoxWithTransform(
   let maxY = -Infinity;
   let hasPoint = false;
 
-  const toSpace = transform
-    ? (pt: Point2D) => localToWorld(transform, pt)
+  const toSpace = matrix
+    ? (pt: Point2D) => applyMatrixToPoint(matrix, pt)
     : (pt: Point2D) => pt;
 
   const includePoint = (pt: Point2D) => {
@@ -295,7 +343,7 @@ function computeSubPathsBBoxWithTransform(
 }
 
 export function computeSubPathsBBox(subpaths: SubPath[]): BBox {
-  return computeSubPathsBBoxWithTransform(subpaths);
+  return computeSubPathsBBoxWithMatrix(subpaths);
 }
 
 export function cloneSubPaths(subpaths: SubPath[]): SubPath[] {
@@ -450,6 +498,12 @@ export function computeLayerLocalBBox(layer: Layer): BBox {
   if (layer.type === 'path') {
     return computeSubPathsBBox(layer.subpaths);
   }
+  if (layer.type === 'group') {
+    if (layer.children.length === 0) {
+      return { x: 0, y: 0, width: 0, height: 0 };
+    }
+    return computeCombinedWorldBBox(layer.children);
+  }
   if (layer.type === 'image') {
     return {
       x: -layer.width / 2,
@@ -461,7 +515,7 @@ export function computeLayerLocalBBox(layer: Layer): BBox {
   return estimateTextLocalBBox(layer);
 }
 
-function bboxFromTransformedRect(layer: LayerTransform, localBox: BBox): BBox {
+function bboxFromMatrixRect(m: Matrix2D, localBox: BBox): BBox {
   const corners: Point2D[] = [
     { x: localBox.x, y: localBox.y },
     { x: localBox.x + localBox.width, y: localBox.y },
@@ -475,7 +529,7 @@ function bboxFromTransformedRect(layer: LayerTransform, localBox: BBox): BBox {
   let maxY = -Infinity;
 
   for (const corner of corners) {
-    const w = localToWorld(layer, corner);
+    const w = applyMatrixToPoint(m, corner);
     if (w.x < minX) minX = w.x;
     if (w.y < minY) minY = w.y;
     if (w.x > maxX) maxX = w.x;
@@ -490,15 +544,42 @@ function bboxFromTransformedRect(layer: LayerTransform, localBox: BBox): BBox {
   };
 }
 
-export function computeLayerWorldBBox(layer: Layer): BBox {
+export function computeLayerBBoxWithMatrix(
+  layer: Layer,
+  parentMatrix: Matrix2D
+): BBox {
+  const worldM = multiplyMatrices(parentMatrix, getLayerMatrix(layer));
+  if (layer.type === 'group') {
+    if (layer.children.length === 0) {
+      return { x: worldM.tx, y: worldM.ty, width: 0, height: 0 };
+    }
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const child of layer.children) {
+      const b = computeLayerBBoxWithMatrix(child, worldM);
+      if (b.x < minX) minX = b.x;
+      if (b.y < minY) minY = b.y;
+      if (b.x + b.width > maxX) maxX = b.x + b.width;
+      if (b.y + b.height > maxY) maxY = b.y + b.height;
+    }
+    return minX === Infinity
+      ? { x: worldM.tx, y: worldM.ty, width: 0, height: 0 }
+      : { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }
   if (layer.type === 'path') {
     const hasAnchors = layer.subpaths.some((sp) => sp.anchors.length > 0);
     if (!hasAnchors) {
-      return { x: layer.x, y: layer.y, width: 0, height: 0 };
+      return { x: worldM.tx, y: worldM.ty, width: 0, height: 0 };
     }
-    return computeSubPathsBBoxWithTransform(layer.subpaths, layer);
+    return computeSubPathsBBoxWithMatrix(layer.subpaths, worldM);
   }
-  return bboxFromTransformedRect(layer, computeLayerLocalBBox(layer));
+  return bboxFromMatrixRect(worldM, computeLayerLocalBBox(layer));
+}
+
+export function computeLayerWorldBBox(layer: Layer): BBox {
+  return computeLayerBBoxWithMatrix(layer, IDENTITY_MATRIX);
 }
 
 export function computeCombinedWorldBBox(layers: Layer[]): BBox {

@@ -12,11 +12,18 @@ import {
   ChevronDown,
   FlipHorizontal2,
   FlipVertical2,
+  Trash2,
+  Upload,
 } from 'lucide-react';
 import type { AlignMode } from '../core/commands';
-import { BUILTIN_FONTS } from '../core/fonts';
+import {
+  BUILTIN_FONTS,
+  getProjectFonts,
+  removeProjectFontFamily,
+  subscribeFonts,
+} from '../core/fonts';
 import { clamp } from '../core/math';
-import type { BuiltinFontFamily } from '../core/types';
+import type { FontFamily } from '../core/types';
 import { ColorField } from './controls';
 
 export function NumberField({
@@ -197,12 +204,17 @@ export function SegmentedButton({
 export function FontFamilySelect({
   value,
   onChange,
+  onUploadFont,
 }: {
-  value: BuiltinFontFamily;
-  onChange: (family: BuiltinFontFamily) => void;
+  value: FontFamily;
+  onChange: (family: FontFamily) => void;
+  onUploadFont?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [projectFonts, setProjectFonts] = useState(() => getProjectFonts());
   const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => subscribeFonts(() => setProjectFonts(getProjectFonts())), []);
 
   useEffect(() => {
     if (!open) return;
@@ -225,6 +237,11 @@ export function FontFamilySelect({
     };
   }, [open]);
 
+  const builtinNames = new Set<string>(BUILTIN_FONTS.map((f) => f.family));
+  const customFamilies = Array.from(new Set(projectFonts.map((f) => f.family))).filter(
+    (family) => !builtinNames.has(family)
+  );
+
   return (
     <div ref={rootRef} className="relative">
       <button
@@ -238,7 +255,58 @@ export function FontFamilySelect({
       </button>
 
       {open && (
-        <div className="absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden rounded border border-paper-border bg-paper-panel py-1">
+        <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-72 overflow-y-auto rounded border border-paper-border bg-paper-panel py-1">
+          {customFamilies.length > 0 && (
+            <>
+              <div className="px-2.5 py-1 text-[10px] font-medium text-paper-muted">
+                Шрифты проекта
+              </div>
+              {customFamilies.map((family) => {
+                const active = family === value;
+                return (
+                  <div
+                    key={`custom-${family}`}
+                    className={`flex h-7 items-center justify-between gap-1 pr-1.5 ${
+                      active ? 'bg-paper-accent/12' : 'hover:bg-paper-hover'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onChange(family);
+                        setOpen(false);
+                      }}
+                      style={{ fontFamily: `"${family}", sans-serif` }}
+                      className={`flex h-full min-w-0 flex-1 items-center justify-between pl-2.5 text-left text-[12px] ${
+                        active ? 'font-medium text-paper-ink' : 'text-paper-ink'
+                      }`}
+                    >
+                      <span className="truncate">{family}</span>
+                      {active && (
+                        <Check
+                          className="h-3.5 w-3.5 shrink-0 text-paper-accent"
+                          strokeWidth={2}
+                        />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeProjectFontFamily(family);
+                      }}
+                      title={`Удалить шрифт ${family}`}
+                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-paper-muted hover:bg-paper-bg hover:text-paper-danger"
+                    >
+                      <Trash2 className="h-3 w-3" strokeWidth={1.75} />
+                    </button>
+                  </div>
+                );
+              })}
+              <div className="my-1 h-px bg-paper-border" />
+            </>
+          )}
+
           {BUILTIN_FONTS.map((font) => {
             const active = font.family === value;
             return (
@@ -263,6 +331,23 @@ export function FontFamilySelect({
               </button>
             );
           })}
+
+          {onUploadFont && (
+            <>
+              <div className="my-1 h-px bg-paper-border" />
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  onUploadFont();
+                }}
+                className="flex h-7 w-full items-center gap-1.5 px-2.5 text-left text-[11px] font-medium text-paper-accent hover:bg-paper-hover"
+              >
+                <Upload className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+                <span className="truncate">Загрузить шрифт (.ttf, .otf, .woff2)</span>
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

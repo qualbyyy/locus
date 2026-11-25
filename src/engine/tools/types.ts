@@ -1,7 +1,9 @@
 import type { Layer, Point2D } from '../../core/types';
 import type {
+  FreehandDraftOverlay,
   MarqueeOverlay,
   PenDraftOverlay,
+  ShapeBuilderOverlay,
   ShapeDraftOverlay,
 } from '../overlay';
 import type { SmartGuideLine } from '../snapping';
@@ -21,8 +23,15 @@ export interface OverlayExtras {
   marquee?: MarqueeOverlay | null;
   penDraft?: PenDraftOverlay | null;
   shapeDraft?: ShapeDraftOverlay | null;
+  shapeBuilder?: ShapeBuilderOverlay | null;
+  freehandDraft?: FreehandDraftOverlay | null;
   hoveredMaskId?: string | null;
   guides?: SmartGuideLine[] | null;
+  draggingGuide?: {
+    id?: string;
+    orientation: 'horizontal' | 'vertical';
+    position: number;
+  } | null;
 }
 
 export interface ToolContext {

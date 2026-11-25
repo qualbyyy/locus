@@ -1,13 +1,23 @@
 import { getAsset, getAssetImageElement } from '../core/assets';
+import { findLayerPath } from '../core/layerTree';
 import {
   clamp,
   computeLayerLocalBBox,
+  computeSubPathsBBox,
   getLayerMatrix,
   type LayerTransform,
 } from '../core/math';
+import {
+  normalizeGradientStops,
+  resolveGradientEndpoints,
+  sanitizeDashArray,
+} from '../core/paint';
 import type {
+  BBox,
+  GroupLayer,
   ImageLayer,
   Layer,
+  Paint,
   PathLayer,
   Scene,
   SubPath,
@@ -19,6 +29,11 @@ import {
   hasRasterEffects,
   resolveEffectivePathGeometry,
 } from './effects';
+import {
+  computeTextOnPathLocalBBox,
+  computeTextOnPathPlacements,
+  resolveHostPathLayer,
+} from './textOnPath';
 
 export function applyLayerMatrixToItem(
   scope: paper.PaperScope,
@@ -83,6 +98,61 @@ export function buildPaperPathFromSubPaths(
   return compound;
 }
 
+export function toPaperColor(
+  scope: paper.PaperScope,
+  paint: Paint | null | undefined,
+  box: BBox
+): paper.Color | null {
+  if (!paint) return null;
+  if (typeof paint === 'string') {
+    return new scope.Color(paint);
+  }
+  const stops = normalizeGradientStops(paint.stops).map((s) => {
+    const c = new scope.Color(s.color);
+    if (s.opacity !== undefined) {
+      c.alpha = clamp(s.opacity, 0, 1);
+    }
+    return new scope.GradientStop(c, s.offset);
+  });
+  const { origin, destination } = resolveGradientEndpoints(paint, box);
+  const gradient = new scope.Gradient();
+  gradient.stops = stops;
+  gradient.radial = paint.kind === 'radial';
+  return new scope.Color(
+    gradient,
+    new scope.Point(origin.x, origin.y),
+    new scope.Point(destination.x, destination.y)
+  );
+}
+
+export function applyPathStyleToPaperItem(
+  scope: paper.PaperScope,
+  item: paper.Item,
+  layer: PathLayer,
+  box?: BBox
+): void {
+  const target =
+    item instanceof scope.Group && item.children.length > 0
+      ? item.children[item.children.length - 1]
+      : item;
+  const resolvedBox =
+    box ?? computeSubPathsBBox(resolveEffectivePathGeometry(layer).subpaths);
+
+  target.fillColor = toPaperColor(scope, layer.fill, resolvedBox);
+  if (layer.stroke && layer.stroke.width > 0) {
+    target.strokeColor = toPaperColor(scope, layer.stroke.color, resolvedBox);
+    target.strokeWidth = layer.stroke.width;
+    target.strokeCap = layer.stroke.lineCap ?? 'round';
+    target.strokeJoin = layer.stroke.lineJoin ?? 'round';
+    target.dashArray = sanitizeDashArray(layer.stroke.dashArray) ?? [];
+    target.dashOffset = layer.stroke.dashOffset ?? 0;
+  } else {
+    target.strokeColor = null;
+    target.dashArray = [];
+    target.dashOffset = 0;
+  }
+}
+
 function buildPathLayerItem(
   scope: paper.PaperScope,
   layer: PathLayer,
@@ -118,15 +188,8 @@ function buildPathLayerItem(
     return frontItem;
   }
 
-  frontItem.fillColor = layer.fill ? new scope.Color(layer.fill) : null;
-  if (layer.stroke && layer.stroke.width > 0) {
-    frontItem.strokeColor = new scope.Color(layer.stroke.color);
-    frontItem.strokeWidth = layer.stroke.width;
-    frontItem.strokeCap = layer.stroke.lineCap ?? 'round';
-    frontItem.strokeJoin = layer.stroke.lineJoin ?? 'round';
-  } else {
-    frontItem.strokeColor = null;
-  }
+  const localBox = computeSubPathsBBox(subpaths);
+  applyPathStyleToPaperItem(scope, frontItem, layer, localBox);
 
   let item: paper.Item = frontItem;
   if (extrudeFaces.length > 0) {
@@ -143,6 +206,7 @@ function buildPathLayerItem(
   }
 
   item.opacity = clamp(layer.opacity, 0, 1);
+  item.blendMode = layer.blendMode ?? 'normal';
   item.visible = layer.visible;
   item.data = { ...item.data, layerId: layer.id };
   applyLayerMatrixToItem(scope, item, layer);
@@ -152,11 +216,50 @@ function buildPathLayerItem(
 function buildTextLayerItem(
   scope: paper.PaperScope,
   layer: TextLayer,
-  isEditing: boolean
+  isEditing: boolean,
+  sceneLayers: Layer[]
 ): paper.Group {
   const group = new scope.Group({ applyMatrix: false });
+  const hostPath = resolveHostPathLayer(sceneLayers, layer.pathId);
+
+  if (hostPath) {
+    const localBox = computeTextOnPathLocalBBox(layer, hostPath, sceneLayers);
+    const fillColor = toPaperColor(scope, layer.fill, localBox);
+    const placements = computeTextOnPathPlacements(
+      layer,
+      hostPath,
+      undefined,
+      sceneLayers
+    );
+
+    for (const p of placements) {
+      const charItem = new scope.PointText({
+        content: p.char,
+        point: new scope.Point(0, 0),
+        fontFamily: layer.fontFamily,
+        fontWeight: layer.fontWeight === 700 ? 'bold' : 'normal',
+        fontSize: layer.fontSize,
+        fillColor,
+        justification: 'center',
+        applyMatrix: false,
+      });
+      charItem.position = new scope.Point(p.x, p.y);
+      charItem.rotation = p.angleDeg;
+      group.addChild(charItem);
+    }
+
+    group.opacity = clamp(layer.opacity, 0, 1);
+    group.blendMode = layer.blendMode ?? 'normal';
+    group.visible = isEditing ? false : layer.visible;
+    group.data = { layerId: layer.id };
+    applyLayerMatrixToItem(scope, group, layer);
+    return group;
+  }
+
   const lines = (layer.content || '').split('\n');
   const step = layer.fontSize * layer.lineHeight;
+  const localBox = computeLayerLocalBBox(layer);
+  const fillColor = toPaperColor(scope, layer.fill, localBox);
 
   lines.forEach((line, index) => {
     const baselineY = layer.fontSize * 0.85 + index * step;
@@ -166,7 +269,7 @@ function buildTextLayerItem(
       fontFamily: layer.fontFamily,
       fontWeight: layer.fontWeight === 700 ? 'bold' : 'normal',
       fontSize: layer.fontSize,
-      fillColor: new scope.Color(layer.fill),
+      fillColor,
       justification: layer.align,
       applyMatrix: false,
     });
@@ -178,6 +281,7 @@ function buildTextLayerItem(
   });
 
   group.opacity = clamp(layer.opacity, 0, 1);
+  group.blendMode = layer.blendMode ?? 'normal';
   group.visible = isEditing ? false : layer.visible;
   group.data = { layerId: layer.id };
   applyLayerMatrixToItem(scope, group, layer);
@@ -246,6 +350,7 @@ function buildImageLayerItem(
 
   group.addChild(raster);
   group.opacity = clamp(layer.opacity, 0, 1);
+  group.blendMode = layer.blendMode ?? 'normal';
   group.visible = layer.visible;
   group.data = { layerId: layer.id };
   applyLayerMatrixToItem(scope, group, layer);
@@ -288,6 +393,7 @@ function wrapWithRasterEffects(
         applyMatrix: false,
       });
       group.opacity = clamp(layer.opacity, 0, 1);
+      group.blendMode = layer.blendMode ?? 'normal';
       group.visible = isEditingText ? false : layer.visible;
       group.data = { layerId: layer.id };
       applyLayerMatrixToItem(scope, group, layer);
@@ -315,67 +421,148 @@ function wrapWithRasterEffects(
   return item;
 }
 
+function buildGroupLayerItem(
+  scope: paper.PaperScope,
+  layer: GroupLayer,
+  itemMap: Map<string, paper.Item>,
+  options: {
+    editingTextLayerId?: string | null;
+    outlineMode?: boolean;
+    editingGroupId?: string | null;
+  },
+  insideActiveGroup: boolean,
+  editingAncestorIds: Set<string>,
+  dimmed: boolean,
+  sceneLayers: Layer[]
+): paper.Item {
+  const group = new scope.Group({ applyMatrix: false });
+  syncLayerListToContainer(
+    scope,
+    group,
+    layer.children,
+    itemMap,
+    options,
+    insideActiveGroup || layer.id === options.editingGroupId,
+    editingAncestorIds,
+    sceneLayers
+  );
+  group.opacity = clamp(layer.opacity, 0, 1) * (dimmed ? 0.35 : 1);
+  group.blendMode = layer.blendMode ?? 'normal';
+  group.visible = layer.visible;
+  group.data = { layerId: layer.id };
+  applyLayerMatrixToItem(scope, group, layer);
+  return options.outlineMode
+    ? group
+    : wrapWithRasterEffects(scope, layer, group, false);
+}
+
 function buildPaperItemForLayer(
   scope: paper.PaperScope,
   layer: Layer,
   maskIds: Set<string>,
-  editingTextLayerId?: string | null,
-  outlineMode = false
+  itemMap: Map<string, paper.Item>,
+  options: {
+    editingTextLayerId?: string | null;
+    outlineMode?: boolean;
+    editingGroupId?: string | null;
+  },
+  insideActiveGroup: boolean,
+  editingAncestorIds: Set<string>,
+  sceneLayers: Layer[]
 ): paper.Item {
-  const isActiveMask = maskIds.has(layer.id);
-  if (layer.type === 'path') {
-    const item = buildPathLayerItem(scope, layer, isActiveMask, outlineMode);
-    if (isActiveMask || outlineMode) return item;
-    return wrapWithRasterEffects(scope, layer, item, false);
+  const dimmed =
+    editingAncestorIds.size > 0 &&
+    !insideActiveGroup &&
+    !editingAncestorIds.has(layer.id);
+
+  if (layer.type === 'group') {
+    return buildGroupLayerItem(
+      scope,
+      layer,
+      itemMap,
+      options,
+      insideActiveGroup,
+      editingAncestorIds,
+      dimmed,
+      sceneLayers
+    );
   }
-  if (layer.type === 'text') {
+
+  const outlineMode = Boolean(options.outlineMode);
+  const editingTextLayerId = options.editingTextLayerId;
+  const isActiveMask = maskIds.has(layer.id);
+  let item: paper.Item;
+
+  if (layer.type === 'path') {
+    const built = buildPathLayerItem(scope, layer, isActiveMask, outlineMode);
+    item =
+      isActiveMask || outlineMode
+        ? built
+        : wrapWithRasterEffects(scope, layer, built, false);
+  } else if (layer.type === 'text') {
     const isEditing = editingTextLayerId === layer.id;
-    const item = buildTextLayerItem(scope, layer, isEditing);
+    const built = buildTextLayerItem(scope, layer, isEditing, sceneLayers);
     if (outlineMode) {
-      for (const child of item.children) {
+      for (const child of built.children) {
         if (child instanceof scope.PointText) {
           child.fillColor = null;
           child.strokeColor = new scope.Color('#2563eb');
           child.strokeWidth = 0.75;
         }
       }
-      return item;
+      item = built;
+    } else {
+      item = wrapWithRasterEffects(scope, layer, built, isEditing);
     }
-    return wrapWithRasterEffects(scope, layer, item, isEditing);
+  } else {
+    const built = buildImageLayerItem(scope, layer);
+    if (outlineMode) {
+      const box = new scope.Path.Rectangle(
+        new scope.Rectangle(
+          -layer.width / 2,
+          -layer.height / 2,
+          layer.width,
+          layer.height
+        )
+      );
+      box.applyMatrix = false;
+      box.fillColor = null;
+      box.strokeColor = new scope.Color('#2563eb');
+      box.strokeWidth = 1;
+      box.visible = layer.visible;
+      box.data = { layerId: layer.id };
+      applyLayerMatrixToItem(scope, box, layer);
+      built.remove();
+      item = box;
+    } else {
+      item = wrapWithRasterEffects(scope, layer, built, false);
+    }
   }
-  const item = buildImageLayerItem(scope, layer);
-  if (outlineMode) {
-    const box = new scope.Path.Rectangle(
-      new scope.Rectangle(-layer.width / 2, -layer.height / 2, layer.width, layer.height)
-    );
-    box.applyMatrix = false;
-    box.fillColor = null;
-    box.strokeColor = new scope.Color('#2563eb');
-    box.strokeWidth = 1;
-    box.visible = layer.visible;
-    box.data = { layerId: layer.id };
-    applyLayerMatrixToItem(scope, box, layer);
-    item.remove();
-    return box;
+
+  if (dimmed) {
+    item.opacity *= 0.35;
   }
-  return wrapWithRasterEffects(scope, layer, item, false);
+  return item;
 }
 
-export function syncSceneToPaper(
+function syncLayerListToContainer(
   scope: paper.PaperScope,
-  sceneLayer: paper.Layer,
-  scene: Scene,
-  options?: { editingTextLayerId?: string | null; outlineMode?: boolean }
-): Map<string, paper.Item> {
-  scope.activate();
-  sceneLayer.activate();
-  sceneLayer.removeChildren();
-
-  const itemMap = new Map<string, paper.Item>();
-  const layersById = new Map(scene.layers.map((layer) => [layer.id, layer]));
+  container: paper.Layer | paper.Group,
+  layers: Layer[],
+  itemMap: Map<string, paper.Item>,
+  options: {
+    editingTextLayerId?: string | null;
+    outlineMode?: boolean;
+    editingGroupId?: string | null;
+  },
+  insideActiveGroup: boolean,
+  editingAncestorIds: Set<string>,
+  sceneLayers: Layer[]
+): void {
+  const layersById = new Map(layers.map((layer) => [layer.id, layer]));
   const maskIds = new Set<string>();
 
-  for (const layer of scene.layers) {
+  for (const layer of layers) {
     if (layer.type === 'path' && layer.isClipMask) {
       maskIds.add(layer.id);
     }
@@ -387,13 +574,16 @@ export function syncSceneToPaper(
   let activeClipGroup: paper.Group | null = null;
   let activeClipMaskId: string | null = null;
 
-  for (const layer of scene.layers) {
+  for (const layer of layers) {
     const item = buildPaperItemForLayer(
       scope,
       layer,
       maskIds,
-      options?.editingTextLayerId,
-      Boolean(options?.outlineMode)
+      itemMap,
+      options,
+      insideActiveGroup,
+      editingAncestorIds,
+      sceneLayers
     );
     itemMap.set(layer.id, item);
 
@@ -414,16 +604,50 @@ export function syncSceneToPaper(
           applyMatrix: false,
         });
         activeClipGroup.data = { isClipGroup: true, maskId: maskLayer.id };
-        sceneLayer.addChild(activeClipGroup);
+        container.addChild(activeClipGroup);
         activeClipMaskId = maskLayer.id;
       }
       activeClipGroup.addChild(item);
     } else {
       activeClipGroup = null;
       activeClipMaskId = null;
-      sceneLayer.addChild(item);
+      container.addChild(item);
     }
   }
+}
+
+export function syncSceneToPaper(
+  scope: paper.PaperScope,
+  sceneLayer: paper.Layer,
+  scene: Scene,
+  options?: {
+    editingTextLayerId?: string | null;
+    outlineMode?: boolean;
+    editingGroupId?: string | null;
+  }
+): Map<string, paper.Item> {
+  scope.activate();
+  sceneLayer.activate();
+  sceneLayer.removeChildren();
+
+  const itemMap = new Map<string, paper.Item>();
+  const editingPath = options?.editingGroupId
+    ? findLayerPath(scene.layers, options.editingGroupId)
+    : null;
+  const editingAncestorIds = new Set(
+    editingPath ? editingPath.map((l) => l.id) : []
+  );
+
+  syncLayerListToContainer(
+    scope,
+    sceneLayer,
+    scene.layers,
+    itemMap,
+    options ?? {},
+    false,
+    editingAncestorIds,
+    scene.layers
+  );
 
   return itemMap;
 }

@@ -1,4 +1,11 @@
 import { createShapeLayer } from '../../core/commands';
+import { getScopeWorldMatrix } from '../../core/layerTree';
+import {
+  applyMatrixToPoint,
+  decomposeMatrix,
+  invertMatrix,
+} from '../../core/math';
+import { clonePaint, cloneStroke } from '../../core/paint';
 import { useEditorStore } from '../../core/store';
 import { generateSmartShape } from '../geometry';
 import type { CanvasToolController, ToolContext, ToolPointerEvent } from './types';
@@ -81,8 +88,8 @@ export function createBlobTool(): CanvasToolController {
           x: box.cx,
           y: box.cy,
           subpaths,
-          fill: state.defaultFill,
-          stroke: state.defaultStroke,
+          fill: clonePaint(state.defaultFill),
+          stroke: cloneStroke(state.defaultStroke),
         },
       });
       ctx.scope.view.update();
@@ -98,13 +105,19 @@ export function createBlobTool(): CanvasToolController {
 
       if (box && box.width >= 2 && box.height >= 2) {
         const state = useEditorStore.getState();
+        const invScope = invertMatrix(
+          getScopeWorldMatrix(state.scene.layers, state.editingGroupId)
+        );
+        const centerScope = applyMatrixToPoint(invScope, { x: box.cx, y: box.cy });
+        const invDecomp = decomposeMatrix(invScope);
         createShapeLayer({
-          x: box.cx,
-          y: box.cy,
-          width: box.width,
-          height: box.height,
+          x: centerScope.x,
+          y: centerScope.y,
+          width: box.width * Math.abs(invDecomp.scaleX),
+          height: box.height * Math.abs(invDecomp.scaleY),
           options: state.smartShapeOptions,
           seed: currentSeed,
+          parentGroupId: state.editingGroupId,
         });
       }
     },
