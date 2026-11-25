@@ -1,797 +1,229 @@
-# Project Specification: Locus — Automated Vector Editor (Illustrator Alternative)
+# Locus — Automated Vector Editor (Illustrator Alternative)
 
-## 1. Общее описание и границы MVP
+## 1. Продукт и границы MVP
 
-**Locus** — локальное десктопное приложение (Tauri v2), быстрый и лёгкий аналог Adobe Illustrator с упором на автоматизацию рутины и светлую «бумажную» эстетику.
+Locus — локальный десктопный векторный редактор (Tauri v2 + React 19 + Paper.js) со светлой «бумажной» эстетикой, автоматизацией рутины и ИИ-оператором через tool calling (BYOK). Геометрия всегда остаётся редактируемым вектором, серия правок ИИ откатывается одним `Ctrl+Z`.
 
-Редактор объединяет:
-* **Полноценный векторный инструментарий:** кривые Безье, составные контуры (`CompoundPath` через `subpaths[]`), опорные точки (`anchors`) и усики (`handles`), перо, булевы операции, Clipping Mask в 1 клик.
-* **Автоматику и процедурные инструменты:** умные примитивы (клякса, круг/эллипс, скруглённый прямоугольник, многоугольник на $N$ точек, звезда), быстрые модификаторы (сглаживание, шум/wobble), авто-выравнивание и распределение.
-* **ИИ-ассистента через Tool Calling (BYOK):** ИИ выступает оператором встроенных инструментов редактора — вызывает атомарные команды над сценой и выделенными слоями, оставляя результат полностью редактируемым вектором и с полной поддержкой одного шага `Ctrl+Z`.
-* **Совместимость с Adobe и переносимость:** нативный формат проекта `.locus` (ZIP с ресурсами) + честный векторный экспорт в `.ai`, `.svg` и многослойный `.psd`.
+**В MVP:** 1 артборд на документ; 6 встроенных статических шрифтов (400/700, кириллица); плоские заливки/обводки + `opacity`; Smart Shape (`blob`, `ellipse`, `rect`, `polygon`, `star`); инструменты `V`/`A`/`P`/`B`/`T`/`I`/`E`; булевы операции, Compound Path, Clipping Mask; экспорт `.locus` / `.ai` / `.svg` / `.psd`; ИИ через Gemini, OpenAI-compatible, Anthropic, Ollama.
 
-### Границы релиза
-
-| Входит в MVP | Вынесено в Post-MVP |
-| :--- | :--- |
-| 1 артборд на документ (фиксированный размер по пресету или custom) | Несколько артбордов в одном документе |
-| 6 встроенных статических шрифтов (Regular 400 + Bold 700) с кириллицей | Сканирование системных шрифтов через Rust `fontdb` |
-| Плоские цвета заливки/обводки (`hex` / `null`) + `opacity` | Линейные/радиальные градиенты, режимы наложения слоёв |
-| Smart Shape (`B`): `blob`, `ellipse`, `rect`, `polygon`, `star` | Кисти переменной толщины, градиентные сетки |
-| Pen (`P`), Select (`V`), Direct Select (`A`), Type (`T`), Image (`I`) | Импорт и разбор сторонних `.svg` / `.ai` в редактируемые слои |
-| Экспорт `.locus`, `.ai` (PDF-поток), `.svg`, `.psd` | Стриминг ответов ИИ в `CommandBar` и мультимодальный ввод (референсы) |
-| ИИ Tool Calling через Gemini API и OpenAI-compatible (вкл. локальные Ollama/LM Studio) | Локальные модели в процессе без HTTP-сервера |
-
----
+**Post-MVP:** несколько артбордов, системные шрифты, градиенты и режимы наложения, импорт SVG/AI в редактируемые слои, обучение этапы 2–3 (подсветка, песочница).
 
 ## 2. Визуальный стиль и интерфейс (UI/UX)
 
 ### Эстетика («Бумажная» светлая тема)
 
-Строгое правило оформления: **никаких тяжёлых теней, декоративных градиентов и `backdrop-filter` / Gaussian blur**. Визуальная иерархия строится за счёт контраста тёплых бумажных поверхностей и чётких границ `1px solid #dfd9ce`.
-
-Готовая конфигурация темы для Tailwind CSS v4 (`src/index.css`):
+Строгое правило оформления: **никаких тяжёлых теней, декоративных градиентов и `backdrop-filter` / Gaussian blur**. Иерархия строится на контрасте тёплых бумажных поверхностей и чётких границ `1px solid #dfd9ce`. Конфигурация Tailwind CSS v4 (`src/index.css`):
 
 ```css
-@import "tailwindcss";
-
 @theme {
-  --color-paper-bg: #f5f2eb;         /* Основной фон интерфейса */
-  --color-paper-canvas: #ebe6dc;     /* Рабочая область вокруг артборда */
-  --color-paper-panel: #faf8f4;      /* Фон панелей, карточек и модалок */
-  --color-paper-hover: #f0ece3;      /* Ховер кнопок и строк списка */
-  --color-paper-border: #dfd9ce;     /* Четкие границы 1px */
-  --color-paper-accent: #da7756;     /* Терракотовый акцент, выделение, узлы */
+  --color-paper-bg: #f5f2eb;         /* фон интерфейса */
+  --color-paper-canvas: #ebe6dc;     /* область вокруг артборда */
+  --color-paper-panel: #faf8f4;      /* панели, карточки, модалки */
+  --color-paper-hover: #f0ece3;      /* ховер кнопок и строк */
+  --color-paper-border: #dfd9ce;     /* границы 1px */
+  --color-paper-accent: #da7756;     /* терракотовый акцент, узлы */
   --color-paper-accent-hover: #c86443;
-  --color-paper-ink: #1c1b1a;        /* Основной текст и иконки */
-  --color-paper-muted: #6b665e;      /* Вторичный текст, подписи, шорткаты */
-  --color-paper-danger: #b83b2e;     /* Ошибки валидации и удаление */
-
+  --color-paper-ink: #1c1b1a;        /* текст и иконки */
+  --color-paper-muted: #6b665e;      /* вторичный текст, шорткаты */
+  --color-paper-danger: #b83b2e;     /* ошибки, удаление */
   --font-ui: "Golos Text", "Manrope", system-ui, sans-serif;
   --font-display: "Manrope", "Golos Text", system-ui, sans-serif;
 }
 ```
 
-Шрифты интерфейса задаются пресетами в `src/core/typography.ts` (раздел «Темы и цвета» → «Шрифты интерфейса»): каждая тема использует дизайнерские пары UI/акцентных шрифтов из встроенного каталога, плюс режим «Свой шрифт» с загрузкой `.ttf/.otf/.woff` и сохранением в `$APPCONFIG/locus/ui-font.json`. Моноширинные шрифты в интерфейсе не используются (JetBrains Mono остаётся только в каталоге текстовых слоёв).
+Шрифты интерфейса — пресеты в `src/core/typography.ts` (дизайнерские пары UI/акцентных шрифтов из встроенного каталога) + режим «Свой шрифт» (`.ttf/.otf/.woff` → `$APPCONFIG/locus/ui-font.json`). Моноширинные в интерфейсе не используются (JetBrains Mono — только в каталоге текстовых слоёв).
 
 ### Компоновка окна (минимальный размер `1024 × 680`)
 
-* **Верхняя панель (`TopBar`, высота `40px`):**
-  * Слева: лого/название, имя документа (клик переименовывает), индикатор несохранённых изменений (`•`), кнопки Новый (`StartModal`), Открыть (`.locus`), Сохранить (`.locus`), Экспорт (выпадающее меню `.ai` / `.svg` / `.psd`).
-  * Центр: кнопки `Undo` / `Redo`, быстрый вызов `CommandBar` (`Ctrl+K`).
-  * Справа: текущий масштаб в процентах (клик сбрасывает к `Fit Artboard`), кнопка `SettingsModal` (иконка шестерёнки).
-* **Левая панель (`Toolbar`, ширина `44px`):** вертикальный стек инструментов с тултипами и указанием горячих клавиш: `V`, `A`, `P`, `B`, `T`, `I`, плюс быстрая кнопка `Fit` (`Ctrl+0`).
-* **Центр (`PaperCanvas`, `flex-1`):** бесконечная рабочая область `#ebe6dc` с фиксированным артбордом (`scene.background`), плавным зумом колёсиком к курсору и панорамированием (`Space + Drag` или средняя кнопка мыши).
-* **Правая колонка (ширина `280px`):**
-  * Верх (`LayersPanel`, `~45%` высоты): дерево слоёв (отрисовывается в интуитивном порядке: верхний слой списка лежит поверх нижнего, т.е. обратный обход `scene.layers`), иконка типа, индикатор маски `↳ Mask`, видимость (`Eye`), блокировка (`Lock`), двойной клик для переименования, перемещение вверх/вниз и удаление.
-  * Низ (`Inspector`, `~55%` высоты): контекстные свойства в зависимости от выделения:
-    * Нет выделения: параметры артборда (`width`, `height`, `dpi`, `background`).
-    * Выделен `PathLayer`: координаты/трансформация (`x, y, rotation, scale`), `fill` (цвет + кнопка «Без заливки»), `stroke` (цвет, ширина, `lineCap`, `lineJoin`), `opacity`, `fillRule`, процедурные ползунки (`Smooth`, `Wobble`) или параметры пресета при активном `Smart Shape (B)`, кнопка `Make/Release Clipping Mask`.
-    * Выделено $2+$ слоёв: кнопки булевых операций (`Unite`, `Subtract`, `Intersect` — активны, если все выделенные слои типа `path`), выравнивание (`left`, `center`, `right`, `top`, `middle`, `bottom`) и распределение (`distribute_h`, `distribute_v`), кнопка `Create Clipping Mask` (верхний выделенный `PathLayer` маскирует остальные выделенные слои).
-    * Выделен `TextLayer`: выбор из 6 встроенных шрифтов, вес (`400` / `700`), размер, межстрочный интервал (`lineHeight`), выравнивание (`left` / `center` / `right`), цвет.
-    * Выделен `ImageLayer`: позиция, масштаб, прозрачность, кнопка «Заменить изображение».
-* **Модальные и оверлейные окна:**
-  * `StartModal`: выбор пресета документа, ввод своих размеров/DPI или кнопка «Открыть `.locus`».
-  * `CommandBar` (`Ctrl+K`): командная строка для текстовых промптов к ИИ и быстрого запуска встроенных действий (выравнивание, экспорт, очистка выделения), с показом статуса выполнения, лога вызванных инструментов, кнопкой отмены (`AbortController`) и человекочитаемыми ошибками.
-  * `SettingsModal`: переключение провайдера (`Gemini` / `OpenAI-compatible`), поля API-ключа, модели и `baseURL`, кнопка проверки подключения.
+- **`TopBar` 40px:** слева лого/имя документа (клик — переименование), индикатор несохранённого `•`, Новый (`StartModal`), Открыть, Сохранить, Экспорт (`.ai`/`.svg`/`.psd`); центр — Undo/Redo и `CommandBar` (`Ctrl+K`); справа — масштаб в процентах (клик — Fit Artboard) и настройки.
+- **`Toolbar` 44px:** вертикальный стек `V`, `A`, `P`, `B`, `T`, `I` с тултипами и хоткеями + быстрый `Fit` (`Ctrl+0`).
+- **`PaperCanvas` (`flex-1`):** бесконечная область `#ebe6dc`, фиксированный артборд (`scene.background`), плавный зум колёсиком к курсору, панорама `Space+Drag` или средняя кнопка.
+- **Правая колонка 280px:**
+  - `LayersPanel` ~45%: дерево в обратном порядке `scene.layers` (верхний в списке = верхний по Z), иконка типа, `↳ Mask`, Eye, Lock, двойной клик — переименование, перемещение вверх/вниз, удаление.
+  - `Inspector` ~55%, контекст выделения:
+    - нет выделения — артборд: `width`, `height`, `dpi`, `background`;
+    - `PathLayer` — `x, y, rotation, scale`, `fill` (+«Без заливки»), `stroke` (`color`, `width`, `lineCap`, `lineJoin`), `opacity`, `fillRule`, ползунки `Smooth`/`Wobble` или параметры Smart Shape, Make/Release Clipping Mask;
+    - 2+ слоёв — булевы `Unite`/`Subtract`/`Intersect` (если все `path`), выравнивание `left/center/right/top/middle/bottom`, распределение `distribute_h/distribute_v`, `Create Clipping Mask` (верхний `PathLayer` маскирует остальные);
+    - `TextLayer` — 6 шрифтов, вес 400/700, размер, `lineHeight`, выравнивание, цвет;
+    - `ImageLayer` — позиция, масштаб, прозрачность, «Заменить изображение».
+- **Модалки:** `StartModal` (пресет/свой размер/`dpi` или открыть `.locus`), `CommandBar` (`Ctrl+K`: промпт, статус, лог вызванных инструментов, «Стоп» через `AbortController`, человекочитаемые ошибки), `SettingsModal` (`Ctrl+,`: провайдер, ключи, модели, `baseURL`, проверка подключения), `UnsavedChangesModal`, `TutorialModal`.
 
-### Инструменты `Smart Shape (B)` и `Type (T)`
+### Smart Shape (B) и Type (T)
 
-* **Smart Shape (`B`):** в контекстной панели над холстом или в верхней секции `Inspector` доступны 5 пресетов:
-  1. `blob` — органическая клякса (`points`: 3..24, `radius`, `wobble`: 0..1).
-  2. `ellipse` — круг/овал (`radiusX`, `radiusY`; с `Shift` — идеальный круг).
-  3. `rect` — прямоугольник со скруглением (`width`, `height`, `cornerRadius`; с `Shift` — квадрат).
-  4. `polygon` — правильный многоугольник (`points`: 3..24, `radius`).
-  5. `star` — звезда (`points`: 3..24, `radius`, `innerRadiusRatio`: 0.1..0.9).
-  Протягивание мышью по холсту сразу создаёт векторный `PathLayer` с пересчётом узлов в локальные координаты.
-* **Type (`T`):** клик по пустому месту создаёт `TextLayer` с текстом по умолчанию (`«Новый текст»`) и сразу переводит его в режим редактирования. Двойной клик по существующему `TextLayer` инструментом `V` или `T` открывает позиционированный `<textarea>` ровно поверх объекта в экранных координатах (с теми же `fontFamily`, `fontWeight`, `fontSize * zoom`, `lineHeight`, `textAlign`, `color`). Выход из редактирования — по `Blur` или `Ctrl+Enter` / `Escape`; коммит выполняется одной командой `updateLayers`.
+- `blob` — `points` 3..24, `radius`, `wobble` 0..1; `ellipse` — `radiusX`/`radiusY` (Shift — круг); `rect` — `width`/`height`/`cornerRadius` (Shift — квадрат); `polygon` — `points` 3..24, `radius`; `star` — `points` 3..24, `radius`, `innerRadiusRatio` 0.1..0.9. Протягивание мышью по холсту сразу создаёт `PathLayer` с пересчётом узлов в локальные координаты.
+- `T`: клик по пустому месту создаёт `TextLayer` («Новый текст») и сразу включает редактирование. Двойной клик (`V`/`T`) открывает `<textarea>` ровно поверх объекта с теми же `fontFamily`, `fontWeight`, `fontSize * zoom`, `lineHeight`, `textAlign`, `color`; выход — Blur, `Ctrl+Enter` или `Escape`; коммит одной командой `updateLayers`.
 
-### Таблица горячих клавиш
+### Горячие клавиши
 
-> **Строгое правило ввода:** все однобуквенные шорткаты и `Space` / `Delete` / `Backspace` **игнорируются**, если `document.activeElement` — это `INPUT`, `TEXTAREA`, `SELECT` или элемент с `isContentEditable`. Модификатор `Ctrl` на Linux/Windows соответствует `Cmd` на macOS (`e.ctrlKey || e.metaKey`).
+**Правило ввода:** все однобуквенные шорткаты и `Space`/`Delete`/`Backspace` игнорируются, если `document.activeElement` — `INPUT`, `TEXTAREA`, `SELECT` или `isContentEditable`. `Ctrl` ≡ `Cmd` на macOS.
 
-| Клавиша | Действие |
+| Клавиши | Действие |
 | :--- | :--- |
-| `V` | Инструмент Select (перемещение, масштаб, поворот рамки) |
-| `A` | Инструмент Direct Select (редактирование `anchors` и `handles`) |
-| `P` | Инструмент Pen (пошаговое построение Безье; `Enter`/`Escape` или клик по 1-й точке завершает контур) |
-| `B` | Инструмент Smart Shape (`blob`, `ellipse`, `rect`, `polygon`, `star`) |
-| `T` | Инструмент Type (создание и редактирование текста) |
-| `I` | Place Image (открывает нативный диалог выбора PNG/JPEG/WebP/SVG) |
-| `Space + Drag` | Временное панорамирование холста (возвращает предыдущий инструмент при отпускании) |
-| `Ctrl + Z` | Undo (откат последнего коммита сцены) |
-| `Ctrl + Shift + Z` / `Ctrl + Y` | Redo |
-| `Ctrl + S` | Сохранить проект `.locus` (или «Сохранить как…», если путь ещё не задан) |
-| `Ctrl + O` | Открыть проект `.locus` |
-| `Ctrl + K` | Открыть/закрыть `CommandBar` |
-| `Ctrl + D` | Дублировать выделенные слои со сдвигом `+16, +16` |
-| `Ctrl + Shift + O` | Перевести выделенный текст в кривые Безье (`Create Outlines`) |
-| `Ctrl + 8` | Собрать выделенные `PathLayer` в составной контур (`Compound Path`) |
-| `Ctrl + Shift + 8` | Разбить составной контур на отдельные части / буквы |
-| `Delete` / `Backspace` | Удалить выделенные слои (или выделенный узел в режиме `A`, если узлов $> 2$) |
-| `Ctrl + 0` | Вписать артборд в видимую область (`Fit Artboard`) |
-| `Ctrl + 1` | Сбросить масштаб в `100%` |
-| `[` / `]` | Опустить / поднять выделенный слой на 1 позицию в порядке отрисовки |
-| `Escape` | Закрыть открытую модалку / завершить построение пером / снять выделение |
-| `Shift` (удерживать) | Пропорциональный масштаб и квадрат/круг; при перетаскивании узла/усика — фиксация угла с шагом $45^\circ$ |
+| `V` / `A` / `P` / `B` / `T` / `I` / `E` | Select / Direct Select / Pen / Smart Shape / Type / Place Image / Eyedropper |
+| `Space+Drag` | временная панорама |
+| `Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` | Undo / Redo |
+| `Ctrl+S` / `Ctrl+O` / `Ctrl+K` | Сохранить / Открыть / CommandBar |
+| `Ctrl+D` / `Ctrl+Shift+O` | Дублировать (+16,+16) / текст в кривые |
+| `Ctrl+8` / `Ctrl+Shift+8` | Compound Path / разбить на части |
+| `Ctrl+C` `Ctrl+V` `Ctrl+Shift+V` `Ctrl+Alt+C` `Ctrl+Alt+V` | копия слоёв / вставка / вставка на место / копия стиля / вставка стиля |
+| `Delete`/`Backspace` | удалить слои (в `A` — узел, если узлов > 2) |
+| `Ctrl+0` / `Ctrl+1` | Fit Artboard / масштаб 100% |
+| `[` / `]` | слой вниз / вверх на 1 позицию |
+| `Escape` / `Shift` | закрыть/завершить/снять выделение / пропорции, квадрат-круг, угол 45° |
 
----
+## 3. Стек, зависимости, конфигурация Tauri v2
 
-## 3. Стек технологий, зависимости и конфигурация Tauri v2
-
-### Подтверждённое окружение разработки (Linux / EndeavourOS)
-* **Toolchain:** `node v26.13.0`, `npm 12.2.1`, `rustc 1.99.1`, `cargo 1.99.1`.
-* **Системные пакеты Tauri v2 (проверены через `pkg-config`):** `webkit2gtk-4.1` (2.54.2), `gtk+-3.0` (3.24.52), `librsvg-2.0` (2.63.4), `libsoup-3.0` (3.8.1), `javascriptcoregtk-4.1` (2.54.2), `openssl` (3.6.5), `ayatana-appindicator3-0.1` (0.6.1).
-* **Пакетный менеджер:** `npm` (включая локальный `@tauri-apps/cli` в `devDependencies` — не требуется глобальный `cargo-tauri`).
-
-### Пакеты NPM (`package.json`)
-
-* **`dependencies`:**
-  * `react`, `react-dom` (React 19)
-  * `zustand` (v5), `zundo` (Undo/Redo через `temporal`)
-  * `paper` (Paper.js — импортируется строго как `paper/dist/paper-core`)
-  * `jszip` (упаковка/распаковка `.locus`)
-  * `pdf-lib`, `@pdf-lib/fontkit` (векторный PDF-поток для `.ai` с поддержкой кириллицы)
-  * `ag-psd` (генерация многослойного `.psd`)
-  * `lucide-react` (иконки интерфейса в едином тонком штриховом стиле)
-  * `@tauri-apps/api`, `@tauri-apps/plugin-http`, `@tauri-apps/plugin-fs`, `@tauri-apps/plugin-dialog`
-* **`devDependencies`:**
-  * `typescript`, `vite`, `@vitejs/plugin-react`
-  * `tailwindcss`, `@tailwindcss/vite`
-  * `@types/react`, `@types/react-dom`, `@types/paper`
-  * `@tauri-apps/cli`
-  * `vitest`, `jsdom`
-* **Скрипты `package.json`:**
-  * `dev`: `vite`
-  * `build`: `tsc --noEmit && vite build`
-  * `test`: `vitest run`
-  * `tauri`: `tauri`
-
-### Конфигурация Vite (`vite.config.ts`)
-
-```ts
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-import tailwindcss from '@tailwindcss/vite';
-
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  clearScreen: false,
-  server: {
-    port: 1420,
-    strictPort: true,
-    watch: {
-      ignored: ['**/src-tauri/**'],
-    },
-  },
-});
-```
-
-### Конфигурация Rust и плагинов (`src-tauri/`)
-
-1. **`src-tauri/Cargo.toml`:** подключить зависимости:
-   * `tauri = { version = "2", features = [] }`
-   * `tauri-plugin-http = "2"`
-   * `tauri-plugin-fs = "2"`
-   * `tauri-plugin-dialog = "2"`
-   * `serde = { version = "1", features = ["derive"] }`
-   * `serde_json = "1"`
-2. **`src-tauri/src/lib.rs`:** зарегистрировать все три плагина при сборке `tauri::Builder`:
-   ```rust
-   tauri::Builder::default()
-       .plugin(tauri_plugin_http::init())
-       .plugin(tauri_plugin_fs::init())
-       .plugin(tauri_plugin_dialog::init())
-       .run(tauri::generate_context!())
-       .expect("error while running Locus");
-   ```
-3. **`src-tauri/capabilities/default.json`:**
-
-```json
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Default capabilities for Locus main window",
-  "windows": ["main"],
-  "permissions": [
-    "core:default",
-    "dialog:default",
-    "fs:default",
-    {
-      "identifier": "fs:allow-exists",
-      "allow": [{ "path": "$APPCONFIG/**" }]
-    },
-    {
-      "identifier": "fs:allow-mkdir",
-      "allow": [{ "path": "$APPCONFIG/**" }]
-    },
-    {
-      "identifier": "fs:allow-read-file",
-      "allow": [{ "path": "$APPCONFIG/**" }]
-    },
-    {
-      "identifier": "fs:allow-write-file",
-      "allow": [{ "path": "$APPCONFIG/**" }]
-    },
-    {
-      "identifier": "http:default",
-      "allow": [
-        { "url": "https://*" },
-        { "url": "http://*" },
-        { "url": "https://*:*" },
-        { "url": "http://*:*" }
-      ]
-    }
-  ]
-}
-```
-
-> **Примечание по доступу к файлам в Tauri v2:** файлы, выбранные пользователем через нативный диалог `@tauri-apps/plugin-dialog` (`open` / `save`) или перетащенные в окно через `onDragDropEvent`, автоматически добавляются Tauri в runtime-scope для чтения/записи через `plugin-fs` — поэтому открывать `$HOME/**` статически в `capabilities` не нужно. Статический скоуп `$APPCONFIG/**` нужен для чтения и записи конфига `locus/settings.json`.
-
-4. **`src-tauri/tauri.conf.json` (ключевые поля):**
-   * `build.devUrl`: `"http://localhost:1420"`, `build.frontendDist`: `"../dist"`, `build.beforeDevCommand`: `"npm run dev"`, `build.beforeBuildCommand`: `"npm run build"`.
-   * `app.windows[0]`: `title: "Locus"`, `width: 1360`, `height: 860`, `minWidth: 1024`, `minHeight: 680`, `dragDropEnabled: true`.
-   * `app.security.csp`:
-     ```text
-     default-src 'self'; img-src 'self' asset: http://asset.localhost blob: data:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost
-     ```
-     *Обоснование:* `blob:` и `data:` в `img-src` обязательны для `ImageLayer` из `AssetRegistry` и превью; `http://ipc.localhost` / `ipc:` — для Tauri IPC (при этом запросы к ИИ идут из Rust через `plugin-http`, поэтому внешние URL не нужны в `connect-src`).
+- **Окружение (Linux/EndeavourOS):** `node 26.x`, `npm 12.x`, `rustc/cargo 1.99`, локальный `@tauri-apps/cli`; системные `webkit2gtk-4.1`, `gtk+-3.0`, `librsvg-2.0`, `libsoup-3.0`, `openssl`.
+- **Скрипты:** `dev` = `vite`, `build` = `tsc --noEmit && vite build`, `test` = `vitest run`, `install:linux` = `node scripts/install-linux-launcher.mjs <binary>`, `tauri` = `tauri`. Установщик кладёт бинарник в `~/.local/opt/locus/locus`, иконку в `~/.local/share/icons/hicolor/128x128/apps/locus.png` и ярлык `~/.local/share/applications/locus.desktop` (без root, идемпотентно).
+- **`dependencies`:** `react`/`react-dom` 19, `zustand` 5, `zundo`, `paper` (импорт строго `paper/dist/paper-core`), `jszip`, `pdf-lib` + `@pdf-lib/fontkit`, `ag-psd`, `lucide-react`, `@tauri-apps/api`, `@tauri-apps/plugin-http`, `@tauri-apps/plugin-fs`, `@tauri-apps/plugin-dialog`.
+- **`devDependencies`:** `typescript`, `vite`, `@vitejs/plugin-react`, `tailwindcss`, `@tailwindcss/vite`, `@types/react`, `@types/react-dom`, `@types/paper`, `@tauri-apps/cli`, `vitest`, `jsdom`.
+- **Vite:** `react()` + `tailwindcss()`, порт 1420, `strictPort: true`, `watch.ignored: ['**/src-tauri/**']`, `clearScreen: false`.
+- **Rust (`src-tauri/`):** `tauri = "2"`, `tauri-plugin-http`, `tauri-plugin-fs`, `tauri-plugin-dialog` = `"2"`, `serde`, `serde_json`; в `lib.rs` — `Builder::default().plugin(tauri_plugin_http::init()).plugin(tauri_plugin_fs::init()).plugin(tauri_plugin_dialog::init())`.
+- **`capabilities/default.json`:** `core:default`, `dialog:default`, `fs:default` + `fs:allow-{exists,mkdir,read-file,write-file}` для `$APPCONFIG/**`; `http:default` c `https://*`, `http://*`, `https://*:*`, `http://*:*`.
+- **`tauri.conf.json`:** `devUrl http://localhost:1420`, `frontendDist ../dist`, `beforeDevCommand npm run dev`, `beforeBuildCommand npm run build`; окно `1360×860`, min `1024×680`, `dragDropEnabled: true`.
+- **CSP:** `default-src 'self'; img-src 'self' asset: http://asset.localhost blob: data:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost`. `blob:`/`data:` нужны для `ImageLayer` и превью, `ipc:` — для Tauri IPC; запросы к ИИ идут из Rust через `plugin-http`, поэтому внешние URL в `connect-src` не нужны. Файлы из диалогов и drag&drop попадают в runtime-scope автоматически.
 
 ### Встроенные статические шрифты (MVP)
 
-В MVP используются **ровно 6 семейств**, каждое в двух статических начертаниях (`Regular 400` и `Bold 700` = **12 файлов `.ttf`**) в папке `public/fonts/`:
+Ровно 6 семейств × 2 начертания (`Regular 400` + `Bold 700` = 12 `.ttf`) в `public/fonts/`:
 
-| Семейство (`fontFamily`) | Файл Regular (`400`) | Файл Bold (`700`) |
+| Семейство | Regular | Bold |
 | :--- | :--- | :--- |
-| `Inter` | `/fonts/Inter-Regular.ttf` | `/fonts/Inter-Bold.ttf` |
-| `Manrope` | `/fonts/Manrope-Regular.ttf` | `/fonts/Manrope-Bold.ttf` |
-| `Golos Text` | `/fonts/GolosText-Regular.ttf` | `/fonts/GolosText-Bold.ttf` |
-| `Playfair Display` | `/fonts/PlayfairDisplay-Regular.ttf` | `/fonts/PlayfairDisplay-Bold.ttf` |
-| `JetBrains Mono` | `/fonts/JetBrainsMono-Regular.ttf` | `/fonts/JetBrainsMono-Bold.ttf` |
-| `Unbounded` | `/fonts/Unbounded-Regular.ttf` | `/fonts/Unbounded-Bold.ttf` |
+| Inter | `/fonts/Inter-Regular.ttf` | `/fonts/Inter-Bold.ttf` |
+| Manrope | `/fonts/Manrope-Regular.ttf` | `/fonts/Manrope-Bold.ttf` |
+| Golos Text | `/fonts/GolosText-Regular.ttf` | `/fonts/GolosText-Bold.ttf` |
+| Playfair Display | `/fonts/PlayfairDisplay-Regular.ttf` | `/fonts/PlayfairDisplay-Bold.ttf` |
+| JetBrains Mono | `/fonts/JetBrainsMono-Regular.ttf` | `/fonts/JetBrainsMono-Bold.ttf` |
+| Unbounded | `/fonts/Unbounded-Regular.ttf` | `/fonts/Unbounded-Bold.ttf` |
 
-**Техническое ограничение (строго):** использовать только **статические `.ttf` с поддержкой кириллицы** — не `.woff2` и не variable-шрифты. `@pdf-lib/fontkit` не поддерживает `.woff2` и не умеет инстанцировать оси вариативности variable-шрифтов (сбросит вес в мастер по умолчанию). Статические `.ttf` подключаются через `@font-face` в `src/index.css` (для Canvas/Paper.js и UI) и загружаются по тем же URL как `ArrayBuffer` в `pdf-lib.embedFont()` (для `.ai`). При сборке каждый файл проверяется командой `file public/fonts/*.ttf` (должно выводить `TrueType Font data`).
+**Ограничение:** только статические `.ttf` с кириллицей — не `.woff2` и не variable: fontkit не умеет их инстанцировать. `<@font-face>` в `index.css` для Canvas/UI, те же URL грузятся как `ArrayBuffer` в `pdf-lib.embedFont()` для `.ai`. Проверка: `file public/fonts/*.ttf` → `TrueType Font data`.
 
----
+## 4. Пресеты и система координат
 
-## 4. Пресеты документов и система координат
+| Пресет | W×H | dpi |
+| :--- | :--- | :--- |
+| Square Post | 1080×1080 | 72 |
+| Stories / Reels | 1080×1920 | 72 |
+| Desktop / YouTube | 1920×1080 | 72 |
+| A4 Print | 2480×3508 | 300 |
+| Custom | любая | 72+ |
 
-### Пресеты документов (`StartModal`)
+1. `(0,0)` — левый верхний угол артборда, `+X` вправо, `+Y` вниз, единицы — px артборда.
+2. Матрица слоя `M = T(x,y) · R(rotation°) · S(scaleX, scaleY)`; поворот по часовой в экранных координатах. Мировая точка: `w = (x,y) + (l_x·sx·cosθ − l_y·sy·sinθ, l_x·sx·sinθ + l_y·sy·cosθ)`.
+3. Опорные точки: `PathLayer` — центр локального bbox; `ImageLayer` — центр картинки (локально `±w/2, ±h/2`); `TextLayer` — верхняя точка блока с учётом `align` (left/center/right).
+4. Единая метрика строк во всех рендерах: `baselineY(i) = fontSize·0.85 + i·fontSize·lineHeight`, `lineHeight = 1.2` по умолчанию.
+5. Нормализация без «прыжка»: при изменении локальных узлов считается `c_local` = центр локального bbox; если он не в нуле — `c_world = localToWorld(layer, c_local)`, из всех `anchor` вычитается `c_local`, `layer.x/y = c_world`. `handleIn/Out` хранятся относительно anchor и не меняются.
 
-| Пресет | Ширина (`px`) | Высота (`px`) | `dpi` |
-| :--- | :--- | :--- | :--- |
-| **Square Post (Telegram / Instagram)** | `1080` | `1080` | `72` |
-| **Stories / Reels** | `1080` | `1920` | `72` |
-| **Desktop / YouTube** | `1920` | `1080` | `72` |
-| **A4 Print (300 DPI)** | `2480` | `3508` | `300` |
-| **Custom** | Произвольная | Произвольная | `72` (настраивается) |
+## 5. Критические архитектурные правила
 
-### Система координат и трансформаций (обязательна для всех модулей)
-
-1. **Пространство артборда:** точка `(0, 0)` — **левый верхний угол** артборда, ось `+X` направлена вправо, ось `+Y` направлена вниз. Единица измерения — `px` артборда.
-2. **Порядок аффинной трансформации слоя:**
-   $$\mathbf{M} = \mathbf{T}(x, y) \cdot \mathbf{R}(\text{rotation}^\circ) \cdot \mathbf{S}(\text{scaleX}, \text{scaleY})$$
-   где `rotation` измеряется в градусах **по часовой стрелке** в экранных координатах (`+Y` вниз). То есть мировая координата локальной точки $(l_x, l_y)$ равна:
-   $$s_x = l_x \cdot \text{scaleX}, \quad s_y = l_y \cdot \text{scaleY}$$
-   $$w_x = x + s_x \cos\theta - s_y \sin\theta, \quad w_y = y + s_x \sin\theta + s_y \cos\theta \quad (\theta = \text{rotation} \cdot \frac{\pi}{180})$$
-   **Важно для Paper.js:** у `paper.Item` в `sync.ts` обязательно выставлять `item.applyMatrix = false`, чтобы `item.position`, `item.rotation`, `item.scaling` задавались независимо от геометрии и в точности соответствовали матрице $\mathbf{M}$ (в Paper.js по умолчанию `applyMatrix = true`, что запекает матрицу прямо в сегменты и ломает SSOT).
-3. **Опорная точка `(x, y)` для каждого типа слоя:**
-   * **`PathLayer`:** `(0, 0)` — центр локального ограничивающего прямоугольника (`bbox`) всех `subpaths` в пространстве слоя.
-     * *Формула нормализации без «прыжка» повёрнутой/масштабированной фигуры:* когда меняются локальные узлы (редактирование в `nodeTool`, модификаторы `Smooth`/`Wobble` или результат булевой операции), вычисляется центр локального `bbox` `c_local = (minX + maxX)/2, (minY + maxY)/2`. Если `|c_local.x| > 1e-4` или `|c_local.y| > 1e-4`, вычисляется новая мировая позиция `c_world = localToWorld(layer, c_local)`, из всех `anchor.x, anchor.y` вычитается `c_local`, а `layer.x = c_world.x`, `layer.y = c_world.y`. `handleIn` и `handleOut` хранятся относительно своей точки `anchor`, поэтому при сдвиге не меняются.
-   * **`ImageLayer`:** `(x, y)` — геометрический центр картинки. Локальный прямоугольник картинки всегда `[-width/2, -height/2] .. [+width/2, +height/2]`, что совпадает с `paper.Raster.position`.
-   * **`TextLayer`:** `(x, y)` — верхняя якорная точка текстового блока с учётом выравнивания `align`:
-     * `left`: `(0, 0)` в локальных координатах — левый верхний угол текста;
-     * `center`: `(0, 0)` — верхний центр блока;
-     * `right`: `(0, 0)` — правый верхний угол блока.
-     * **Единая метрика строк** во всех рендерерах (Canvas, SVG, PDF/AI, PSD): $i$-я строка (`i = 0, 1, ...`) имеет базовую линию:
-       $$\text{baselineY}(i) = \text{fontSize} \cdot 0.85 + i \cdot \text{fontSize} \cdot \text{lineHeight}$$
-       где `lineHeight` по умолчанию `1.2`. Разброс позиционирования между Paper.js, SVG и PDF исключается.
-
----
-
-## 5. Критические архитектурные правила (соблюдать строго)
-
-1. **Единый источник правды (SSOT):** Zustand хранит сериализуемую модель `Scene`. Paper.js отвечает только за рендер, `hitTest` и интерактивные жесты. Пользовательский UI и ИИ изменяют сцену **исключительно** через атомарные функции в `src/core/commands.ts` (прямая мутация стора из компонентов или инструментов запрещена).
-2. **Локальные координаты и Compound Paths:** геометрия `PathLayer` всегда хранится в `subpaths: SubPath[]` в локальных координатах относительно `(0, 0)`. Это позволяет без потерь представлять фигуры с «дырками» и составные контуры после булевых операций `subtract` / `unite` / `intersect`. Позиция и трансформация задаются только через `x, y, rotation, scaleX, scaleY`.
-3. **Плавность 60 FPS и чистая история Undo/Redo:**
-   * Во время перетаскивания (`onMouseDrag`) объекта, узла или усика изменения применяются напрямую в `Paper.js` без вызова `setState` в Zustand. Коммит итоговых координат в стор происходит **только в `onMouseUp`**.
-   * `zundo` оборачивает стор с опцией `partialize: (state) => ({ scene: state.scene })` (в историю **не попадают** `selectedIds`, `activeTool`, `zoom`, `pan`, состояние модалок) и `equality` по ссылке `scene`.
-   * Пакет из нескольких tool calls за один запрос ИИ объединяется в **один** шаг Undo через `useEditorStore.temporal.getState().pause()` до начала цикла и `resume()` с записью финального кадра после цикла.
-4. **Изоляция бинарников картинок (`AssetRegistry`):**
-   * Запрещено хранить `base64` или `Blob` внутри Zustand и истории `zundo`. Все изображения живут в `AssetRegistry` (`Map<assetId, AssetEntry>`), а `ImageLayer` хранит только `assetId: string`, `width` и `height`.
-   * **Важно для Undo:** при удалении `ImageLayer` нельзя сразу вызывать `URL.revokeObjectURL` — слой может вернуться по `Ctrl+Z`. Object URL освобождаются только при закрытии/смене документа (`clear()`), а неиспользуемые ассеты отфильтровываются при сохранении `.locus`.
-5. **Отсутствие CORS и платформенная абстракция (`src/platform/io.ts`):**
-   * Все HTTP-запросы к Gemini API и OpenAI-compatible эндпоинтам выполняются через `fetch` из `@tauri-apps/plugin-http`.
-   * Взаимодействие с ОС (файлы, диалоги, `settings.json`, HTTP `fetch`) изолируется в `src/platform/io.ts` с проверкой `isTauri()` (`typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window`) и браузерным/тестовым фолбэком, чтобы `npm test` (Vitest) и `npm run dev` в обычном браузере не падали.
-6. **Изоляция Paper.js под React 19 StrictMode:**
-   * Импортировать `import paper from 'paper/dist/paper-core'` (исключает тяжёлый парсер PaperScript/Acorn).
-   * В `PaperCanvas.tsx` создавать **локальный экземпляр** `const scope = new paper.PaperScope(); scope.setup(canvas);`, а в `useEffect` cleanup выполнять `scope.project.remove()` (защита от двойного монтирования React 19 StrictMode и утечки глобального состояния).
-   * На холсте поддерживаются ровно 3 внутренних слоя Paper.js: `artboardLayer` (фон артборда и рамка), `sceneLayer` (слои из `Scene`), `overlayLayer` (рамка выделения, узлы, усики, направляющие). Элементы `overlayLayer` масштабируются обратно пропорционально зуму (`1 / scope.view.zoom`), не попадают в `hitTest` для выделения слоёв и никогда не участвуют в экспорте.
-7. **Clipping Mask (модель Illustrator/Figma):**
-   * Слой-маска (`PathLayer`) привязывается к одному или нескольким целевым слоям через `targetLayer.clipMaskId = maskLayer.id` (и помечается `maskLayer.isClipMask = true`).
-   * Пока `PathLayer` является маской (на него ссылается хотя бы один слой или `isClipMask === true`), его собственная заливка и обводка **не рисуются** — на холсте отображается только его тонкий контур при наведении или выделении.
-   * На холсте (Paper.js) и при экспорте (`.svg`, `.ai`, `.psd`) все слои с одинаковым `clipMaskId` помещаются в общую clipped-группу (`clipped = true` в Paper.js, `<clipPath>` в SVG, `W n` / `W* n` в PDF/AI, clipping-группа в PSD).
-   * Запрещены циклические ссылки и самомаскирование; команда `releaseClipMask(maskId)` снимает маску в 1 клик, возвращая дефолтную видимую обводку/заливку контуру; при удалении маски в `deleteLayers` у зависимых слоёв автоматически очищается `clipMaskId`.
-8. **Нативный Drag & Drop (Tauri v2):**
-   * В `tauri.conf.json` включено `dragDropEnabled: true`. Поэтому HTML5 `onDrop` в WebView перехватывается нативным обработчиком. Импорт перетаскиванием реализуется через `getCurrentWebview().onDragDropEvent(...)`: файлы `.png`, `.jpg`, `.jpeg`, `.webp`, `.svg` (как растр) добавляются как `ImageLayer`, файл `.locus` открывается как проект.
-9. **Однонаправленная синхронизация:** `engine/sync.ts` строит и обновляет `sceneLayer` исключительно на основе `Scene` и `AssetRegistry`, не вызывая экшены стора во время рендера. Для `PathLayer` и `ImageLayer` сохранён mapping `layerId -> paper.Item` (`item.data.layerId`) для быстрого `hitTest` и 60 FPS интеракций.
-
----
+1. **SSOT:** Zustand хранит сериализуемую `Scene`; Paper.js — только рендер, `hitTest`, жесты. Любые изменения (UI, инструменты, ИИ) — только через атомарные функции `src/core/commands.ts` (фасад `src/core/commands/{helpers,document,layers,vector,text,index}.ts`); прямая мутация стора запрещена.
+2. **Локальные координаты:** `PathLayer` хранит `subpaths[]` относительно `(0,0)`; позиция/трансформация — только `x,y,rotation,scaleX,scaleY`. Compound Path = несколько `subpaths` + `fillRule`.
+3. **60 FPS и чистая история:** во время drag изменения идут в Paper.js без `setState`, коммит — в `onMouseUp`. `zundo` c `partialize: (state) => ({ scene })`, история не включает selection/tool/zoom/модалки. Серия tool calls ИИ = ровно 1 шаг: `temporal.pause()` → команды → `resume()` + commit.
+4. **AssetRegistry:** бинарники картинок (`Map<assetId, AssetEntry>`) вне Zustand и истории; `ImageLayer` хранит только `assetId/width/height`. `URL.revokeObjectURL` при удалении слоя запрещён (нужен Undo); освобождение — в `clearAssets()` при смене документа, неиспользуемые ассеты отбрасываются при сохранении `.locus`.
+5. **Платформа и CORS:** весь HTTP — через `fetch` из `@tauri-apps/plugin-http`; файлы, диалоги, `settings.json`, drag&drop — в `src/platform/io.ts` с `isTauri()` и браузерным/тестовым фолбэком (`npm test` и `npm run dev` в браузере не падают).
+6. **Paper.js под React 19 StrictMode:** локальный `new paper.PaperScope()` в `PaperCanvas`, cleanup `scope.project.remove()`. Три внутренних слоя: `artboardLayer`, `sceneLayer`, `overlayLayer` (overlay масштабируется на `1/zoom`, не участвует в `hitTest` и экспорте). У элементов `applyMatrix = false`, `pivot = (0,0)`, матрица из `getLayerMatrix()`.
+7. **Clipping Mask (модель Illustrator):** `targetLayer.clipMaskId = mask.id`, `mask.isClipMask = true`; заливка/обводка маски не рисуется. Рендер — clipped-группа (`clipped` в Paper.js, `<clipPath>` в SVG, `W n`/`W* n` в PDF, clipping-группа в PSD). Циклы и самомаскирование запрещены; `releaseClipMask` возвращает контур в обычное состояние; удаление маски очищает зависимые `clipMaskId`.
+8. **Drag & Drop:** нативный `onDragDropEvent` (HTML5 `onDrop` перехвачен); PNG/JPEG/WebP/SVG → `ImageLayer`, `.locus` → открыть проект.
+9. **Однонаправленная синхронизация:** `src/engine/sync.ts` строит `sceneLayer` из `Scene` + `AssetRegistry` без вызовов экшенов; `item.data.layerId` — mapping для `hitTest`.
+10. **Инварианты Paper.js/загрузки (накопленные):** headless-булевы операции — `new scope.Project(undefined as unknown as HTMLCanvasElement)`, для `evenodd` — `compound.reorient(false, true)`. В `loadScene` не очищать `AssetRegistry` до наполнения из `.locus`; очистка только в `clearAssets()` при `resetDocument()`/перед новой загрузкой.
 
 ## 6. Структура проекта
 
 ```text
-locus/
-├── index.html
-├── package.json
-├── tsconfig.json
-├── vite.config.ts
-├── public/
-│   └── fonts/                          # 12 статических .ttf файлов (Regular + Bold для 6 семейств)
-├── src-tauri/
-│   ├── Cargo.toml
-│   ├── tauri.conf.json
-│   ├── capabilities/
-│   │   └── default.json                # Права на http, fs ($APPCONFIG/**), dialog
-│   └── src/
-│       ├── main.rs
-│       └── lib.rs                      # Регистрация tauri_plugin_http, fs, dialog
-├── src/
-│   ├── main.tsx
-│   ├── App.tsx
-│   ├── index.css                       # @import "tailwindcss"; @theme; @font-face (6 семейств × 2 веса)
-│   ├── platform/
-│   │   └── io.ts                       # Единая обертка Tauri/Browser для httpFetch, fs, dialog, drag&drop
-│   ├── core/
-│   │   ├── types.ts                    # Интерфейсы Scene, Layer, SubPath, AnchorPoint, AIConfig
-│   │   ├── fonts.ts                    # Каталог 6 встроенных шрифтов, пути к .ttf и предзагрузка кэша байтов
-│   │   ├── math.ts                     # Матрицы M, localToWorld, worldToLocal, worldBBox, нормализация
-│   │   ├── assets.ts                   # AssetRegistry (Blob, ObjectURL, mime, dataURL для экспорта)
-│   │   ├── store.ts                    # Zustand v5 + zundo (partialize: scene)
-│   │   └── commands.ts                 # Атомарные команды изменения сцены (для UI, инструментов и ИИ)
-│   ├── engine/
-│   │   ├── PaperCanvas.tsx             # Изолированный PaperScope, зум, панорамирование, текстовый <textarea>
-│   │   ├── sync.ts                     # Однонаправленная синхронизация Scene -> Paper.js sceneLayer
-│   │   ├── overlay.ts                  # Рендер рамки выделения, anchors и handles в overlayLayer
-│   │   ├── geometry.ts                 # Генератор Smart Shapes (blob, ellipse, rect, polygon, star), smooth/wobble
-│   │   ├── booleans.ts                 # Обертка над paper.PathItem (unite, subtract, intersect) + пересчет SubPath[]
-│   │   └── tools/
-│   │       ├── selectTool.ts           # Черная стрелка (V): выделение, перемещение, масштаб, поворот
-│   │       ├── nodeTool.ts             # Белая стрелка (A): anchors, handles, добавление/удаление/smooth
-│   │       ├── penTool.ts              # Перо (P): пошаговое построение Безье с live-превью
-│   │       ├── blobTool.ts             # Smart Shape (B): рисование пресетов протягиванием
-│   │       └── textTool.ts             # Текст (T): создание и активация inline-редактирования
-│   ├── ai/
-│   │   ├── config.ts                   # Чтение/запись $APPCONFIG/locus/settings.json
-│   │   ├── context.ts                  # Компактный снимок сцены (метаданные + мировой bbox)
-│   │   ├── registry.ts                 # JSON Schema 29 инструментов и валидатор аргументов
-│   │   ├── executor.ts                 # Tool-calling loop (до 5 шагов), батчинг Undo, AbortController
-│   │   └── providers/
-│   │       ├── gemini.ts               # Адаптер Gemini API (generateContent + functionDeclarations)
-│   │       └── openai.ts               # Адаптер OpenAI-compatible (/chat/completions + tool_calls)
-│   ├── export/
-│   │   ├── projectFile.ts              # Сохранение и открытие .locus (ZIP) со сборкой мусора ассетов
-│   │   ├── toSvg.ts                    # Чистый детерминированный SVG-сериализатор напрямую из Scene
-│   │   ├── toAi.ts                     # Векторный PDF-поток (pdf-lib + @pdf-lib/fontkit) с расширением .ai
-│   │   ├── rasterize.ts                # Общий offscreen-рендерер слоя и всей сцены в HTMLCanvasElement
-│   │   └── toPsd.ts                    # Сборка многослойного .psd через ag-psd
-│   └── ui/
-│       ├── TopBar.tsx                  # Документ, Открыть/Сохранить/Экспорт, Undo/Redo, зум, настройки
-│       ├── StartModal.tsx              # Выбор пресета, custom-размер или открытие .locus
-│       ├── Toolbar.tsx                 # Левая панель инструментов
-│       ├── LayersPanel.tsx             # Правая верхняя панель слоёв
-│       ├── Inspector.tsx               # Правая нижняя панель свойств, масок, булевых и выравнивания
-│       ├── CommandBar.tsx              # ИИ-командная строка (Ctrl+K)
-│       └── SettingsModal.tsx           # Настройка провайдера и API-ключей
-└── tests/
-    ├── math.test.ts                    # Трансформации, нормализация без «прыжка»
-    ├── commands.test.ts                # Команды, маски, zundo Undo/Redo
-    ├── geometry.test.ts                # Smart Shapes, smooth, randomizeAnchors
-    ├── export.test.ts                  # .locus round-trip, валидность SVG, PDF/AI-операторы, PSD-структура
-    └── ai.test.ts                      # Парсинг/цикл tool calls и 1-step Undo батчинг
+src/
+├── main.tsx, App.tsx, index.css        # @import "tailwindcss"; @theme; @font-face (6×2)
+├── platform/io.ts                      # Tauri/Browser: http, fs, dialog, drag&drop, settings
+├── core/
+│   ├── types.ts fonts.ts math.ts assets.ts
+│   ├── store.ts                        # Zustand + zundo (partialize: scene)
+│   ├── themes.ts settings.ts shortcuts.ts typography.ts canvasBackdrop.ts
+│   ├── clipboard.ts contextMenu.ts aiModels.ts
+│   └── commands.ts + commands/         # helpers, document, layers, vector, text, index
+├── engine/
+│   ├── PaperCanvas.tsx sync.ts overlay.ts geometry.ts booleans.ts
+│   ├── textOutlines.ts snapping.ts zoom.ts
+│   └── tools/                          # select, node, pen, blob, text, eyedropper
+├── ai/
+│   ├── types.ts context.ts registry.ts executor.ts statusWords.ts taskStore.ts
+│   └── providers/                      # gemini, openai, anthropic, ollama, index
+├── tutorial/                           # content, targets, progress, search, store
+├── export/                             # projectFile, toSvg, toAi, rasterize, toPsd
+└── ui/                                 # TopBar, Toolbar, LayersPanel, Inspector(+inspector/*),
+                                        # StartModal, CommandBar, SettingsModal, MenuBar,
+                                        # controls.tsx, ContextMenu, UnsavedChangesModal,
+                                        # tutorial/TutorialModal
+src-tauri/
+├── Cargo.toml, tauri.conf.json
+├── capabilities/default.json
+└── src/main.rs, src/lib.rs             # регистрация плагинов http/fs/dialog
+scripts/install-linux-launcher.mjs      # per-user launcher: binary + icon + .desktop
+tests/                                  # math, commands, geometry, stage3, stage3_5, stage3_6,
+                                        # export, ai, ai_tools_smoke, tutorial_*, linuxLauncher
+public/fonts/*.ttf                      # 12 файлов
 ```
-
----
 
 ## 7. Модель данных (`src/core/types.ts`)
 
 ```ts
-export type ToolType = 'select' | 'node' | 'pen' | 'blob' | 'text';
-
-export type SmartShapePreset = 'blob' | 'ellipse' | 'rect' | 'polygon' | 'star';
-
-export interface SmartShapeOptions {
-  preset: SmartShapePreset;
-  points: number;           // 3..24 (для blob, polygon, star)
-  wobble: number;           // 0..1 (для blob)
-  cornerRadius: number;     // px (для rect)
-  innerRadiusRatio: number; // 0.1..0.9 (для star)
+type ToolType = 'select' | 'node' | 'pen' | 'blob' | 'text';   // + eyedropper
+type SmartShapePreset = 'blob' | 'ellipse' | 'rect' | 'polygon' | 'star';
+interface SmartShapeOptions { preset; points; wobble; cornerRadius; innerRadiusRatio }
+interface Point2D { x; y }
+interface AnchorPoint { x; y; handleIn: Point2D; handleOut: Point2D; smooth } // handle* — от anchor
+interface SubPath { closed: boolean; anchors: AnchorPoint[] }                   // локально от центра
+interface StrokeStyle { color; width; lineCap?; lineJoin? }
+interface BaseLayer {
+  id; name; type: 'path' | 'text' | 'image'; visible; locked;
+  x; y; rotation; scaleX; scaleY; opacity; clipMaskId?;
 }
-
-export interface Point2D {
-  x: number;
-  y: number;
-}
-
-export interface AnchorPoint {
-  x: number;
-  y: number;
-  handleIn: Point2D;  // Смещение относительно (x, y)
-  handleOut: Point2D; // Смещение относительно (x, y)
-  smooth: boolean;
-}
-
-export interface SubPath {
-  closed: boolean;
-  anchors: AnchorPoint[]; // В локальных координатах относительно центра (0, 0) PathLayer
-}
-
-export interface StrokeStyle {
-  color: string;
-  width: number;
-  lineCap?: 'butt' | 'round' | 'square';
-  lineJoin?: 'miter' | 'round' | 'bevel';
-}
-
-export interface BaseLayer {
-  id: string;
-  name: string;
-  type: 'path' | 'text' | 'image';
-  visible: boolean;
-  locked: boolean;
-  x: number;
-  y: number;
-  rotation: number;   // Градусы по часовой стрелке
-  scaleX: number;
-  scaleY: number;
-  opacity: number;    // 0..1
-  clipMaskId?: string; // ID PathLayer, который обрезает этот слой
-}
-
-export interface PathLayer extends BaseLayer {
-  type: 'path';
-  subpaths: SubPath[];
-  fillRule: 'nonzero' | 'evenodd';
-  fill: string | null;
-  stroke: StrokeStyle | null;
-  isClipMask?: boolean;
-}
-
-export type BuiltinFontFamily =
-  | 'Inter'
-  | 'Manrope'
-  | 'Golos Text'
-  | 'Playfair Display'
-  | 'JetBrains Mono'
-  | 'Unbounded';
-
-export interface TextLayer extends BaseLayer {
-  type: 'text';
-  content: string;
-  fontSize: number;
-  fontFamily: BuiltinFontFamily;
-  fontWeight: 400 | 700;
-  lineHeight: number;     // По умолчанию 1.2
-  letterSpacing?: number; // px, по умолчанию 0
-  fill: string;
-  align: 'left' | 'center' | 'right';
-}
-
-export interface ImageLayer extends BaseLayer {
-  type: 'image';
-  assetId: string; // Ключ в AssetRegistry
-  width: number;
-  height: number;
-}
-
-export type Layer = PathLayer | TextLayer | ImageLayer;
-
-export interface Scene {
-  version: 1;
-  name: string;
-  width: number;
-  height: number;
-  dpi: number;       // 72 по умолчанию, 300 для A4 Print
-  background: string;
-  layers: Layer[];   // Порядок отрисовки: снизу вверх (0 = самый нижний слой)
-}
-
-export interface DocumentPreset {
-  id: string;
-  label: string;
-  width: number;
-  height: number;
-  dpi: number;
-}
-
-export interface AssetEntry {
-  id: string;
-  name: string;
-  mimeType: string;
-  blob: Blob;
-  objectUrl: string;
-  naturalWidth: number;
-  naturalHeight: number;
-}
-
-export type AIProviderType = 'gemini' | 'openai';
-
-export interface AIConfig {
-  provider: AIProviderType;
-  geminiApiKey: string;
-  geminiModel: string;     // по умолчанию 'gemini-4-hydrogen'
-  openaiBaseUrl: string;   // например 'https://api.openai.com/v1' или 'http://localhost:11434/v1'
-  openaiApiKey: string;
-  openaiModel: string;
-}
-
-export interface BBox {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
+interface PathLayer extends BaseLayer { subpaths; fillRule: 'nonzero'|'evenodd';
+  fill: string | null; stroke: StrokeStyle | null; isClipMask? }
+type BuiltinFontFamily = 'Inter'|'Manrope'|'Golos Text'|'Playfair Display'|'JetBrains Mono'|'Unbounded';
+interface TextLayer extends BaseLayer { content; fontSize; fontFamily: BuiltinFontFamily;
+  fontWeight: 400|700; lineHeight; letterSpacing?; fill; align: 'left'|'center'|'right' }
+interface ImageLayer extends BaseLayer { assetId; width; height }
+type Layer = PathLayer | TextLayer | ImageLayer;
+interface Scene { version: 1; name; width; height; dpi; background; layers: Layer[] } // снизу вверх
+interface AssetEntry { id; name; mimeType; blob: Blob; objectUrl; naturalWidth; naturalHeight }
+interface AIConfig { provider; geminiApiKey; geminiModel; openaiBaseUrl; openaiApiKey; openaiModel }
 ```
 
----
+## 8. Форматы и экспорт
 
-## 8. Форматы файлов и экспорт
-
-### 1. Нативный проект (`.locus`) — `src/export/projectFile.ts`
-* **Формат:** ZIP-архив (`jszip`), содержащий:
-  * `scene.json` — сериализованный объект `Scene` (`version: 1`).
-  * `assets/<assetId>.<ext>` — только реально используемые в `scene.layers` изображения (неиспользуемые ассеты отбрасываются при сохранении, чтобы архив не раздувался после Undo/удалений).
-* **Загрузка:** проверка `scene.version === 1` и обязательных полей, полная очистка старого `AssetRegistry` перед загрузкой нового, восстановление `Blob`, `objectUrl` и размеров картинок из `assets/`, сброс истории `zundo` (`temporal.getState().clear()`).
-
-### 2. Чистый векторный экспорт в `.svg` — `src/export/toSvg.ts`
-* Собирается **напрямую из `Scene` + `AssetRegistry`** (не через `paper.project.exportSVG()`, что исключает утечку оверлеев, обратных зумов и лишних Paper-атрибутов).
-* Корневой `<svg xmlns="http://www.w3.org/2000/svg" width="..." height="..." viewBox="0 0 W H">`, фоновый `<rect>` с `scene.background`.
-* Слои-маски выводятся в `<defs><clipPath id="clip-<maskId>">...</clipPath></defs>` с применением матрицы трансформации маски.
-* Для каждого видимого слоя генерируется `<g id="<safeLayerId>" data-name="<layer.name>" opacity="...">` (группировка или оборачивание `clip-path="url(#clip-...)"` при наличии `clipMaskId`):
-  * `PathLayer`: `<path d="..." fill-rule="nonzero|evenodd" fill="..." stroke="..." stroke-width="..." stroke-linecap="..." stroke-linejoin="..."/>` (кривые строятся по `M` / `C` / `L` / `Z`).
-  * `TextLayer`: `<text>` и построчные `<tspan>` по формуле `baselineY(i)`, `font-family`, `font-weight`, `font-size`, `text-anchor` (`start` / `middle` / `end`).
-  * `ImageLayer`: `<image href="data:<mime>;base64,..." x="-w/2" y="-h/2" width="w" height="h" transform="..."/>`.
-
-### 3. Векторный экспорт в `.ai` (PDF-поток) — `src/export/toAi.ts`
-* Библиотеки: `pdf-lib` + `@pdf-lib/fontkit`.
-* Пересчёт пикселей артборда в PDF points: `ptPerPx = 72 / scene.dpi`, размер страницы `[scene.width * ptPerPx, scene.height * ptPerPx]`.
-* Пересчёт экранных координат в PDF (ось Y снизу вверх):
-  $$\text{pdfX} = w_x \cdot \text{ptPerPx}, \qquad \text{pdfY} = (\text{scene.height} - w_y) \cdot \text{ptPerPx}$$
-* Прозрачность (`opacity < 1`): создаётся `PDFExtGState` (`ca` для заливки, `CA` для обводки) и применяется через `setGraphicsState`.
-* `PathLayer` (не являющийся скрытой маской):
-  * Все `subpaths` и контрольные точки переводятся в мировые PDF-координаты через `localToWorld` до записи операторов — никакой путаницы с порядком матриц в PDF.
-  * Операторы: `pushGraphicsState()`, `moveTo`, `appendBezierCurve` для каждой кривой Безье, `closePath` для замкнутых `subpath`, затем `fill` (`f`) / `fillEvenOdd` (`f*`) / `stroke` (`S`) или комбинированный `fillAndStroke` (`B` / `B*`).
-* Маски (`clipMaskId`): перед группой маскируемых слоёв выполняется `pushGraphicsState()`, рисуется контур маски и вызывается `clip` + `endPath` (`W n` для `nonzero` или `W* n` для `evenodd`), после группы — `popGraphicsState()`.
-* `TextLayer`:
-  * Через `pdfDoc.registerFontkit(fontkit)` и `src/core/fonts.ts` подгружаются байты статического `.ttf` нужного семейства и веса (`400` / `700`), встраиваются через `pdfDoc.embedFont(fontBytes)`.
-  * Строки рисуются через `page.drawText(...)` с учётом `align`, `rotate` и формулы `baselineY(i)`. Кириллица и латиница сохраняются как редактируемый текст.
-* `ImageLayer`: PNG и JPEG встраиваются напрямую (`embedPng` / `embedJpg`); WebP или другие форматы предварительно перекодируются в PNG на offscreen `<canvas>` через `canvas.toBlob('image/png')`.
-
-### 4. Многослойный экспорт в `.psd` — `src/export/toPsd.ts` + `src/export/rasterize.ts`
-* Библиотека: `ag-psd`.
-* Общий модуль `src/export/rasterize.ts` умеет:
-  1. Отрисовать отдельный слой на offscreen `HTMLCanvasElement` (для `PathLayer`, `TextLayer`, `ImageLayer` с учётом трансформаций, стилей и единой `baselineY`).
-  2. Собрать полный композитный `HTMLCanvasElement` всего документа (включая фон, порядок слоёв и клиппинг-маски), который передаётся в корень `Psd.canvas` — это нужно для корректного превью файла `.psd` в ОС и Adobe Photoshop.
-* Для каждого слоя в `Psd.children` заполняются `name`, `hidden: !layer.visible`, `opacity: layer.opacity` (в `ag-psd` диапазон `0..1`), `canvas` и смещения `left` / `top`.
-* Для `TextLayer` дополнительно заполняется структура `text: { text, transform, style: { font, fontSize, fillColor } }` для редактируемости в Photoshop, а запись выполняется с опциями:
-  ```ts
-  writePsd(psd, {
-    generateThumbnail: true,
-    invalidateTextLayers: true,
-  });
-  ```
-
----
+- **`.locus`** (`src/export/projectFile.ts`): ZIP = `scene.json` + `assets/<assetId>.<ext>` только используемых картинок. Загрузка: `version === 1`, полная очистка старого реестра, восстановление Blob/ObjectURL/размеров, `temporal.clear()`.
+- **`.svg`** (`toSvg.ts`): строится напрямую из `Scene` + `AssetRegistry` (не `paper.exportSVG`), `<svg viewBox="0 0 W H">`, фон, `<defs><clipPath>` для масок, `<g>` на слой с `opacity`/`clip-path`, path `M/C/L/Z`, text `<tspan>` по `baselineY`, image через data URL.
+- **`.ai`** (`toAi.ts`): PDF через `pdf-lib` + fontkit; `ptPerPx = 72/dpi`; `pdfX = w_x·ptPerPx`, `pdfY = (H − w_y)·ptPerPx`; opacity через `PDFExtGState` (`ca`/`CA`); кривые — `moveTo`/`appendBezierCurve`/`closePath`, заливка `f`/`f*`, обводка `S`, комбинированно `B`/`B*`; маски — `pushGraphicsState` + `W n`/`W* n` + `pop`; текст встраивается `.ttf` и остаётся редактируемым; WebP перекодируется в PNG.
+- **`.psd`** (`toPsd.ts` + `rasterize.ts`): offscreen-рендер каждого слоя и полного композита (`Psd.canvas`), дети с `name/hidden/opacity/canvas/left/top`, текстовая структура для Photoshop; запись `{ generateThumbnail: true, invalidateTextLayers: true }`.
 
 ## 9. ИИ-слой (BYOK + Tool Calling)
 
-### Хранение настроек (`src/ai/config.ts`)
-* Настройки хранятся в `$APPCONFIG/locus/settings.json` через `src/platform/io.ts` (никогда не записываются в `.locus` и не попадают в репозиторий).
-* Провайдер по умолчанию — OpenAI-compatible (`gpt-6-luna`); порядок в настройках: OpenAI / API → Anthropic → Google Gemini → Ollama. Быстрые модели актуализированы в `src/core/aiModels.ts`: OpenAI `gpt-6-luna` / `gpt-6.2-sol` / `gpt-6.2-astra`, Anthropic `claude-haiku-5-5` / `claude-sonnet-5-5` / `claude-opus-5-5` / `claude-fable-5-2`, Gemini `gemini-4-hydrogen` / `gemini-4-neon` / `gemini-4-carbon` / `gemini-4-argon`, DeepSeek `deepseek-flash` / `deepseek-v4-pro`, OpenRouter `openai/gpt-6-luna` и лёгкие модели, Groq `openai/gpt-oss-20b`, Ollama `qwen3.8` / `gpt-oss:20b` / `deepseek-v4.1-flash` / `gemma4`. Для OpenAI-compatible поддерживаются облачные эндпоинты и локальные серверы (Ollama `http://localhost:11434/v1`, LM Studio и т.п.).
-* Если API-ключ не задан, окно ИИ показывает ошибку и открывает вкладку «ИИ» настроек (`initialTab` у `SettingsModal`).
-* Возможности vision не определяются эвристикой приложения: изображения отправляются модели всегда, а сообщение о неподдержке приходит от провайдера и показывается как «Модель не приняла изображение: …».
+- **Настройки** — `$APPCONFIG/locus/settings.json` через `platform/io.ts`, никогда в `.locus`/репозитории. Провайдеры: OpenAI-compatible (по умолчанию `gpt-6-luna`), Anthropic (`claude-haiku-5-5`), Gemini (`gemini-4-hydrogen`), Ollama (`http://localhost:11434/v1`). Каталог моделей — `src/core/aiModels.ts` (+ DeepSeek, OpenRouter, Groq). Без ключа — ошибка и вкладка «ИИ» настроек. Vision не угадывается: картинки отправляются всегда, отказ провайдера показывается как «Модель не приняла изображение: …».
+- **Контекст** (`context.ts`): компактный `SceneContext` — артборд, `selectedIds`, слои с мировым bbox и ключевыми свойствами; без сырой геометрии и картинок.
+- **Провайдеры:** Gemini `generateContent` + `x-goog-api-key`; OpenAI-compatible `{baseURL}/chat/completions` + `Bearer`, SSE-стриминг текста через `onToken`/`assistant-delta`, tool calls из дельт. Anthropic и Ollama — отдельные адаптеры.
+- **Исполнитель:** `AbortController` («Стоп» → статус `stopped` с текстом «Команда остановлена пользователем», даже при не-`AbortError` отклонении), цикл до 8 шагов (после `report_plan` — до 12), валидация аргументов по JSON-схемам с возвратом структурированной ошибки модели, `temporal.pause()`/`resume()` для одного шага Undo, кнопка «Откатить» в `CommandBar`. В `CommandBar` промпт и вложения очищаются при отправке (при ошибке восстанавливаются), поддерживаются `Ctrl+V` и Drag & Drop картинок, план выводится без `(N шаг.)` со сворачиваемым логом действий.
+- **29 инструментов** (`registry.ts`; новые добавлять в `TOOL_HANDLERS`, `TOOL_LABELS`, обновлять счётчики в `tests/ai.test.ts` и smoke-сценарий):
+  - создание: `create_blob`, `create_shape`, `create_text`, `create_line`, `report_plan`;
+  - изменение: `update_layers`, `delete_layers`, `duplicate_layers`, `reorder_layers`, `rotate_layers`, `select_layers`, `set_artboard` (только `width/height/dpi/background`, менять `name`/метаданные запрещено), `apply_palette`, `text_case`;
+  - вектор: `boolean_op`, `combine_compound`, `split_compound`, `simplify_path`, `round_corners`, `offset_path`, `outline_stroke`;
+  - компоновка: `align_layers`, `flip_layers`, `mirror_duplicate`, `repeat_layer`, `place_in_bounds`, `randomize_anchors`, `set_clip_mask`, `get_layer_geometry`.
 
-### Компактный контекст сцены (`src/ai/context.ts`)
-В каждый запрос ИИ передаётся не вся сырая геометрия и не картинки, а компактный JSON-снимок `SceneContext`:
-* `artboard`: `{ width, height, dpi, background }`
-* `selectedIds`: массив выделенных ID
-* `layers`: список слоёв в порядке отрисовки (`id`, `name`, `type`, `visible`, `locked`, `opacity`, `clipMaskId`, `isClipMask`, вычисленный мировой `bbox: { x, y, width, height }`, для `path` — `fill`, `stroke`, число контуров/узлов; для `text` — `content`, `fontFamily`, `fontSize`, `fill`; для `image` — `width`, `height`).
+## 10. Статус этапов
 
-### Провайдеры
-1. **Gemini API (`src/ai/providers/gemini.ts`):**
-   * `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`
-   * Заголовок: `x-goog-api-key: <apiKey>` (ключ не светится в URL).
-   * Передаются `systemInstruction`, `contents` (история сообщений `user` / `model` / `function`), `tools: [{ functionDeclarations }]`.
-2. **OpenAI-compatible (`src/ai/providers/openai.ts`):**
-   * `POST {baseURL}/chat/completions` (нормализация завершающего `/`), заголовок `Authorization: Bearer <apiKey>`.
-   * Передаются `messages`, `tools` в формате `type: "function"`, цикл обработки `message.tool_calls` с возвратом `role: "tool"`.
-   * Если исполнитель передаёт `onToken`, запрос идёт со `stream: true`, SSE-дельты текста эмитятся событием `assistant-delta` и печатаются в `CommandBar`/индикаторе в реальном времени; tool calls собираются из дельт. Остальные провайдеры пока отвечают целиком (запасной путь без стриминга).
+1. **Фундамент** — выполнено: Vite/TS/Vitest, Tauri v2, 12 `.ttf`, `io.ts`, каркас UI, `PaperCanvas`, иконки. Проверено: `file public/fonts/*.ttf`, `tsc --noEmit`, `npm run build`, `cargo check -j 2`; ручной запуск окна — за пользователем.
+2. **Стор, математика, примитивы, узлы** — выполнено: `math/store/commands/geometry/sync/overlay`, инструменты `V/A/P/B`. Тесты `math/geometry/commands` (14/14); вручную: поворот + узел без «прыжка», drag = 1 шаг Undo.
+3. **Текст, картинки, булевы, маски, автоматика** — выполнено. `tests/stage3.test.ts`: `subtract` с реальным отверстием (2 `subpath`), удаление `ImageLayer` + `Ctrl+Z` без сломанного `ObjectURL`, Clipping Mask обрезает и снимается. Тесты 19/19, tsc/build зелёные.
+4. **Этап 3.5** — выполнено: `textOutlines`, `letterSpacing`, регистр, `exclude`/`divide`, `offset`/`outlineStroke`/`simplify`/`flip`, `Ctrl+Shift+O`, `Ctrl+8`. `tests/stage3_5.test.ts` на реальных `.ttf`: кириллица, разбиение слова с сохранением дырок, все операции, 23/23.
+5. **Этап 3.6** — выполнено: темы, настройки (`settings.json`, автодамп), пипетка `E`, буфер, сетка/Smart Guides, `nudge`, палитра документа, декомпозиция `commands/` и `inspector/`. `tests/stage3_6.test.ts`: темы/CSS-переменные, санитизация настроек, `undoLimit`, отсутствие конфликта `I`/`E`, буфер, привязки, 29/29.
+6. **Этап 4** — выполнено: `.locus`/`.ai`/`.svg`/`.psd`. `tests/export.test.ts`: round-trip `.locus` с бинарником, валидный SVG, `%PDF-` с кириллицей и маской, `readPsd` обратно. Ручная проверка внешними просмотрщиками — за пользователем.
+7. **Этап 5** — выполнено: 4 провайдера, `CommandBar`, вложения, батчинг Undo, фон задачи. `tests/ai.test.ts` (реестр, валидация, 4 адаптера на мок-fetch, ошибки аргументов, abort, 1 шаг Undo) + smoke всех 29 инструментов, 75/75; интеграция в окне — за пользователем.
+8. **Этап 6** — выполнено: собственные меню/контролы, «О приложении», фон рабочей области, защита несохранённого, реестр ИИ расширен до 29. Проверено tests (mirror/repeat/place/round corners, smoke 29), 93/93; ручная проверка UI — за пользователем.
+9. **Этап 7** — выполнено: обучение, этап 1 «Академия» (12 глав, 25 уроков, 75 шагов, поиск, прогресс, входы, `F1`; 28 тестов). Этапы 2 (подсветка через `data-tour`) и 3 (песочница) не начаты.
 
-### Исполнитель и жизненный цикл (`src/ai/executor.ts`)
-1. При запуске промпта создаётся `AbortController` (кнопка «Стоп» в `CommandBar`).
-2. ИИ работает в цикле до **8 шагов** (`MAX_TOOL_STEPS = 8`, после `report_plan` — до 12), пока модель возвращает `tool_calls` / `functionCall`.
-3. Каждый вызов валидируется по схеме (`src/ai/registry.ts`) — неверные параметры возвращают модели структурированную ошибку без краша сцены.
-4. Перед серией tool calls история `zundo` ставится на паузу (`pause()`), после выполнения всей цепочки команд в `src/core/commands.ts` фиксируется **ровно один шаг Undo** (`resume()` + commit), чтобы пользователь мог отменить весь результат ИИ одним `Ctrl+Z`.
+Текущий прогон: `npx tsc --noEmit`, `npm test` (128/128, 23 файла), `npm run build` — зелёные. Git: ветка `master`, последние коммиты `010ef60` и `0b4c912`; в рабочей копии — интеграция Linux-лаунчера (`scripts/install-linux-launcher.mjs`, `tests/linuxLauncher.test.ts`, `tests/node-builtins.d.ts`, `tauri.conf.json`) и доработки ИИ-панели/запрета метаданных; remote не настроен, push не выполнялся.
 
-### Реестр инструментов (`src/ai/registry.ts` — 29 инструментов)
+## 11. Handoff и инварианты среды
 
-| Инструмент | Назначение |
-| :--- | :--- |
-| `create_blob` | Создать органическую кляксу (`name, points, radius, wobble, fill, x, y`) |
-| `create_shape` | Создать примитив (`name, preset: 'ellipse'\|'rect'\|'polygon'\|'star', width, height, cornerRadius?, points?, innerRadiusRatio?, fill, stroke?, x, y`) |
-| `create_text` | Добавить текстовый слой (`name, content, fontSize, fontFamily, fontWeight?, align?, fill, x, y`) |
-| `create_line` | Нарисовать линию/открытый контур по точкам с обводкой (`points, closed?, smooth?, stroke, fill?, name?`) — усы, брови, рот, контуры |
-| `report_plan` | Зафиксировать план и бюджет шагов (`steps`, `summary`); исполнитель подстраивает прогресс под план |
-| `update_layers` | Изменить свойства слоёв (`layerIds, patch`: `name, visible, locked, x, y, rotation, scaleX, scaleY, opacity, fill, stroke, content, fontSize, fontFamily, fontWeight, align`) |
-| `delete_layers` | Удалить указанные слои с очисткой зависимых `clipMaskId` (`layerIds`) |
-| `duplicate_layers` | Дублировать слои со сдвигом (`layerIds, offsetX?, offsetY?`) |
-| `reorder_layers` | Изменить Z-порядок (`layerId, mode: 'front'\|'back'\|'forward'\|'backward'\|'index', index?`) |
-| `set_clip_mask` | Назначить или снять маску (`maskLayerId: string \| null, targetLayerIds`) |
-| `randomize_anchors` | Добавить органическое искажение точкам фигур (`layerIds, intensity`) |
-| `align_layers` | Выровнять или распределить слои (`layerIds, mode`: `left`, `center`, `right`, `top`, `middle`, `bottom`, `distribute_h`, `distribute_v`, `artboard_center`) |
-| `apply_palette` | Перекрасить указанные слои или всю сцену в палитру (`colors: string[], layerIds?, includeBackground?`) |
-| `boolean_op` | Булева операция над `PathLayer` (`layerIds, operation: 'unite'\|'subtract'\|'intersect'\|'exclude'\|'divide'`) |
-| `flip_layers` | Отразить слои относительно общего центра (`layerIds?, axis: 'horizontal'\|'vertical'`) |
-| `mirror_duplicate` | Зеркальная копия относительно оси артборда — симметричные пары (`layerIds?, axis`) |
-| `repeat_layer` | Ряд, столбец, сетка или кольцо копий (`layerIds?, mode, count, gap?, columns?, radius?, sweep?`) |
-| `offset_path` | Параллельный контур: подложка, тень, стикер-обводка (`layerIds?, distance, copyBehind?, join?`) |
-| `outline_stroke` | Перевести обводку в залитый контур (`layerIds`) |
-| `combine_compound` / `split_compound` | Собрать составной контур / разбить на части (`layerIds`) |
-| `simplify_path` | Упростить контуры (`layerIds, tolerance?`) |
-| `round_corners` | Скруглить прямые углы контура (`layerIds?, radius`) |
-| `place_in_bounds` | Вписать слои в прямоугольник с сохранением пропорций (`layerIds?, x, y, width, height, mode?: 'fit'\|'fill'`) |
-| `set_artboard` | Размер, DPI, фон и имя документа (`width?, height?, dpi?, background?, name?`) |
-| `text_case` | Регистр текста (`layerIds?, mode: 'upper'\|'lower'\|'title'`) |
-| `rotate_layers` | Повернуть каждый слой на точный угол (`layerIds?, angle`) |
-| `select_layers` | Выделение: `ids`, `all`, `none`, `invert`, `similar_fill/stroke/type` (`mode, layerIds?`) |
-| `get_layer_geometry` | Прочитать anchors, усики, стили и мировой bbox слоёв (`layerIds?`; без него — выделение) |
-
----
-
-## 10. Поэтапный план сборки (Roadmap) и ворота верификации
-
-Каждый этап считается завершённым только после прохождения всех автоматических и ручных проверок из его блока верификации.
-
-### Этап 1. Инициализация, каркас UI, шрифты и холст — **ВЫПОЛНЕНО**
-* [x] Инициализировать `git`, `package.json`, TypeScript, Vite (`@tailwindcss/vite`), Vitest и `src-tauri/` (Tauri v2 с `plugin-http`, `plugin-fs`, `plugin-dialog`, `capabilities/default.json`, `csp` в `tauri.conf.json`). Дополнительно добавлены `.gitignore`, `src/vite-env.d.ts`, `src/paper-core.d.ts`.
-* [x] Поместить 12 валидных статических `.ttf`-файлов в `public/fonts/`, настроить `@font-face` и `@theme` в `src/index.css`, описать каталог в `src/core/fonts.ts`.
-* [x] Реализовать `src/platform/io.ts` (абстракция Tauri / Browser) и `src/core/types.ts`.
-* [x] Сверстать каркас бумажной темы (`TopBar`, `Toolbar`, `LayersPanel`, `Inspector`, `StartModal`) с защитой хоткеев от срабатывания в полях ввода и SVG-иконкой `public/icon.svg`.
-* [x] Настроить `PaperCanvas.tsx` с изолированным `PaperScope`, слоями `artboardLayer` / `sceneLayer` / `overlayLayer`, плавным зумом к курсору и панорамированием (`Space + Drag`, средняя кнопка мыши).
-* [x] Сгенерировать набор иконок `src-tauri/icons/*` через `npx tauri icon` из утверждённой иконки `3C`.
-* **Критерии готовности и проверка:**
-  * [x] `file public/fonts/*.ttf` подтверждает формат `TrueType Font data` для всех 12 файлов (`fc-query`: `variable=False`, веса `80`/`200`, поддержка `ru`).
-  * [x] `npx tsc --noEmit` и `npm run build` завершаются с кодом `0`.
-  * [x] `cargo check --manifest-path src-tauri/Cargo.toml -j 2` завершается без ошибок.
-  * [ ] Ручная проверка окна: `WEBKIT_DISABLE_DMABUF_RENDERER=1 npm run tauri dev` (запускается пользователем вручную).
-
-### Этап 2. Стор, математика, векторные примитивы и редактирование узлов — **ВЫПОЛНЕНО**
-* [x] Реализовать `src/core/types.ts`, `src/core/math.ts` (матрицы, `localToWorld`, нормализация без «прыжка»), `src/core/store.ts` (Zustand v5 + `zundo` с `partialize: scene`) и базовые команды `src/core/commands.ts`.
-* [x] Реализовать `src/engine/geometry.ts` (все 5 пресетов `Smart Shape`, `smooth`, `randomizeAnchors`) и `src/engine/sync.ts` (однонаправленный рендер с `applyMatrix = false`).
-* [x] Реализовать `src/engine/overlay.ts` и инструменты `selectTool.ts` (`V`), `nodeTool.ts` (`A`), `penTool.ts` (`P`), `blobTool.ts` (`B`): 60 FPS перетаскивание в Paper.js → коммит в стор только в `onMouseUp`, добавление точки кликом по контуру, переключение `smooth` двойным кликом, удаление узла.
-* **Критерии готовности и проверка:**
-  * [x] Юнит-тесты `tests/math.test.ts`, `tests/geometry.test.ts` и `tests/commands.test.ts` (`npm test`) проходят на 100% (14/14).
-  * [ ] Проверка в UI: нарисованная фигура после поворота на $37^\circ$ и редактирования узла в `A` не смещается («не прыгает»); во время драга история `zundo` не копится, `Ctrl+Z` откатывает всё перетаскивание за 1 шаг (запускается пользователем вручную).
-
-### Этап 3. Текст, картинки, булевы операции, маски и автоматика — **ВЫПОЛНЕНО**
-* [x] Реализовать `textTool.ts` (`T`) и inline-редактирование через `<textarea>` поверх холста (поддержка всех 6 встроенных шрифтов, весов 400/700, кириллицы, `align`).
-* [x] Реализовать `src/core/assets.ts` (`AssetRegistry`), добавление `ImageLayer` через кнопку `I` (`plugin-dialog`) и нативный Drag & Drop (`onDragDropEvent`).
-* [x] Реализовать `src/engine/booleans.ts` (`unite`, `subtract`, `intersect`) с поддержкой `CompoundPath` (`subpaths[]`, `fillRule`) и обязательной нормализацией в локальные координаты.
-* [x] Реализовать Clipping Mask (`setClipMask`, `releaseClipMask`, `createClipMaskFromSelection`) и полные действия в `LayersPanel` / `Inspector` (порядок слоёв, `Smooth`/`Wobble`, выравнивание и распределение, кастомный выбор шрифта).
-* **Критерии готовности и проверка:**
-  * [x] Булево вычитание (`subtract`) меньшего круга из большего создаёт фигуру с реальным отверстием (2 `subpath`, `evenodd`/`nonzero`), корректно поворачивается и откатывается по `Ctrl+Z` (`tests/stage3.test.ts`).
-  * [x] Удаление `ImageLayer` и последующий `Ctrl+Z` восстанавливает картинку без сломанного `ObjectURL` (`tests/stage3.test.ts`).
-  * [x] Clipping Mask скрывает заливку маскирующего контура и корректно обрезает 1+ слоёв, снимается кнопкой снятия маски (`tests/stage3.test.ts`).
-  * [x] `npx tsc --noEmit`, `npm test` (19/19) и `npm run build` — зелёные.
-
-### Этап 3.5. Векторизация текста и полноценные векторные операции Illustrator — **ВЫПОЛНЕНО**
-* [x] Реализовать `src/engine/textOutlines.ts` (`@pdf-lib/fontkit`) и команду `convertTextLayersToOutlines` (`Ctrl+Shift+O`): перевод `TextLayer` (6 шрифтов, кириллица, `letterSpacing`, `align`, повороты/масштаб) в редактируемый `PathLayer` с сохранением 1 шага `Ctrl+Z`.
-* [x] Расширить `TextLayer` поддержкой трекинга (`letterSpacing`) во всех модулях (`types.ts`, `math.ts`, `sync.ts`, `PaperCanvas.tsx`) и сменой регистра `transformTextCase` (`UPPER` / `lower` / `Title`).
-* [x] Расширить `src/engine/booleans.ts` и `src/core/commands.ts`: булевы `exclude` и `divide` (полное разбиение на непересекающиеся части), умное разбиение `splitCompoundPathLayers` (сохранение дырок в буквах при разбиении слова на буквы, повторное разбиение одиночной буквы на субконтуры), сборка `combineCompoundPathLayers` (`Ctrl+8`), `offsetPathLayers` (параллельный контур/подложка), `outlineStrokeLayers` (обводка в кривые), `simplifyPathLayers` (упрощение узлов) и `flipLayers` (отражение H/V).
-* [x] Вынести базовые контролы в `src/ui/InspectorControls.tsx`, обновить `Inspector.tsx` и горячие клавиши в `App.tsx`.
-* **Критерии готовности и проверка:**
-  * [x] `tests/stage3_5.test.ts` проверяет векторизацию кириллицы на реальных `.ttf`, разбиение слова на буквы с сохранением отверстий, `Ctrl+8`, `exclude`, `divide`, `offset`, `outlineStroke`, `simplify`, `flip` и регистр текста.
-  * [x] `npx tsc --noEmit`, `npm test` (23/23), `npm run build` и `cargo check -j 2` — зелёные.
-
-### Этап 3.6. Настройки, темы, пипетка, привязки и декомпозиция архитектуры — **ВЫПОЛНЕНО**
-* [x] Реализовать `src/core/themes.ts` (4 темы: `paper`, `studio`, `graphite`, `midnight`, акцентные цвета, свой фон рабочего стола) и `src/core/settings.ts` (`useSettingsStore` с сохранением в `$APPCONFIG/locus/settings.json` / `localStorage`, автосохранение черновика `autosave-draft.json`, динамический лимит Undo в `store.ts`). Своё фото рабочей области хранится отдельно через `src/core/canvasBackdrop.ts` (кнопка «Своё фото…», до 24 МБ): бинарник `$APPCONFIG/locus/canvas-background.<ext>` + метаданные `canvas-background.json`, в сцену не попадает и рисуется за артбордом через `PaperCanvas` object URL.
-* [x] Реализовать полноценное окно `src/ui/SettingsModal.tsx` (`Ctrl+,`, вкладки «Темы и цвета», «Холст и привязки», «Технические», «Горячие клавиши», «ИИ») и вынести реестр команд в `src/core/shortcuts.ts` с проверкой конфликтов (пипетка `E` не конфликтует с вставкой изображения `I`). Во вкладке «Технические» есть переключатель анимаций интерфейса (`animationsEnabled`, `html[data-motion="off"]` отключает переходы и появления для слабых ПК).
-* [x] Добавить пипетку (`src/engine/tools/eyedropperTool.ts`, `E`), буфер обмена слоёв и стилей (`src/core/clipboard.ts`, `Ctrl+C`/`Ctrl+V`/`Ctrl+Shift+V`/`Ctrl+Alt+C`/`Ctrl+Alt+V`), сетку артборда и Smart Guides (`src/engine/snapping.ts`, `src/engine/overlay.ts`, `selectTool.ts`), сдвиг стрелками (`nudgeLayers`) и палитру «Цвета документа».
-* [x] Перевести правила заливки (`Сплошная` / `С вырезами`) и параметры обводки (`Плоский` / `Круглый` / `Квадратный`, `Острый` / `Круглый` / `Скошенный`) на русский язык.
-* [x] Декомпозировать `src/core/commands.ts` в модули `src/core/commands/{helpers,document,layers,vector,text,index}.ts` с общим фасадом реэкспорта и разбить `src/ui/Inspector.tsx` на подкомпоненты `src/ui/inspector/{InspectorTransform,InspectorAppearance,InspectorVectorOps,InspectorText}.tsx`.
-* **Критерии готовности и проверка:**
-  * [x] `tests/stage3_6.test.ts` проверяет темы и CSS-переменные, санитизацию и сохранение настроек, динамический `undoLimit`, отсутствие конфликтов хоткеев (`I`/`E`), буфер обмена/стили, привязки/Smart Guides, пипетку, сдвиг стрелками и реэкспорт `commands.ts`.
-  * [x] `npx tsc --noEmit`, `npm test` (29/29), `npm run build` и `cargo check -j 2` — зелёные.
-
-### Этап 4. Сохранение проекта и экспорт (`.locus`, `.ai`, `.svg`, `.psd`) — **ВЫПОЛНЕНО**
-* Реализовать `src/export/projectFile.ts`: сохранение и открытие `.locus` (ZIP) со сборкой неиспользуемых ассетов.
-* Реализовать `src/export/toSvg.ts`: прямой чистый SVG с `<clipPath>`, `subpaths`, текстом и картинками.
-* Реализовать `src/export/toAi.ts`: векторный PDF-поток через `pdf-lib` + `@pdf-lib/fontkit` с кривыми Безье, масками, картинками и кириллическими `.ttf` шрифтами.
-* Реализовать `src/export/rasterize.ts` и `src/export/toPsd.ts`: послойный и композитный offscreen-рендер через `ag-psd`.
-* **Критерии готовности и проверка:**
-  * [x] `tests/export.test.ts` проверяет: round-trip `.locus` (сцена + бинарник картинки восстанавливаются без потерь), валидность XML/структуры `.svg`, непустые PDF-байты `%PDF-` для `.ai` с кириллицей, кривыми и маской, чтение обратно через `readPsd` из `ag-psd` для `.psd`.
-  * [ ] Ручная проверка открытием экспортированных `.svg`, `.ai` и `.psd` во внешнем просмотрщике / векторном редакторе (запускается пользователем вручную).
-
-### Этап 5. Подключение ИИ (Gemini + OpenAI-compatible) — **ВЫПОЛНЕНО**
-* [x] Реализовать хранение настроек ИИ в `$APPCONFIG/locus/settings.json` (вкладка «ИИ» в `SettingsModal.tsx`): Gemini, Anthropic, Ollama и OpenAI-compatible провайдеры.
-* [x] Реализовать `src/ai/types.ts`, `src/ai/context.ts`, `src/ai/registry.ts` (реестр инструментов + валидация аргументов; сейчас 29), `src/ai/providers/{gemini,openai,anthropic,ollama,index}.ts`, `src/ai/executor.ts` и `src/ui/CommandBar.tsx` (`Ctrl+K`, контекстное меню «ИИ…», меню и верхняя панель).
-* [x] Батчинг Undo: серия tool calls выполняется при `temporal.pause()`, после чего история схлопывается в ровно один шаг `Ctrl+Z`; `AbortController` останавливает выполнение (кнопка «Стоп»). Сворачивание окна не прерывает задачу: прогресс показывается в индикаторе внутри артборда.
-* [x] Вложения-изображения (PNG/JPEG/WebP, до 4 шт.) с превью; поддержка vision проверяется по модели, для неподдерживающих выводится явное сообщение. `report_plan` задаёт число шагов по плану модели.
-* **Критерии готовности и проверка:**
-  * [x] `tests/ai.test.ts` проверяет реестр и валидацию инструментов, выполнение команд, контекст сцены, адаптеры четырёх провайдеров (мок fetch), цикл tool calling, ошибки аргументов, `AbortController` и слияние серии из 2+ команд ИИ в ровно 1 шаг `Ctrl+Z`; `tests/ai_tools_smoke.test.ts` исполняет все 29 инструментов в одной композиции.
-  * [x] `npx tsc --noEmit`, `npm test` (75/75) и `npm run build` — зелёные.
-  * [ ] Интеграционная проверка в запущенном приложении: выделение слоёв → команда в `Ctrl+K` → вызов инструментов ИИ → живое обновление холста → полный откат по `Ctrl+Z` (запускается пользователем вручную).
-  * [ ] Финальный релизный прогон `npm run tauri build` (запускается пользователем вручную).
-
-### Этап 6. Полировка UI, защита несохранённого и расширение ИИ — **ВЫПОЛНЕНО**
-* [x] Собственные контекстные меню вместо браузерных (`src/core/contextMenu.ts`, `src/ui/ContextMenu.tsx`) для холста, слоёв, полей ввода и приложения; недоступные пункты не раскрывают подменю.
-* [x] Собственные контролы вместо нативных (`src/ui/controls.tsx`: Select, Checkbox, Slider, ColorField, Toggle) и меню `src/ui/MenuBar.tsx`.
-* [x] Масштаб колёсиком и `Ctrl`+колесом ограничен только холстом — интерфейс приложения больше не масштабируется (`src/engine/zoom.ts`).
-* [x] Вкладка «О приложении» в `SettingsModal`: логотип Locus, название, версия, автор, лицензия MIT, гиперссылки GitHub и Telegram; кнопка «Обучение» открывает окно обучения.
-* [x] `LICENSE` (MIT) и `README.md`.
-* [x] Настройки: темы и цвета, шрифтовые пресеты интерфейса (Golos Text по умолчанию), холст и привязки, «Технические» (лимит Undo, анимации, автозамена), горячие клавиши, вкладка «ИИ»; кнопка «Применить» и подтверждение по `Enter`.
-* [x] Фон рабочей области из своего изображения (`src/core/canvasBackdrop.ts`): бинарник `canvas-background.*` в `$APPCONFIG`, предпросмотр, fallback на data URL, неблокирующая запись.
-* [x] ИИ-провайдеры: Gemini, OpenAI-compatible, Anthropic, Ollama (`src/ai/providers/*`); актуальные пресеты моделей (`gpt-6-luna` по умолчанию, `gemini-4-hydrogen`, `claude-haiku-5-5`); исправлен enum в JSON-схемах, из-за которого Gemini отвечал `400`.
-* [x] Окно `Ctrl+K`: сворачивание с продолжением задачи в фоне, индикатор в артборде, вложения-изображения (vision), план и стримящийся текст мыслей серым блоком, русские статусы-слова, SSE-стриминг ответа, кнопка настроек-иконка и нежирный заголовок.
-* [x] Реестр инструментов ИИ расширен с 14 до 29: `mirror_duplicate`, `flip_layers`, `repeat_layer`, `offset_path`, `outline_stroke`, `combine_compound`, `split_compound`, `simplify_path`, `round_corners`, `place_in_bounds`, `set_artboard`, `text_case`, `rotate_layers`, `select_layers`, `get_layer_geometry`; новые команды `mirrorDuplicateLayers`, `repeatLayers`, `placeLayersInBounds`, `roundCornersLayers` и `roundPathCorners`.
-* [x] Предупреждение о несохранённых изменениях (`src/ui/UnsavedChangesModal.tsx`) при новом проекте, открытии и закрытии окна (`onCloseRequested`, права `core:window:allow-close` / `allow-destroy`): «Отменить» / «Не сохранять» / «Сохранить»; акцентная — «Сохранить», `Enter` = сохранить, `Esc` = отменить.
-* [x] Анимации интерфейса и тумблеры приведены к бумажной теме: трек без обводки, кружок по центру, отключение анимаций для слабых ПК через `html[data-motion="off"]`.
-* **Критерии готовности и проверка:**
-  * [x] `tests/ai.test.ts` и `tests/ai_tools_smoke.test.ts` — 29 инструментов, smoke-сценарий на одной композиции; `tests/geometry.test.ts` — скругление углов; `tests/commands.test.ts` — зеркальный дубль, повтор и вписывание в прямоугольник.
-  * [x] `npx tsc --noEmit`, `npm test` (93/93, 16 файлов), `npm run build` и `cargo check -j 2` — зелёные.
-  * [ ] Ручная проверка в окне: контекстные меню и собственные контролы, масштаб только холста, диалог несохранённых изменений при закрытии, новые инструменты ИИ (запускается пользователем вручную).
-
-### Этап 7. Встроенное обучение, Этап 1: «Академия» — **ВЫПОЛНЕНО**
-* [x] `src/tutorial/{content,targets,progress,search,store}.ts`: 12 глав, 25 уроков, 75 шагов, реестр целей подсветки, чистый поиск, стор окна, прогресс в `settings.json`.
-* [x] `src/ui/tutorial/TutorialModal.tsx`: окно «Обучение Locus» с поиском, главами, уроками, прогрессом, отметкой урока и подтверждаемым сбросом.
-* [x] Входы: кнопка «Обучение» в настройках, ссылка «Как это работает» в стартовом окне, «Справка → Обучение», клавиша `F1`.
-* [x] Прогресс переживает перезапуск; общий сброс настроек его сохраняет, отдельная кнопка сбрасывает. Одноразовая подсказка после первого документа.
-* [x] Пока окно открыто, однобуквенные инструменты не срабатывают, `Ctrl+K` и `Ctrl+,` не наслаивают окна.
-* [x] Защита от гонки: прогресс, записанный во время асинхронной загрузки настроек, не затирается.
-* **Критерии готовности и проверка:**
-  * [x] `tests/tutorial_{content,progress,search,store,shortcuts,settings_load}.test.ts` — 28 тестов; полный прогон 120/120 в 22 файлах.
-  * [x] `npx tsc --noEmit` и `npm run build` — зелёные.
-  * [ ] Ручная проверка в окне: входы, сохранение прогресса после перезапуска, одноразовая подсказка (запускается пользователем вручную).
-* [ ] Этап 2 обучения — подсветка «Показать в интерфейсе»; Этап 3 — песочница. Отдельные планы, ещё не начаты.
-
----
-
-## 11. Чеклист запуска при старте разработки
-
-1. Инициализировать Git в корне проекта (`git init`) перед первым коммитом каркаса.
-2. После установки пакетов и создания `src-tauri/` сразу убедиться, что `npm run tauri dev` запускает окно на данном Linux-окружении. *(Примечание для Linux + Wayland/NVIDIA/WebKitGTK 2.54+: если при первом запуске окно отрисует чёрный/пустой холст, запускать dev-режим с переменной окружения `WEBKIT_DISABLE_DMABUF_RENDERER=1 npm run tauri dev`.)*
-3. Хранить все API-ключи только в `$APPCONFIG/locus/settings.json` через `SettingsModal` — не коммитить их в проект.
-
----
-
-## 12. Передача контекста в следующий диалог (Handoff)
-
-Проект в харнесе организован по этапам/диалогам внутри папки `locus`:
-* `препродакшн` — исходная проработка архитектуры, дизайна, иконки `3C` и спецификации.
-* `продакшн этап 1` — реализация и верификация Этапа 1 (фундамент, шрифты, Tauri v2, каркас UI, `PaperCanvas`).
-* `продакшн этап 2` — реализация и верификация Этапа 2 (`math.ts`, `store.ts` + `zundo`, `commands.ts`, `geometry.ts`, `sync.ts`, `overlay.ts`, инструменты `V`/`A`/`P`/`B`, интеграция `App`/`LayersPanel`/`Inspector`, 14 юнит-тестов).
-* `продакшн этап 3` — реализация и верификация Этапа 3 (`assets.ts`, `booleans.ts`, `textTool.ts`, inline `<textarea>`, растры в `sync.ts`, нативный Drag & Drop, булевы/маски/выравнивание/типографика в `Inspector`/`LayersPanel`, 19 юнит-тестов).
-* `продакшн этап 3.5` — реализация и верификация Этапа 3.5 (`textOutlines.ts`, `letterSpacing`, регистр, `Ctrl+Shift+O`, `Ctrl+8`/`Ctrl+Shift+8`, `exclude`/`divide`, `offset`/`outlineStroke`/`simplify`/`flip`, `InspectorControls.tsx`, 23 юнит-теста).
-* `продакшн этап 3.6` — реализация и верификация Этапа 3.6 (`themes.ts`, `settings.ts`, `shortcuts.ts`, `clipboard.ts`, `snapping.ts`, `eyedropperTool.ts`, `SettingsModal.tsx`, декомпозиция `commands/` и `inspector/`, русские названия заливок/обводок, палитра документа, 29 юнит-тестов).
-* `продакшн этап 4` — экспорт `.locus` / `.ai` / `.svg` / `.psd` (`src/export/*`, `tests/export.test.ts`).
-* `продакшн этап 5` — ИИ-подключение: реестр инструментов, четыре провайдера, `CommandBar`, батчинг Undo, вложения, фон задачи.
-* `продакшн этап 6` — полировка UI (собственные меню и контролы, «О приложении», фон рабочей области, темы, анимации), расширение реестра ИИ до 29 инструментов и защита несохранённых изменений.
-* `продакшн этап 7` — встроенное обучение, Этап 1: окно «Академия» (12 глав, 25 уроков, 75 шагов), поиск, прогресс в настройках, входы из настроек/старта/«Справки»/`F1`, подсказка первого запуска. Этапы 2 (подсветка) и 3 (песочница) не начаты.
-
-### Что передавать при старте нового диалога
-1. **Текущее состояние репозитория (`/home/qualbyy/Проекты/locus`):**
-   * Этапы 1–7 выполнены и проверены (`tsc --noEmit`, `npm test` 120/120 в 22 файлах, `npm run build`, `cargo check -j 2`).
-   * Последние коммиты: `0b4c912` (фикс гонки прогресса и детали академии) и `33b7e05` (снят с учёта служебный отчёт). Ветка `feat/tutorial-academy` слита в `master` fast-forward и удалена. Push не выполнялся: remote не настроен.
-   * Работают: `src/core/{types,fonts,assets,math,store,themes,settings,shortcuts,clipboard,contextMenu,canvasBackdrop,commands}.ts` (`src/core/commands/*`), `src/platform/io.ts`, `src/engine/{PaperCanvas,geometry,booleans,textOutlines,snapping,zoom,sync,overlay}.ts`, `src/engine/tools/{types,selectTool,nodeTool,penTool,blobTool,textTool,eyedropperTool}.ts`, `src/export/{projectFile,toSvg,toAi,rasterize,toPsd}.ts`, `src/ai/{types,context,statusWords,taskStore,registry,executor}.ts` + `src/ai/providers/{gemini,openai,anthropic,ollama,index}.ts`, `src/tutorial/{content,targets,progress,search,store}.ts`, `src/ui/*` (включая `controls.tsx`, `MenuBar.tsx`, `ContextMenu.tsx`, `UnsavedChangesModal.tsx`, `SettingsModal.tsx`, `CommandBar.tsx`, `tutorial/TutorialModal.tsx`), `src/App.tsx`, `src/index.css`.
-2. **Возможные направления следующего этапа:**
-   * Обучение, Этап 2: `data-tour` на элементах интерфейса и оверлей подсветки по шагам; Этап 3: песочница с проверкой действий и восстановлением документа.
-   * ИИ-арт-директор: разбор композиции, контраста и палитры с применением правок одним `Ctrl+Z`.
-   * Рецепты действий, стили и шаблоны, линейки и направляющие, пакетный экспорт под соцсети.
-   * Запись геометрии из ИИ: инструмент `set_path_anchors` поверх `updatePathSubpaths` (сейчас есть только чтение `get_layer_geometry`).
-3. **Инварианты среды и сборки (не повторять отладку):**
-   * Для `cargo check` / `cargo build` на этой машине (3.6 GiB RAM) использовать `-j 2`.
-   * Для запуска окна на Linux/Wayland при проблемах с DMA-BUF использовать `WEBKIT_DISABLE_DMABUF_RENDERER=1 npm run tauri dev`.
-   * Paper.js импортировать строго как `paper/dist/paper-core` с `applyMatrix = false`, `pivot = (0, 0)` и прямой матрицей из `getLayerMatrix()`, а для headless boolean-операций использовать `new scope.Project(undefined as unknown as HTMLCanvasElement)` и `compound.reorient(false, true)` для `evenodd`.
-   * В `loadScene` не очищать `AssetRegistry` — сначала наполнить его из `.locus`, а очищать только в `clearAssets()` при `resetDocument()` или перед загрузкой нового `.locus`.
-   * Новые инструменты ИИ добавлять в `src/ai/registry.ts`, обработчик — в `TOOL_HANDLERS`, подпись — в `TOOL_LABELS`, затем обновить счётчики в `tests/ai.test.ts` и сценарий `tests/ai_tools_smoke.test.ts` (он обязан исполнить каждый инструмент).
-   * В новом диалоге достаточно сослаться на `@[agents.md]` и указать номер этапа.
+- Новый диалог: сослаться на этот файл и номер следующего этапа.
+- Сборка на машине с 3.6 GiB RAM: `cargo check/build -j 2`; dev-окно при чёрном WebView: `WEBKIT_DISABLE_DMABUF_RENDERER=1 npm run tauri dev`.
+- Возможные направления: обучение этап 2 (подсветка через `data-tour`) и этап 3 (песочница); ИИ-арт-директор; рецепты/стили/шаблоны; линейки и направляющие; пакетный экспорт; запись геометрии из ИИ (`set_path_anchors` поверх `updatePathSubpaths`).
+- Секреты только в `settings.json`; не коммитить ключи.
