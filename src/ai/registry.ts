@@ -372,7 +372,7 @@ function reportPlan(args: Record<string, unknown>): Record<string, unknown> {
   const steps = Math.round(requiredNumber(args, 'steps', 1, 12));
   const summary = optionalString(args, 'summary', 500);
   return {
-    summary: summary ? `План (${steps} шаг.): ${summary}` : `План: ${steps} шагов`,
+    summary: summary ? `План: ${summary}` : 'План готов',
     plannedSteps: steps,
   };
 }
@@ -957,17 +957,15 @@ function countAnchors(ids: string[]): number {
 }
 
 function setArtboardTool(args: Record<string, unknown>): Record<string, unknown> {
+  if (args.name !== undefined) {
+    fail('set_artboard: менять имя документа и метаданные файла запрещено');
+  }
   const patch: {
-    name?: string;
     width?: number;
     height?: number;
     dpi?: number;
     background?: string;
   } = {};
-  if (args.name !== undefined) {
-    const name = optionalString(args, 'name', 200);
-    if (name) patch.name = name;
-  }
   if (args.width !== undefined) patch.width = optionalNumber(args, 'width', 64, 16000, 1080);
   if (args.height !== undefined) {
     patch.height = optionalNumber(args, 'height', 64, 16000, 1080);
@@ -977,7 +975,7 @@ function setArtboardTool(args: Record<string, unknown>): Record<string, unknown>
     patch.background = normalizeHexColor(args.background, 'background');
   }
   if (Object.keys(patch).length === 0) {
-    fail('set_artboard: передайте хотя бы одно из полей width, height, dpi, background, name');
+    fail('set_artboard: передайте хотя бы одно из полей width, height, dpi, background');
   }
   const scene = updateArtboard(patch);
   return {
@@ -987,7 +985,6 @@ function setArtboardTool(args: Record<string, unknown>): Record<string, unknown>
       height: scene.height,
       dpi: scene.dpi,
       background: scene.background,
-      name: scene.name,
     },
   };
 }
@@ -1646,7 +1643,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'set_artboard',
     description:
-      'Изменить артборд: размер в px, DPI, цвет фона, имя документа. Единственный способ залить фон холста.',
+      'Изменить артборд: размер в px, DPI, цвет фона. Единственный способ залить фон холста. Метаданные и имя документа не меняет.',
     parameters: {
       type: 'object',
       properties: {
@@ -1654,7 +1651,6 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         height: { type: 'number', description: '64..16000 px' },
         dpi: { type: 'number', description: '72..600' },
         background: { type: 'string', description: 'Фон артборда, hex #rrggbb' },
-        name: { type: 'string', description: 'Имя документа' },
       },
     },
   },

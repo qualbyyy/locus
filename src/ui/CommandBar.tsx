@@ -1,5 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { ArrowUp, Loader2, Paperclip, Settings2, Sparkles, Square, X } from 'lucide-react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type DragEvent,
+  type ReactElement,
+} from 'react';
+import {
+  ArrowUp,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Paperclip,
+  Settings2,
+  Sparkles,
+  Square,
+  Undo2,
+  X,
+} from 'lucide-react';
 import { getAiModelLabel, getAiProviderIssue } from '../ai/providers';
 import { useAiTaskStore } from '../ai/taskStore';
 import { bytesToDataUrl, inferImageMimeType } from '../core/assets';
@@ -27,16 +47,20 @@ export function CommandBar({
   const answer = useAiTaskStore((s) => s.answer);
   const streamText = useAiTaskStore((s) => s.streamText);
   const error = useAiTaskStore((s) => s.error);
+  const canUndo = useAiTaskStore((s) => s.canUndo);
   const attachments = useAiTaskStore((s) => s.attachments);
   const addAttachment = useAiTaskStore((s) => s.addAttachment);
   const removeAttachment = useAiTaskStore((s) => s.removeAttachment);
   const start = useAiTaskStore((s) => s.start);
   const stop = useAiTaskStore((s) => s.stop);
+  const revertLastRun = useAiTaskStore((s) => s.revertLastRun);
   const minimize = useAiTaskStore((s) => s.minimize);
   const restore = useAiTaskStore((s) => s.restore);
 
   const [prompt, setPrompt] = useState('');
   const [attachError, setAttachError] = useState<string | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [logExpanded, setLogExpanded] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const isRunning = status === 'running';
@@ -45,6 +69,11 @@ export function CommandBar({
     () => log.find((entry) => entry.name === 'report_plan' && entry.ok)?.summary,
     [log]
   );
+  const actionLog = useMemo(
+    () => log.filter((entry) => entry.name !== 'report_plan'),
+    [log]
+  );
+  const lastAction = actionLog[actionLog.length - 1];
 
   const providerIssue = useMemo(() => getAiProviderIssue(ai), [ai]);
   const hasImages = attachments.length > 0;
@@ -60,10 +89,8 @@ export function CommandBar({
     if (!isOpen) return;
     restore();
     const task = useAiTaskStore.getState();
-    if (task.prompt) {
-      setPrompt((prev) =>
-        task.status === 'running' || !prev.trim() ? task.prompt : prev
-      );
+    if (task.status === 'error' && task.prompt) {
+      setPrompt((prev) => (!prev.trim() ? task.prompt : prev));
     }
     const frame = requestAnimationFrame(() => textareaRef.current?.focus());
     return () => cancelAnimationFrame(frame);
@@ -86,6 +113,57 @@ export function CommandBar({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, handleClose]);
 
+  const attachImageBytes = useCallback(
+    (name: string, bytes: Uint8Array): boolean => {
+      const mimeType = inferImageMimeType(name, bytes);
+      if (!/^image\/(png|jpeg|webp)$/.test(mimeType)) {
+        setAttachError('Поддерживаются PNG, JPEG и WebP');
+        return false;
+      }
+      if (bytes.byteLength > 8 * 1024 * 1024) {
+        setAttachError('Файл больше 8 МБ');
+        return false;
+      }
+      const dataUrl = bytesToDataUrl(bytes, mimeType);
+      const dataBase64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+      if (!dataBase64) {
+        setAttachError('Не удалось прочитать изображение');
+        return false;
+      }
+      addAttachment({
+        id: `att_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+        name,
+        mimeType,
+        dataUrl,
+        dataBase64,
+      });
+      return true;
+    },
+    [addAttachment]
+  );
+
+  const attachBrowserFiles = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0 || isRunning) return;
+      setAttachError(null);
+      let count = attachments.length;
+      for (const file of files) {
+        if (count >= 4) break;
+        try {
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          if (attachImageBytes(file.name || 'image.png', bytes)) {
+            count += 1;
+          }
+        } catch (err) {
+          setAttachError(
+            err instanceof Error ? err.message : 'Не удалось прочитать изображение'
+          );
+        }
+      }
+    },
+    [attachImageBytes, attachments.length, isRunning]
+  );
+
   const handleAttach = useCallback(async () => {
     if (attachments.length >= 4 || isRunning) return;
     setAttachError(null);
@@ -97,40 +175,67 @@ export function CommandBar({
         ],
       });
       if (!file) return;
-      const mimeType = inferImageMimeType(file.name, file.bytes);
-      if (!/^image\/(png|jpeg|webp)$/.test(mimeType)) {
-        setAttachError('Поддерживаются PNG, JPEG и WebP');
-        return;
-      }
-      if (file.bytes.byteLength > 8 * 1024 * 1024) {
-        setAttachError('Файл больше 8 МБ');
-        return;
-      }
-      const dataUrl = bytesToDataUrl(file.bytes, mimeType);
-      const dataBase64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
-      if (!dataBase64) {
-        setAttachError('Не удалось прочитать изображение');
-        return;
-      }
-      addAttachment({
-        id: `att_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-        name: file.name,
-        mimeType,
-        dataUrl,
-        dataBase64,
-      });
+      attachImageBytes(file.name, file.bytes);
     } catch (err) {
       setAttachError(
         err instanceof Error ? err.message : 'Не удалось прикрепить изображение'
       );
     }
-  }, [addAttachment, attachments.length, isRunning]);
+  }, [attachImageBytes, attachments.length, isRunning]);
+
+  const handlePaste = useCallback(
+    (event: ClipboardEvent<HTMLTextAreaElement>) => {
+      if (isRunning || attachments.length >= 4) return;
+      const items = Array.from(event.clipboardData?.items ?? []);
+      const imageFiles = items
+        .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => file !== null);
+      if (imageFiles.length === 0) return;
+      event.preventDefault();
+      void attachBrowserFiles(imageFiles);
+    },
+    [attachBrowserFiles, attachments.length, isRunning]
+  );
+
+  const handleDragOver = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      if (isRunning || !event.dataTransfer.types.includes('Files')) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+      if (!isDragOver) setIsDragOver(true);
+    },
+    [isDragOver, isRunning]
+  );
+
+  const handleDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+    setIsDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      setIsDragOver(false);
+      if (isRunning) return;
+      const files = Array.from(event.dataTransfer.files ?? []);
+      if (files.length === 0) return;
+      event.preventDefault();
+      void attachBrowserFiles(files);
+    },
+    [attachBrowserFiles, isRunning]
+  );
 
   const submit = useCallback(() => {
     const value = prompt.trim();
     if (!value || isRunning) return;
     void start(value);
-    if (providerIssue) onOpenSettings?.('ai');
+    if (providerIssue) {
+      onOpenSettings?.('ai');
+    } else {
+      setPrompt('');
+      setAttachError(null);
+      setLogExpanded(false);
+    }
   }, [isRunning, onOpenSettings, prompt, providerIssue, start]);
 
   if (!isOpen) return null;
@@ -146,7 +251,12 @@ export function CommandBar({
         role="dialog"
         aria-modal="true"
         aria-label="Командная строка ИИ"
-        className="animate-rise flex w-full max-w-[680px] flex-col overflow-hidden rounded-lg border border-paper-border bg-paper-panel text-paper-ink shadow-2xl"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={`animate-rise flex w-full max-w-[680px] flex-col overflow-hidden rounded-lg border bg-paper-panel text-paper-ink shadow-2xl ${
+          isDragOver ? 'border-paper-accent ring-2 ring-paper-accent/40' : 'border-paper-border'
+        }`}
       >
         <div className="flex items-center justify-between gap-3 border-b border-paper-border px-4 py-2.5">
           <div className="flex min-w-0 items-center gap-2">
@@ -190,6 +300,7 @@ export function CommandBar({
               value={prompt}
               rows={4}
               onChange={(event) => setPrompt(event.target.value)}
+              onPaste={handlePaste}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !event.shiftKey) {
                   event.preventDefault();
@@ -255,10 +366,15 @@ export function CommandBar({
                   {statusWord}…
                 </span>
               </div>
-              {(planText || streamText) && (
+              {(planText || streamText || lastAction) && (
                 <div className="animate-rise flex flex-col gap-1.5 rounded border border-paper-border bg-paper-bg/60 px-3 py-2 text-[12px] leading-relaxed text-paper-muted">
                   {planText && (
                     <div className="whitespace-pre-wrap">{planText}</div>
+                  )}
+                  {lastAction && (
+                    <div className="truncate text-[11px]">
+                      {lastAction.ok ? '✓' : '✗'} {lastAction.summary}
+                    </div>
                   )}
                   {streamText && (
                     <div className="whitespace-pre-wrap">
@@ -272,14 +388,68 @@ export function CommandBar({
           )}
 
           {answer && !isRunning && (
-            <div className="whitespace-pre-wrap rounded border border-paper-border bg-paper-bg px-3 py-2 text-[12px] leading-relaxed">
-              {answer}
+            <div className="flex items-start gap-2 rounded border border-paper-border bg-paper-bg px-3 py-2 text-[12px] leading-relaxed">
+              <div className="min-w-0 flex-1 whitespace-pre-wrap">{answer}</div>
+              {canUndo && (
+                <button
+                  type="button"
+                  onClick={revertLastRun}
+                  className="flex shrink-0 items-center gap-1 rounded border border-paper-border bg-paper-panel px-2 py-1 text-[11px] text-paper-ink hover:bg-paper-hover"
+                >
+                  <Undo2 className="h-3 w-3" strokeWidth={1.75} />
+                  Откатить
+                </button>
+              )}
             </div>
           )}
 
           {status === 'stopped' && (
-            <div className="rounded border border-paper-border bg-paper-bg px-3 py-2 text-[12px] text-paper-muted">
-              Выполнение остановлено. Сцена сохранила уже сделанные шаги.
+            <div className="flex items-center gap-2 rounded border border-paper-border bg-paper-bg px-3 py-2 text-[12px] text-paper-muted">
+              <span className="min-w-0 flex-1">
+                Команда остановлена пользователем. Сцена сохранила уже сделанные шаги.
+              </span>
+              {canUndo && (
+                <button
+                  type="button"
+                  onClick={revertLastRun}
+                  className="flex shrink-0 items-center gap-1 rounded border border-paper-border bg-paper-panel px-2 py-1 text-[11px] text-paper-ink hover:bg-paper-hover"
+                >
+                  <Undo2 className="h-3 w-3" strokeWidth={1.75} />
+                  Откатить
+                </button>
+              )}
+            </div>
+          )}
+
+          {!isRunning && actionLog.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <button
+                type="button"
+                onClick={() => setLogExpanded((v) => !v)}
+                className="flex w-fit items-center gap-1 text-[11px] text-paper-muted hover:text-paper-ink"
+              >
+                {logExpanded ? (
+                  <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.75} />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.75} />
+                )}
+                Что было сделано ({actionLog.length})
+              </button>
+              {logExpanded && (
+                <div className="flex max-h-36 flex-col gap-1 overflow-y-auto rounded border border-paper-border bg-paper-bg/60 px-3 py-2 text-[11px] text-paper-muted">
+                  {actionLog.map((entry, idx) => (
+                    <div key={`${entry.name}_${idx}`} className="flex items-start gap-1.5">
+                      <span className={entry.ok ? 'text-paper-accent' : 'text-paper-danger'}>
+                        {entry.ok ? '✓' : '✗'}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        {entry.summary}
+                        {entry.error ? ` — ${entry.error}` : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

@@ -14,6 +14,7 @@ import { useSettingsStore } from '../src/core/settings';
 
 interface RunOptions {
   signal?: AbortSignal;
+  attachments?: unknown[];
   onEvent?: (event: AiRunEvent) => void;
 }
 
@@ -94,6 +95,24 @@ describe('AI background task store', () => {
     expect(useAiTaskStore.getState().minimized).toBe(true);
   });
 
+  it('treats any rejection after stop() as user-stopped without error', async () => {
+    runMock.mockImplementation(
+      (options: RunOptions) =>
+        new Promise((_resolve, reject) => {
+          options.signal?.addEventListener('abort', () => {
+            reject(new TypeError('Load failed'));
+          });
+        })
+    );
+
+    const run = useAiTaskStore.getState().start('Отмена во время запроса');
+    useAiTaskStore.getState().stop();
+    await run;
+
+    expect(useAiTaskStore.getState().status).toBe('stopped');
+    expect(useAiTaskStore.getState().error).toBeNull();
+  });
+
   it('sends images to the model and surfaces the provider vision error', async () => {
     useAiTaskStore.getState().addAttachment({
       id: 'img_1',
@@ -132,5 +151,25 @@ describe('AI background task store', () => {
       const index = i % AI_STATUS_WORDS.length;
       expect(pickStatusWordIndex(index)).not.toBe(index);
     }
+  });
+
+  it('clears attachments immediately on start when the run succeeds', async () => {
+    useAiTaskStore.getState().addAttachment({
+      id: 'img_clear',
+      name: 'ref.png',
+      mimeType: 'image/png',
+      dataUrl: 'data:image/png;base64,QUJD',
+      dataBase64: 'QUJD',
+    });
+    runMock.mockImplementation(async (options: RunOptions) => {
+      expect(options.attachments).toHaveLength(1);
+      expect(useAiTaskStore.getState().attachments).toHaveLength(0);
+      return { text: 'Готово', steps: 1, toolCalls: [] };
+    });
+
+    await useAiTaskStore.getState().start('Нарисуй по референсу');
+
+    expect(useAiTaskStore.getState().status).toBe('done');
+    expect(useAiTaskStore.getState().attachments).toHaveLength(0);
   });
 });

@@ -67,6 +67,7 @@ export const SYSTEM_PROMPT = [
   '- combine_compound / split_compound / outline_stroke — собери контур с дырками, разбей слово,',
   '  преврати обводку в заливку перед булевыми операциями.',
   '- set_artboard — размер, DPI и цвет фона холста.',
+  '- Не меняй метаданные файла (название проекта/документа); менять имя документа запрещено.',
 ].join('\n');
 
 export interface AiToolLogEntry {
@@ -246,5 +247,10 @@ export async function runAiCommand(options: AiRunOptions): Promise<AiRunResult> 
 }
 
 export function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError';
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'name' in error &&
+    (error as { name?: unknown }).name === 'AbortError'
+  );
 }

@@ -247,5 +247,13 @@ describe('AI tools smoke scenario', () => {
     expect(executed.size).toBe(TOOL_DEFINITIONS.length);
     expect(new Set(TOOL_DEFINITIONS.map((tool) => tool.name))).toEqual(executed);
     expect(sceneLayers().length).toBeGreaterThan(0);
+
+    const beforeName = useEditorStore.getState().scene.name;
+    const rejected = executeTool('set_artboard', { name: 'Чужое имя' });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) {
+      expect(rejected.error).toContain('запрещено');
+    }
+    expect(useEditorStore.getState().scene.name).toBe(beforeName);
   });
 });

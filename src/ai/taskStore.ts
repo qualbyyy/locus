@@ -1,5 +1,7 @@
 import { create } from 'zustand';
+import { undoCommand } from '../core/commands';
 import { useSettingsStore } from '../core/settings';
+import { useEditorStore } from '../core/store';
 import { isAbortError, runAiCommand, type AiToolLogEntry } from './executor';
 import { getAiProviderIssue } from './providers';
 import type { AiImageAttachment, AiRunEvent } from './types';
@@ -20,12 +22,14 @@ interface AiTaskState {
   error: string | null;
   step: AiTaskStep | null;
   minimized: boolean;
+  canUndo: boolean;
   attachments: AiImageAttachment[];
   addAttachment: (attachment: AiImageAttachment) => void;
   removeAttachment: (id: string) => void;
   clearAttachments: () => void;
   start: (rawPrompt: string) => Promise<void>;
   stop: () => void;
+  revertLastRun: () => void;
   minimize: () => void;
   restore: () => void;
   reset: () => void;
@@ -43,6 +47,7 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
   error: null,
   step: null,
   minimized: false,
+  canUndo: false,
   attachments: [],
 
   addAttachment: (attachment) =>
@@ -65,7 +70,8 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
     if (!prompt || get().status === 'running') return;
 
     const ai = useSettingsStore.getState().settings.ai;
-    const attachments = get().attachments;
+    const attachments = [...get().attachments];
+    const sceneBefore = useEditorStore.getState().scene;
     const issue = getAiProviderIssue(ai);
     if (issue) {
       set({
@@ -74,6 +80,7 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
         error: issue,
         step: null,
         minimized: false,
+        canUndo: false,
       });
       return;
     }
@@ -92,6 +99,8 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
       error: null,
       step: null,
       minimized: false,
+      canUndo: false,
+      attachments: [],
     });
 
     try {
@@ -125,24 +134,36 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
         },
       });
       if (runId !== id) return;
+      const canUndo =
+        useEditorStore.getState().scene !== sceneBefore &&
+        useEditorStore.temporal.getState().pastStates.length > 0;
       set({
         answer: result.text,
         status: 'done',
         step: null,
         streamText: '',
+        canUndo,
       });
     } catch (err) {
       if (runId !== id) return;
-      if (isAbortError(err)) {
-        set({ status: 'stopped', error: null, step: null });
+      if (controller.signal.aborted || isAbortError(err)) {
+        const canUndo =
+          useEditorStore.getState().scene !== sceneBefore &&
+          useEditorStore.temporal.getState().pastStates.length > 0;
+        set({ status: 'stopped', error: null, step: null, canUndo });
       } else {
-        set({
+        set((state) => ({
           status: 'error',
           error: describeAiError(
             err instanceof Error ? err.message : 'Не удалось выполнить команду'
           ),
           step: null,
-        });
+          canUndo: false,
+          attachments:
+            state.attachments.length === 0 && attachments.length > 0
+              ? attachments
+              : state.attachments,
+        }));
       }
     } finally {
       if (currentController === controller) {
@@ -156,6 +177,12 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
 
   stop: () => {
     currentController?.abort();
+  },
+
+  revertLastRun: () => {
+    if (!get().canUndo) return;
+    undoCommand();
+    set({ canUndo: false });
   },
 
   minimize: () => set({ minimized: true }),
@@ -175,6 +202,7 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
       error: null,
       step: null,
       minimized: false,
+      canUndo: false,
       attachments: [],
     });
   },
