@@ -5,18 +5,30 @@ import {
   ChevronDown,
   Copy,
   Crop,
+  Download,
+  FileCode2,
+  FolderOpen,
+  Group,
   ImagePlus,
+  Plus,
   SlidersHorizontal,
   Sparkles,
   Spline,
   Trash2,
+  Ungroup,
   Unlink,
-  X,
+  Wand2,
 } from 'lucide-react';
+import { getActiveArtboard, getSceneArtboards } from '../core/artboards';
 import type { AlignMode, TextCaseMode } from '../core/commands';
+import type { ExportKind } from '../core/documentFile';
+import { findLayerById, flattenLayers, getParentGroupId, getScopeLayers } from '../core/layerTree';
 import { clamp } from '../core/math';
+import { BLEND_MODE_OPTIONS, getPrimaryColor } from '../core/paint';
 import {
   DOCUMENT_PRESETS,
+  type Artboard,
+  type BlendMode,
   type Layer,
   type LayerEffects,
   type PathLayer,
@@ -27,10 +39,15 @@ import {
   type ToolType,
 } from '../core/types';
 import type { BooleanOp } from '../engine/booleans';
-import { hasAnyEffects, hasVectorEffects } from '../engine/effects';
-import type { EffectModalTarget } from './EffectModal';
-import { AlignSection, HexColorRow, NumberField } from './InspectorControls';
-import { ColorField, Slider } from './controls';
+import type { ImageTraceOptions } from '../engine/imageTrace';
+import { InspectorEffects, type EffectTarget } from './inspector/InspectorEffects';
+import {
+  AlignSection,
+  HexColorRow,
+  NumberField,
+  SegmentedButton,
+} from './InspectorControls';
+import { Checkbox, ColorField, Select, Slider } from './controls';
 import {
   collectDocumentColors,
   DocumentColorSwatches,
@@ -46,17 +63,31 @@ import {
 interface InspectorProps {
   scene: Scene;
   selectedIds: string[];
+  activeArtboardId: string;
   activeTool: ToolType;
   smartShapeOptions: SmartShapeOptions;
+  pencilSmoothness: number;
   onChangeSmartShapeOptions: (patch: Partial<SmartShapeOptions>) => void;
+  onChangePencilSmoothness: (val: number) => void;
+  onSelectArtboard: (artboardId: string) => void;
+  onAddArtboard: () => void;
+  onDuplicateArtboard: (artboardId: string) => void;
+  onDeleteArtboard: (artboardId: string) => void;
   onUpdateArtboard: (
-    patch: Partial<Pick<Scene, 'width' | 'height' | 'dpi' | 'background'>>
+    patch: Partial<Pick<Artboard, 'name' | 'x' | 'y' | 'width' | 'height' | 'background'>> & {
+      dpi?: number;
+    }
   ) => void;
+  onExportArtboard?: (kind: ExportKind, artboardId: string) => void;
   onImportBackgroundImage: () => void;
   onUpdateLayers: (
     layerIds: string[],
     patch: Partial<Layer> | ((layer: Layer) => Layer)
   ) => void;
+  onGroupLayers: (layerIds: string[]) => void;
+  onUngroupLayers: (layerIds: string[]) => void;
+  onEnterGroup: (groupId: string | null) => void;
+  onUploadFont: () => void;
   onSmoothLayers: (layerIds: string[]) => void;
   onWobbleLayers: (layerIds: string[], intensity: number) => void;
   onDuplicateLayers: (layerIds: string[]) => void;
@@ -72,17 +103,23 @@ interface InspectorProps {
   onReleaseClipMask: (maskId: string) => void;
   onDetachFromMask: (layerId: string) => void;
   onReplaceImage: (layerId: string) => void;
+  onTraceImage: (layerId: string, options: Partial<ImageTraceOptions>) => void;
   onEditTextOnCanvas: (layerId: string) => void;
   onTransformTextCase: (layerIds: string[], mode: TextCaseMode) => void;
   onConvertToOutlines: (layerIds: string[]) => void;
+  onAttachTextToPath: (textLayerId: string, pathLayerId: string) => void;
+  onDetachTextFromPath: (textLayerId: string) => void;
   onSplitCompound: (layerIds: string[]) => void;
   onCombineCompound: (layerIds: string[]) => void;
   onOffsetLayers: (layerIds: string[], distance: number, copyBehind: boolean) => void;
   onOutlineStroke: (layerIds: string[]) => void;
   onSimplifyLayers: (layerIds: string[]) => void;
-  onOpenEffect: (target: EffectModalTarget) => void;
+  focusedEffect: EffectTarget | null;
+  onConsumeFocusedEffect: () => void;
   onUpdateEffects: (layerIds: string[], patch: Partial<LayerEffects> | null) => void;
   onExpandAppearance: (layerIds: string[]) => void;
+  onCopySvg: () => void;
+  onExportSelectionRaster: () => void;
 }
 
 const SHAPE_PRESETS: Array<{ id: SmartShapePreset; label: string }> = [
@@ -192,15 +229,69 @@ function ArtboardPresetSelect({
   );
 }
 
+function ArtboardNameField({
+  value,
+  onCommit,
+}: {
+  value: string;
+  onCommit: (name: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== value) {
+      onCommit(trimmed);
+    } else {
+      setDraft(value);
+    }
+  };
+
+  return (
+    <input
+      type="text"
+      value={draft}
+      aria-label="Название артборда"
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.currentTarget.blur();
+        } else if (e.key === 'Escape') {
+          setDraft(value);
+          e.currentTarget.blur();
+        }
+      }}
+      className="h-7 w-full rounded border border-paper-border bg-paper-bg px-2 text-[12px] text-paper-ink outline-none focus:border-paper-accent"
+    />
+  );
+}
+
 export function Inspector({
   scene,
   selectedIds,
+  activeArtboardId,
   activeTool,
   smartShapeOptions,
+  pencilSmoothness,
   onChangeSmartShapeOptions,
+  onChangePencilSmoothness,
+  onSelectArtboard,
+  onAddArtboard,
+  onDuplicateArtboard,
+  onDeleteArtboard,
   onUpdateArtboard,
+  onExportArtboard,
   onImportBackgroundImage,
   onUpdateLayers,
+  onGroupLayers,
+  onUngroupLayers,
+  onEnterGroup,
+  onUploadFont,
   onSmoothLayers,
   onWobbleLayers,
   onDuplicateLayers,
@@ -213,31 +304,64 @@ export function Inspector({
   onReleaseClipMask,
   onDetachFromMask,
   onReplaceImage,
+  onTraceImage,
   onEditTextOnCanvas,
   onTransformTextCase,
   onConvertToOutlines,
+  onAttachTextToPath,
+  onDetachTextFromPath,
   onSplitCompound,
   onCombineCompound,
   onOffsetLayers,
   onOutlineStroke,
   onSimplifyLayers,
-  onOpenEffect,
+  focusedEffect,
+  onConsumeFocusedEffect,
   onUpdateEffects,
   onExpandAppearance,
+  onCopySvg,
+  onExportSelectionRaster,
 }: InspectorProps) {
-  const selectedSet = new Set(selectedIds);
-  const selectedLayers = scene.layers.filter((layer) => selectedSet.has(layer.id));
+  const [traceMode, setTraceMode] = useState<'bw' | 'color'>('bw');
+  const [traceThreshold, setTraceThreshold] = useState(140);
+  const [traceColors, setTraceColors] = useState(4);
+  const [traceInvert, setTraceInvert] = useState(false);
+  const [traceSimplify, setTraceSimplify] = useState(1.8);
+
+  const artboards = getSceneArtboards(scene);
+  const activeArtboard = getActiveArtboard(scene, activeArtboardId);
+
+  const selectedLayers: Layer[] = [];
+  for (const id of selectedIds) {
+    const found = findLayerById(scene.layers, id);
+    if (found) selectedLayers.push(found);
+  }
   const singleLayer = selectedLayers.length === 1 ? selectedLayers[0] : null;
+  const singleParentId = singleLayer ? getParentGroupId(scene.layers, singleLayer.id) : null;
+  const singleScope = singleLayer ? getScopeLayers(scene.layers, singleParentId) : scene.layers;
   const singleIndex = singleLayer
-    ? scene.layers.findIndex((l) => l.id === singleLayer.id)
+    ? singleScope.findIndex((l) => l.id === singleLayer.id)
     : -1;
 
+  const allFlatLayers = flattenLayers(scene.layers);
   const referencedMaskIds = new Set<string>();
-  for (const layer of scene.layers) {
+  for (const layer of allFlatLayers) {
     if (layer.clipMaskId) {
       referencedMaskIds.add(layer.clipMaskId);
     }
   }
+  const availablePaths = allFlatLayers
+    .filter((l): l is PathLayer => l.type === 'path' && !l.locked)
+    .map((l) => ({ id: l.id, name: l.name }));
+
+  const pairText =
+    selectedLayers.length === 2
+      ? selectedLayers.find((l): l is TextLayer => l.type === 'text' && !l.locked)
+      : undefined;
+  const pairPath =
+    selectedLayers.length === 2
+      ? selectedLayers.find((l): l is PathLayer => l.type === 'path' && !l.locked)
+      : undefined;
 
   const isLayerActiveMask = (layer: Layer): boolean =>
     layer.type === 'path' &&
@@ -261,17 +385,68 @@ export function Inspector({
   const documentColors = collectDocumentColors(scene);
 
   return (
-    <section className="flex flex-1 flex-col overflow-y-auto bg-paper-panel">
+    <section
+      data-tour="inspector.root"
+      className="flex flex-1 flex-col overflow-y-auto bg-paper-panel"
+    >
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-paper-border px-3">
         <SlidersHorizontal className="h-3.5 w-3.5 text-paper-muted" strokeWidth={1.75} />
         <span className="truncate text-[12px] font-semibold text-paper-ink">
           {selectedLayers.length === 0
-            ? 'Артборд'
+            ? artboards.length > 1
+              ? activeArtboard.name
+              : 'Артборд'
             : selectedLayers.length === 1
               ? singleLayer?.name
               : `Выделено: ${selectedLayers.length}`}
         </span>
       </div>
+
+      {activeTool === 'pencil' && (
+        <div className="flex flex-col gap-2 border-b border-paper-border p-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+              Карандаш
+            </span>
+            <span className="font-display text-[11px] text-paper-ink">
+              {pencilSmoothness.toFixed(1)}
+            </span>
+          </div>
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] text-paper-muted">Авто-сглаживание</span>
+            <Slider
+              value={pencilSmoothness}
+              min={0.5}
+              max={12}
+              step={0.5}
+              ariaLabel="Сглаживание карандаша"
+              onChange={onChangePencilSmoothness}
+            />
+          </label>
+        </div>
+      )}
+
+      {activeTool === 'shapeBuilder' && (
+        <div className="flex flex-col gap-1 border-b border-paper-border p-3">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+            Конструктор фигур
+          </span>
+          <p className="text-[11px] leading-snug text-paper-muted">
+            Проведите по пересечениям для объединения; Alt + клик или штрих — удалить область.
+          </p>
+        </div>
+      )}
+
+      {activeTool === 'knife' && (
+        <div className="flex flex-col gap-1 border-b border-paper-border p-3">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+            Нож и Ножницы
+          </span>
+          <p className="text-[11px] leading-snug text-paper-muted">
+            Проведите линию — разрезать фигуру (Shift — прямо); клик по контуру — точка разреза.
+          </p>
+        </div>
+      )}
 
       {activeTool === 'blob' && (
         <div className="flex flex-col gap-2.5 border-b border-paper-border p-3">
@@ -372,9 +547,98 @@ export function Inspector({
 
       {selectedLayers.length === 0 ? (
         <div className="flex flex-col gap-3 p-3">
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-medium text-paper-muted">
+                Артборды ({artboards.length})
+              </span>
+              <button
+                type="button"
+                onClick={onAddArtboard}
+                className="flex items-center gap-1 rounded border border-paper-border bg-paper-bg px-1.5 py-0.5 text-[11px] font-medium text-paper-ink hover:bg-paper-hover"
+              >
+                <Plus className="h-3 w-3 text-paper-accent" strokeWidth={1.75} />
+                <span>Добавить</span>
+              </button>
+            </div>
+            {artboards.length > 1 && (
+              <div className="flex max-h-36 flex-col gap-1 overflow-y-auto">
+                {artboards.map((ab) => {
+                  const isActive = ab.id === activeArtboard.id;
+                  return (
+                    <div
+                      key={ab.id}
+                      onClick={() => onSelectArtboard(ab.id)}
+                      className={`group flex h-7 cursor-pointer items-center justify-between gap-1 rounded border px-2 text-[11px] ${
+                        isActive
+                          ? 'border-paper-accent bg-paper-accent/10 text-paper-ink font-medium'
+                          : 'border-paper-border bg-paper-bg text-paper-ink hover:bg-paper-hover'
+                      }`}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{ab.name}</span>
+                      <span className="shrink-0 font-display text-[10px] text-paper-muted">
+                        {ab.width}×{ab.height}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDuplicateArtboard(ab.id);
+                        }}
+                        title="Дублировать артборд"
+                        className="hidden h-5 w-5 shrink-0 items-center justify-center rounded text-paper-muted hover:bg-paper-panel hover:text-paper-ink group-hover:flex"
+                      >
+                        <Copy className="h-3 w-3" strokeWidth={1.75} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteArtboard(ab.id);
+                        }}
+                        title="Удалить артборд"
+                        className="hidden h-5 w-5 shrink-0 items-center justify-center rounded text-paper-muted hover:bg-paper-panel hover:text-paper-danger group-hover:flex"
+                      >
+                        <Trash2 className="h-3 w-3" strokeWidth={1.75} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {artboards.length > 1 && (
+            <div className="flex flex-col gap-2 border-t border-paper-border pt-2.5">
+              <div className="flex flex-col gap-1">
+                <span className="text-[11px] text-paper-muted">Имя артборда</span>
+                <ArtboardNameField
+                  value={activeArtboard.name}
+                  onCommit={(name) => onUpdateArtboard({ name })}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <NumberField
+                  label="X (px)"
+                  value={activeArtboard.x}
+                  min={-100000}
+                  max={100000}
+                  onCommit={(x) => onUpdateArtboard({ x })}
+                />
+                <NumberField
+                  label="Y (px)"
+                  value={activeArtboard.y}
+                  min={-100000}
+                  max={100000}
+                  onCommit={(y) => onUpdateArtboard({ y })}
+                />
+              </div>
+            </div>
+          )}
+
           <ArtboardPresetSelect
-            width={scene.width}
-            height={scene.height}
+            width={activeArtboard.width}
+            height={activeArtboard.height}
             dpi={scene.dpi}
             onSelect={(patch) => onUpdateArtboard(patch)}
           />
@@ -382,7 +646,7 @@ export function Inspector({
           <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-1.5">
             <NumberField
               label="Ширина (px)"
-              value={scene.width}
+              value={activeArtboard.width}
               min={64}
               max={16000}
               onCommit={(width) => onUpdateArtboard({ width })}
@@ -390,7 +654,10 @@ export function Inspector({
             <button
               type="button"
               onClick={() =>
-                onUpdateArtboard({ width: scene.height, height: scene.width })
+                onUpdateArtboard({
+                  width: activeArtboard.height,
+                  height: activeArtboard.width,
+                })
               }
               title="Поменять ширину и высоту местами"
               className="flex h-7 w-7 items-center justify-center rounded border border-paper-border bg-paper-bg text-paper-muted hover:bg-paper-hover hover:text-paper-ink"
@@ -399,7 +666,7 @@ export function Inspector({
             </button>
             <NumberField
               label="Высота (px)"
-              value={scene.height}
+              value={activeArtboard.height}
               min={64}
               max={16000}
               onCommit={(height) => onUpdateArtboard({ height })}
@@ -417,7 +684,7 @@ export function Inspector({
           <div className="flex flex-col gap-1">
             <span className="text-[11px] text-paper-muted">Фон артборда</span>
             <HexColorRow
-              value={scene.background}
+              value={activeArtboard.background}
               onChange={(background) => onUpdateArtboard({ background })}
             />
             <button
@@ -429,18 +696,65 @@ export function Inspector({
               <span>Фон из изображения</span>
             </button>
           </div>
+
+          {artboards.length > 1 && onExportArtboard && (
+            <div className="flex flex-col gap-1.5 border-t border-paper-border pt-2.5">
+              <span className="text-[11px] text-paper-muted">
+                Экспорт «{activeArtboard.name}»
+              </span>
+              <div className="grid grid-cols-4 gap-1">
+                {(['svg', 'png', 'ai', 'psd'] as const).map((kind) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => onExportArtboard(kind, activeArtboard.id)}
+                    className="h-7 rounded border border-paper-border bg-paper-bg font-display text-[11px] uppercase text-paper-ink hover:bg-paper-hover"
+                  >
+                    {kind}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       ) : singleLayer ? (
         <div className="flex flex-col gap-3 p-3">
           <InspectorTransform
             layer={singleLayer}
             layerIndex={singleIndex}
-            totalLayers={scene.layers.length}
+            totalLayers={singleScope.length}
             onUpdateLayers={onUpdateLayers}
             onAlignLayers={onAlignLayers}
             onFlipLayers={onFlipLayers}
             onReorderLayer={onReorderLayer}
           />
+
+          {singleLayer.type === 'group' && (
+            <div className="flex flex-col gap-1.5 border-t border-paper-border pt-2.5">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-medium text-paper-muted">Группа</span>
+                <span className="font-display text-paper-ink">
+                  {singleLayer.children.length} сл.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onEnterGroup(singleLayer.id)}
+                className="flex h-7 items-center justify-center gap-1.5 rounded border border-paper-border bg-paper-bg text-[12px] text-paper-ink hover:bg-paper-hover"
+              >
+                <FolderOpen className="h-3.5 w-3.5 text-paper-accent" strokeWidth={1.75} />
+                <span>Войти в группу</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onUngroupLayers([singleLayer.id])}
+                className="flex h-7 items-center justify-center gap-1.5 rounded border border-paper-border bg-paper-bg text-[12px] text-paper-ink hover:bg-paper-hover"
+              >
+                <Ungroup className="h-3.5 w-3.5 text-paper-muted" strokeWidth={1.75} />
+                <span>Разгруппировать (Ctrl+Shift+G)</span>
+              </button>
+            </div>
+          )}
 
           {singleLayer.type === 'path' && (
             <>
@@ -465,10 +779,14 @@ export function Inspector({
             <InspectorText
               layer={singleLayer}
               documentColors={documentColors}
+              availablePaths={availablePaths}
               onUpdateLayers={onUpdateLayers}
               onEditTextOnCanvas={onEditTextOnCanvas}
               onTransformTextCase={onTransformTextCase}
               onConvertToOutlines={onConvertToOutlines}
+              onAttachTextToPath={onAttachTextToPath}
+              onDetachTextFromPath={onDetachTextFromPath}
+              onUploadFont={onUploadFont}
             />
           )}
 
@@ -488,6 +806,94 @@ export function Inspector({
                 <ImagePlus className="h-3.5 w-3.5 text-paper-muted" strokeWidth={1.75} />
                 <span>Заменить изображение</span>
               </button>
+
+              <div className="mt-1 flex flex-col gap-2 border-t border-paper-border pt-2.5">
+                <span className="text-[11px] font-medium text-paper-muted">
+                  Векторизация (Image Trace)
+                </span>
+                <div className="flex gap-1">
+                  <SegmentedButton
+                    active={traceMode === 'bw'}
+                    label="Силуэт (Ч/Б)"
+                    onClick={() => setTraceMode('bw')}
+                  />
+                  <SegmentedButton
+                    active={traceMode === 'color'}
+                    label="Цвета"
+                    onClick={() => setTraceMode('color')}
+                  />
+                </div>
+                {traceMode === 'bw' ? (
+                  <>
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center justify-between text-[11px] text-paper-muted">
+                        <span>Порог яркости</span>
+                        <span className="font-display text-paper-ink">{traceThreshold}</span>
+                      </div>
+                      <Slider
+                        value={traceThreshold}
+                        min={20}
+                        max={235}
+                        step={5}
+                        ariaLabel="Порог яркости"
+                        onChange={setTraceThreshold}
+                      />
+                    </div>
+                    <Checkbox
+                      checked={traceInvert}
+                      onChange={setTraceInvert}
+                      label="Инвертировать (светлое на тёмном)"
+                    />
+                  </>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between text-[11px] text-paper-muted">
+                      <span>Палитра цветов</span>
+                      <span className="font-display text-paper-ink">{traceColors}</span>
+                    </div>
+                    <Slider
+                      value={traceColors}
+                      min={2}
+                      max={8}
+                      step={1}
+                      ariaLabel="Количество цветов трассировки"
+                      onChange={setTraceColors}
+                    />
+                  </div>
+                )}
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between text-[11px] text-paper-muted">
+                    <span>Сглаживание</span>
+                    <span className="font-display text-paper-ink">
+                      {traceSimplify.toFixed(1)}
+                    </span>
+                  </div>
+                  <Slider
+                    value={traceSimplify}
+                    min={0.5}
+                    max={6}
+                    step={0.1}
+                    ariaLabel="Сглаживание трассировки"
+                    onChange={setTraceSimplify}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onTraceImage(singleLayer.id, {
+                      mode: traceMode,
+                      threshold: traceThreshold,
+                      colors: traceColors,
+                      invert: traceInvert,
+                      simplify: traceSimplify,
+                    })
+                  }
+                  className="flex h-7 items-center justify-center gap-1.5 rounded border border-paper-accent/40 bg-paper-accent/10 text-[12px] font-medium text-paper-ink hover:bg-paper-accent/20"
+                >
+                  <Wand2 className="h-3.5 w-3.5 text-paper-accent" strokeWidth={1.75} />
+                  <span>Векторизовать</span>
+                </button>
+              </div>
             </div>
           )}
 
@@ -530,149 +936,32 @@ export function Inspector({
             </div>
           )}
 
-          {hasAnyEffects(singleLayer.effects) && (
-            <div className="flex flex-col gap-1.5 border-t border-paper-border pt-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium text-paper-muted">Эффекты</span>
-                <button
-                  type="button"
-                  onClick={() => onUpdateEffects([singleLayer.id], null)}
-                  className="text-[11px] text-paper-muted hover:text-paper-danger"
-                >
-                  Очистить
-                </button>
-              </div>
-              <div className="flex flex-col gap-1">
-                {singleLayer.effects?.warp && (
-                  <div className="flex items-center justify-between rounded border border-paper-border bg-paper-bg px-2 py-1 text-[11px]">
-                    <button
-                      type="button"
-                      onClick={() => onOpenEffect({ kind: 'warp' })}
-                      className="flex-1 text-left text-paper-ink hover:text-paper-accent"
-                    >
-                      Деформация: {singleLayer.effects.warp.style} ({singleLayer.effects.warp.bend}%)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onUpdateEffects([singleLayer.id], { warp: undefined })}
-                      className="text-paper-muted hover:text-paper-danger"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                )}
-                {singleLayer.effects?.distort && (
-                  <div className="flex items-center justify-between rounded border border-paper-border bg-paper-bg px-2 py-1 text-[11px]">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onOpenEffect({ kind: singleLayer.effects!.distort!.kind })
-                      }
-                      className="flex-1 text-left text-paper-ink hover:text-paper-accent"
-                    >
-                      Искажение: {singleLayer.effects.distort.kind}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onUpdateEffects([singleLayer.id], { distort: undefined })}
-                      className="text-paper-muted hover:text-paper-danger"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                )}
-                {singleLayer.effects?.effect3d && (
-                  <div className="flex items-center justify-between rounded border border-paper-border bg-paper-bg px-2 py-1 text-[11px]">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onOpenEffect({
-                          kind:
-                            singleLayer.effects!.effect3d!.kind === 'extrude'
-                              ? '3d-extrude'
-                              : '3d-rotate',
-                        })
-                      }
-                      className="flex-1 text-left text-paper-ink hover:text-paper-accent"
-                    >
-                      3D: {singleLayer.effects.effect3d.kind === 'extrude' ? 'Выдавливание' : 'Поворот'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onUpdateEffects([singleLayer.id], { effect3d: undefined })}
-                      className="text-paper-muted hover:text-paper-danger"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                )}
-                {singleLayer.effects?.blur !== undefined && singleLayer.effects.blur > 0 && (
-                  <div className="flex items-center justify-between rounded border border-paper-border bg-paper-bg px-2 py-1 text-[11px]">
-                    <button
-                      type="button"
-                      onClick={() => onOpenEffect({ kind: 'blur' })}
-                      className="flex-1 text-left text-paper-ink hover:text-paper-accent"
-                    >
-                      Размытие: {singleLayer.effects.blur} px
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onUpdateEffects([singleLayer.id], { blur: undefined })}
-                      className="text-paper-muted hover:text-paper-danger"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                )}
-                {singleLayer.effects?.dropShadow && (
-                  <div className="flex items-center justify-between rounded border border-paper-border bg-paper-bg px-2 py-1 text-[11px]">
-                    <button
-                      type="button"
-                      onClick={() => onOpenEffect({ kind: 'dropShadow' })}
-                      className="flex-1 text-left text-paper-ink hover:text-paper-accent"
-                    >
-                      Тень ({singleLayer.effects.dropShadow.blur} px)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onUpdateEffects([singleLayer.id], { dropShadow: undefined })}
-                      className="text-paper-muted hover:text-paper-danger"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                )}
-                {singleLayer.effects?.outerGlow && (
-                  <div className="flex items-center justify-between rounded border border-paper-border bg-paper-bg px-2 py-1 text-[11px]">
-                    <button
-                      type="button"
-                      onClick={() => onOpenEffect({ kind: 'outerGlow' })}
-                      className="flex-1 text-left text-paper-ink hover:text-paper-accent"
-                    >
-                      Свечение ({singleLayer.effects.outerGlow.blur} px)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onUpdateEffects([singleLayer.id], { outerGlow: undefined })}
-                      className="text-paper-muted hover:text-paper-danger"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                )}
-              </div>
-              {singleLayer.type === 'path' && hasVectorEffects(singleLayer.effects) && (
-                <button
-                  type="button"
-                  onClick={() => onExpandAppearance([singleLayer.id])}
-                  className="flex h-7 items-center justify-center gap-1.5 rounded border border-paper-border bg-paper-bg text-[12px] text-paper-ink hover:bg-paper-hover"
-                >
-                  <Sparkles className="h-3.5 w-3.5 text-paper-accent" strokeWidth={1.75} />
-                  <span>Разобрать оформление</span>
-                </button>
-              )}
-            </div>
-          )}
+          <InspectorEffects
+            layers={[singleLayer]}
+            focusedEffect={focusedEffect}
+            onConsumeFocus={onConsumeFocusedEffect}
+            onUpdateEffects={onUpdateEffects}
+            onExpandAppearance={onExpandAppearance}
+          />
+
+          <div data-tour="inspector.export" className="flex gap-2 border-t border-paper-border pt-2.5">
+            <button
+              type="button"
+              onClick={onCopySvg}
+              className="flex h-7 flex-1 items-center justify-center gap-1 rounded border border-paper-border bg-paper-bg text-[11px] text-paper-ink hover:bg-paper-hover"
+            >
+              <FileCode2 className="h-3.5 w-3.5 text-paper-accent" strokeWidth={1.75} />
+              <span>Копировать SVG</span>
+            </button>
+            <button
+              type="button"
+              onClick={onExportSelectionRaster}
+              className="flex h-7 flex-1 items-center justify-center gap-1 rounded border border-paper-border bg-paper-bg text-[11px] text-paper-ink hover:bg-paper-hover"
+            >
+              <Download className="h-3.5 w-3.5 text-paper-muted" strokeWidth={1.75} />
+              <span>Экспорт PNG</span>
+            </button>
+          </div>
 
           <div className="flex gap-2 border-t border-paper-border pt-2.5">
             <button
@@ -695,18 +984,34 @@ export function Inspector({
         </div>
       ) : (
         <div className="flex flex-col gap-3 p-3">
-          <NumberField
-            label="Общая непрозрачность (%)"
-            value={Math.round(selectedLayers[0].opacity * 100)}
-            min={0}
-            max={100}
-            onCommit={(pct) =>
-              onUpdateLayers(
-                selectedLayers.map((l) => l.id),
-                { opacity: clamp(pct / 100, 0, 1) }
-              )
-            }
-          />
+          <div className="grid grid-cols-2 items-end gap-2">
+            <NumberField
+              label="Непрозр. (%)"
+              value={Math.round(selectedLayers[0].opacity * 100)}
+              min={0}
+              max={100}
+              onCommit={(pct) =>
+                onUpdateLayers(
+                  selectedLayers.map((l) => l.id),
+                  { opacity: clamp(pct / 100, 0, 1) }
+                )
+              }
+            />
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] text-paper-muted">Наложение</span>
+              <Select
+                ariaLabel="Режим наложения"
+                value={selectedLayers[0].blendMode ?? 'normal'}
+                options={BLEND_MODE_OPTIONS}
+                onChange={(mode) =>
+                  onUpdateLayers(
+                    selectedLayers.map((l) => l.id),
+                    { blendMode: mode as BlendMode }
+                  )
+                }
+              />
+            </div>
+          </div>
 
           <AlignSection
             layerIds={selectedIds}
@@ -715,11 +1020,42 @@ export function Inspector({
             onFlip={onFlipLayers}
           />
 
+          <div className="flex flex-col gap-1.5 border-t border-paper-border pt-2.5">
+            <button
+              type="button"
+              onClick={() => onGroupLayers(selectedIds)}
+              className="flex h-7 items-center justify-center gap-1.5 rounded border border-paper-border bg-paper-bg text-[12px] text-paper-ink hover:bg-paper-hover"
+            >
+              <Group className="h-3.5 w-3.5 text-paper-accent" strokeWidth={1.75} />
+              <span>Сгруппировать (Ctrl+G)</span>
+            </button>
+            {selectedLayers.some((l) => l.type === 'group') && (
+              <button
+                type="button"
+                onClick={() => onUngroupLayers(selectedIds)}
+                className="flex h-7 items-center justify-center gap-1.5 rounded border border-paper-border bg-paper-bg text-[12px] text-paper-ink hover:bg-paper-hover"
+              >
+                <Ungroup className="h-3.5 w-3.5 text-paper-muted" strokeWidth={1.75} />
+                <span>Разгруппировать (Ctrl+Shift+G)</span>
+              </button>
+            )}
+          </div>
+
           {selectedTextIds.length > 0 && (
             <div className="flex flex-col gap-1.5 border-t border-paper-border pt-2.5">
               <span className="text-[11px] font-medium text-paper-muted">
                 Текст ({selectedTextIds.length})
               </span>
+              {pairText && pairPath && (
+                <button
+                  type="button"
+                  onClick={() => onAttachTextToPath(pairText.id, pairPath.id)}
+                  className="flex h-7 items-center justify-center gap-1.5 rounded border border-paper-accent/40 bg-paper-accent/10 text-[12px] font-medium text-paper-ink hover:bg-paper-accent/20"
+                >
+                  <Spline className="h-3.5 w-3.5 text-paper-accent" strokeWidth={1.75} />
+                  <span>Пустить текст по контуру</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => onConvertToOutlines(selectedIds)}
@@ -783,11 +1119,12 @@ export function Inspector({
               </span>
               <div className="flex items-center gap-2">
                 <ColorField
-                  value={
+                  value={getPrimaryColor(
                     selectedLayers.find(
                       (l): l is PathLayer => l.type === 'path' && l.fill !== null
-                    )?.fill ?? '#da7756'
-                  }
+                    )?.fill,
+                    '#da7756'
+                  )}
                   ariaLabel="Общая заливка"
                   onChange={(fill) => onUpdateLayers(selectedPathIds, { fill })}
                 />
@@ -806,6 +1143,33 @@ export function Inspector({
               />
             </div>
           )}
+
+          <InspectorEffects
+            layers={selectedLayers}
+            focusedEffect={focusedEffect}
+            onConsumeFocus={onConsumeFocusedEffect}
+            onUpdateEffects={onUpdateEffects}
+            onExpandAppearance={onExpandAppearance}
+          />
+
+          <div data-tour="inspector.export" className="flex gap-2 border-t border-paper-border pt-2.5">
+            <button
+              type="button"
+              onClick={onCopySvg}
+              className="flex h-7 flex-1 items-center justify-center gap-1 rounded border border-paper-border bg-paper-bg text-[11px] text-paper-ink hover:bg-paper-hover"
+            >
+              <FileCode2 className="h-3.5 w-3.5 text-paper-accent" strokeWidth={1.75} />
+              <span>Копировать SVG</span>
+            </button>
+            <button
+              type="button"
+              onClick={onExportSelectionRaster}
+              className="flex h-7 flex-1 items-center justify-center gap-1 rounded border border-paper-border bg-paper-bg text-[11px] text-paper-ink hover:bg-paper-hover"
+            >
+              <Download className="h-3.5 w-3.5 text-paper-muted" strokeWidth={1.75} />
+              <span>Экспорт PNG</span>
+            </button>
+          </div>
 
           <div className="flex gap-2 border-t border-paper-border pt-2.5">
             <button

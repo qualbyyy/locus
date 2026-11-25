@@ -2,6 +2,7 @@ import { create, useStore } from 'zustand';
 import { temporal, type ZundoOptions } from 'zundo';
 import {
   createDefaultScene,
+  type Paint,
   type Scene,
   type SelectedNodeRef,
   type SmartShapeOptions,
@@ -13,18 +14,26 @@ export interface EditorState {
   scene: Scene;
   selectedIds: string[];
   selectedNode: SelectedNodeRef | null;
+  editingGroupId: string | null;
+  activeArtboardId: string;
   activeTool: ToolType;
+  activeGradientTarget: 'fill' | 'stroke';
   smartShapeOptions: SmartShapeOptions;
-  defaultFill: string | null;
+  pencilSmoothness: number;
+  defaultFill: Paint | null;
   defaultStroke: StrokeStyle | null;
   zoomPercent: number;
   isDirty: boolean;
 
   setSelectedIds: (ids: string[]) => void;
   setSelectedNode: (node: SelectedNodeRef | null) => void;
+  setEditingGroupId: (id: string | null) => void;
+  setActiveArtboardId: (id: string) => void;
   setActiveTool: (tool: ToolType) => void;
+  setActiveGradientTarget: (target: 'fill' | 'stroke') => void;
   setSmartShapeOptions: (patch: Partial<SmartShapeOptions>) => void;
-  setDefaultFill: (fill: string | null) => void;
+  setPencilSmoothness: (smoothness: number) => void;
+  setDefaultFill: (fill: Paint | null) => void;
   setDefaultStroke: (stroke: StrokeStyle | null) => void;
   setZoomPercent: (zoomPercent: number) => void;
   setDirty: (isDirty: boolean) => void;
@@ -50,8 +59,12 @@ export const useEditorStore = create<EditorState>()(
       scene: createDefaultScene(),
       selectedIds: [],
       selectedNode: null,
+      editingGroupId: null,
+      activeArtboardId: 'artboard_1',
       activeTool: 'select',
+      activeGradientTarget: 'fill',
       smartShapeOptions: { ...DEFAULT_SMART_SHAPE_OPTIONS },
+      pencilSmoothness: 2.5,
       defaultFill: '#da7756',
       defaultStroke: null,
       zoomPercent: 100,
@@ -68,16 +81,27 @@ export const useEditorStore = create<EditorState>()(
 
       setSelectedNode: (node) => set({ selectedNode: node }),
 
+      setEditingGroupId: (editingGroupId) => set({ editingGroupId }),
+
+      setActiveArtboardId: (activeArtboardId) => set({ activeArtboardId }),
+
       setActiveTool: (tool) =>
         set((state) => ({
           activeTool: tool,
           selectedNode: tool === 'node' ? state.selectedNode : null,
         })),
 
+      setActiveGradientTarget: (target) => set({ activeGradientTarget: target }),
+
       setSmartShapeOptions: (patch) =>
         set((state) => ({
           smartShapeOptions: { ...state.smartShapeOptions, ...patch },
         })),
+
+      setPencilSmoothness: (smoothness) =>
+        set({
+          pencilSmoothness: Math.min(12, Math.max(0.5, Number.isFinite(smoothness) ? smoothness : 2.5)),
+        }),
 
       setDefaultFill: (fill) => set({ defaultFill: fill }),
 

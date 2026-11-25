@@ -10,10 +10,14 @@ export type ShortcutActionId =
   | 'tool.blob'
   | 'tool.text'
   | 'tool.eyedropper'
+  | 'tool.shapeBuilder'
+  | 'tool.pencil'
+  | 'tool.knife'
   | 'action.placeImage'
   | 'edit.undo'
   | 'edit.redo'
   | 'edit.copy'
+  | 'edit.copySvg'
   | 'edit.paste'
   | 'edit.pasteInPlace'
   | 'edit.copyStyle'
@@ -22,6 +26,7 @@ export type ShortcutActionId =
   | 'view.fitArtboard'
   | 'view.zoom100'
   | 'view.toggleGrid'
+  | 'view.toggleRulers'
   | 'view.toggleSnap'
   | 'app.openSettings'
   | 'app.commandBar'
@@ -30,7 +35,9 @@ export type ShortcutActionId =
   | 'vector.combineCompound'
   | 'vector.splitCompound'
   | 'layer.backward'
-  | 'layer.forward';
+  | 'layer.forward'
+  | 'layer.group'
+  | 'layer.ungroup';
 
 export interface ShortcutDefinition {
   id: ShortcutActionId;
@@ -106,6 +113,24 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     defaultCombo: 'KeyE',
   },
   {
+    id: 'tool.shapeBuilder',
+    label: 'Конструктор фигур (Shape Builder)',
+    category: 'tools',
+    defaultCombo: 'Shift+KeyM',
+  },
+  {
+    id: 'tool.pencil',
+    label: 'Карандаш (Pencil)',
+    category: 'tools',
+    defaultCombo: 'KeyN',
+  },
+  {
+    id: 'tool.knife',
+    label: 'Нож / Ножницы (Knife & Scissors)',
+    category: 'tools',
+    defaultCombo: 'KeyC',
+  },
+  {
     id: 'action.placeImage',
     label: 'Вставить изображение',
     category: 'tools',
@@ -149,6 +174,12 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     defaultCombo: 'Ctrl+Alt+KeyC',
   },
   {
+    id: 'edit.copySvg',
+    label: 'Копировать как SVG',
+    category: 'edit',
+    defaultCombo: 'Ctrl+Shift+KeyC',
+  },
+  {
     id: 'edit.pasteStyle',
     label: 'Вставить стиль слоя',
     category: 'edit',
@@ -177,6 +208,12 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     label: 'Показать / скрыть сетку',
     category: 'view',
     defaultCombo: 'Ctrl+Quote',
+  },
+  {
+    id: 'view.toggleRulers',
+    label: 'Показать / скрыть линейки',
+    category: 'view',
+    defaultCombo: 'Ctrl+KeyR',
   },
   {
     id: 'view.toggleSnap',
@@ -235,6 +272,18 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     label: 'Поднять слой выше',
     category: 'vector',
     defaultCombo: 'BracketRight',
+  },
+  {
+    id: 'layer.group',
+    label: 'Сгруппировать',
+    category: 'vector',
+    defaultCombo: 'Ctrl+KeyG',
+  },
+  {
+    id: 'layer.ungroup',
+    label: 'Разгруппировать',
+    category: 'vector',
+    defaultCombo: 'Ctrl+Shift+KeyG',
   },
 ];
 

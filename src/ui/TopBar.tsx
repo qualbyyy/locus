@@ -69,7 +69,7 @@ export function TopBar({
 
         <span className="h-4 w-px shrink-0 bg-paper-border" />
 
-        <div className="flex min-w-0 shrink-0 items-center gap-1">
+        <div data-tour="topbar.document" className="flex min-w-0 shrink-0 items-center gap-1">
           {isEditingName ? (
             <input
               ref={nameInputRef}
@@ -114,6 +114,7 @@ export function TopBar({
         <div className="flex shrink-0 items-center gap-0.5">
           <button
             type="button"
+            data-tour="topbar.undo"
             onClick={onUndo}
             disabled={!canUndo}
             title="Отменить (Ctrl+Z)"
@@ -123,6 +124,7 @@ export function TopBar({
           </button>
           <button
             type="button"
+            data-tour="topbar.redo"
             onClick={onRedo}
             disabled={!canRedo}
             title="Повторить (Ctrl+Shift+Z)"
@@ -136,6 +138,7 @@ export function TopBar({
       <div className="flex shrink-0 items-center gap-1.5">
         <button
           type="button"
+          data-tour="topbar.commandBar"
           onClick={onOpenCommandBar}
           title="Командная строка и ИИ (Ctrl+K)"
           className="flex h-7 items-center gap-1.5 rounded border border-paper-border bg-paper-bg px-2 text-[12px] text-paper-ink hover:border-paper-accent"
@@ -153,6 +156,7 @@ export function TopBar({
 
         <button
           type="button"
+          data-tour="topbar.zoom"
           onClick={onFitArtboard}
           title="Вписать артборд (Ctrl+0)"
           className="flex h-7 min-w-12 items-center justify-center rounded border border-paper-border bg-paper-bg px-2 font-display text-[12px] text-paper-ink hover:bg-paper-hover"
@@ -161,6 +165,7 @@ export function TopBar({
         </button>
         <button
           type="button"
+          data-tour="topbar.settings"
           onClick={onOpenSettings}
           title="Настройки (Ctrl+,)"
           className="flex h-7 w-7 items-center justify-center rounded text-paper-muted hover:bg-paper-hover hover:text-paper-ink"

@@ -1,5 +1,9 @@
 import { create } from 'zustand';
-import { readAppConfigText, writeAppConfigText } from '../platform/io';
+import {
+  readAppConfigText,
+  removeAppConfigFile,
+  writeAppConfigText,
+} from '../platform/io';
 import { useCanvasBackdropStore } from './canvasBackdrop';
 import { clamp } from './math';
 import { setUndoLimit } from './store';
@@ -39,6 +43,9 @@ export interface AppSettings {
   showGrid: boolean;
   gridSize: number;
   gridOpacity: number;
+  showRulers: boolean;
+  showGuides: boolean;
+  snapToGuides: boolean;
   snapToGrid: boolean;
   snapToObjects: boolean;
   snapToArtboard: boolean;
@@ -80,6 +87,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showGrid: false,
   gridSize: 16,
   gridOpacity: 0.16,
+  showRulers: false,
+  showGuides: true,
+  snapToGuides: true,
   snapToGrid: false,
   snapToObjects: true,
   snapToArtboard: true,
@@ -191,6 +201,9 @@ export function sanitizeSettings(raw: unknown): AppSettings {
     gridOpacity: Number(
       readFinite(src.gridOpacity, DEFAULT_SETTINGS.gridOpacity, 0.05, 0.6).toFixed(2)
     ),
+    showRulers: readBool(src.showRulers, DEFAULT_SETTINGS.showRulers),
+    showGuides: readBool(src.showGuides, DEFAULT_SETTINGS.showGuides),
+    snapToGuides: readBool(src.snapToGuides, DEFAULT_SETTINGS.snapToGuides),
     snapToGrid: readBool(src.snapToGrid, DEFAULT_SETTINGS.snapToGrid),
     snapToObjects: readBool(src.snapToObjects, DEFAULT_SETTINGS.snapToObjects),
     snapToArtboard: readBool(src.snapToArtboard, DEFAULT_SETTINGS.snapToArtboard),
@@ -415,4 +428,9 @@ export async function loadSceneDraft(): Promise<{
   } catch {
     return null;
   }
+}
+
+export async function clearSceneDraft(): Promise<void> {
+  await removeAppConfigFile(AUTOSAVE_DRAFT_PATH);
+  useSettingsStore.setState({ lastAutosaveAt: null });
 }

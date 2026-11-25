@@ -6,8 +6,12 @@ export type ContextMenuActionId =
   | 'deselect'
   | 'cut'
   | 'copy'
+  | 'copySvg'
+  | 'exportSelection'
   | 'duplicate'
   | 'delete'
+  | 'group'
+  | 'ungroup'
   | 'bringForward'
   | 'sendBackward'
   | 'ai';
@@ -16,6 +20,7 @@ export interface ContextMenuTarget {
   area: ContextMenuArea;
   layerIds: string[];
   hasCopiedLayers: boolean;
+  hasGroupSelected?: boolean;
 }
 
 export interface ContextMenuItem {
@@ -33,13 +38,17 @@ export type ContextMenuActionKind = 'clipboard' | 'scene' | 'selection' | 'ai';
 export const CONTEXT_MENU_ACTION_KINDS: Record<ContextMenuActionId, ContextMenuActionKind> = {
   cut: 'clipboard',
   copy: 'clipboard',
+  copySvg: 'clipboard',
   paste: 'clipboard',
   selectAll: 'selection',
   deselect: 'selection',
   duplicate: 'scene',
   delete: 'scene',
+  group: 'scene',
+  ungroup: 'scene',
   bringForward: 'scene',
   sendBackward: 'scene',
+  exportSelection: 'scene',
   ai: 'ai',
 };
 
@@ -61,10 +70,14 @@ export function buildContextMenuModel(target: ContextMenuTarget): ContextMenuMod
     return [
       { id: 'cut', label: 'Вырезать' },
       { id: 'copy', label: 'Копировать' },
+      { id: 'copySvg', label: 'Копировать как SVG' },
       { id: 'duplicate', label: 'Дублировать' },
       { id: 'delete', label: 'Удалить', separatorBefore: true },
+      { id: 'group', label: 'Сгруппировать', separatorBefore: true },
+      ...(target.hasGroupSelected ? [{ id: 'ungroup' as const, label: 'Разгруппировать' }] : []),
       { id: 'bringForward', label: 'Переместить вперёд', separatorBefore: true },
       { id: 'sendBackward', label: 'Переместить назад' },
+      { id: 'exportSelection', label: 'Экспорт выделенного…', separatorBefore: true },
       {
         id: 'ai',
         label: 'ИИ…',

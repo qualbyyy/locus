@@ -1,4 +1,5 @@
 import { clamp } from '../../core/math';
+import { getPrimaryColor } from '../../core/paint';
 import type { LayerEffects, PathLayer, SubPath } from '../../core/types';
 import { parseColorToRgba } from '../../export/pathData';
 import { apply3DEffect, type ExtrudeFace } from './effects3d';
@@ -44,7 +45,7 @@ export function resolveEffectivePathGeometry(layer: PathLayer): {
   }
   let extrudeFaces: ExtrudeFace[] = [];
   if (eff.effect3d) {
-    const baseFill = layer.fill || layer.stroke?.color || '#da7756';
+    const baseFill = getPrimaryColor(layer.fill ?? layer.stroke?.color, '#da7756');
     const res = apply3DEffect(subpaths, eff.effect3d, baseFill);
     subpaths = res.front;
     extrudeFaces = res.faces;

@@ -4,18 +4,25 @@ import type { TextCaseMode } from '../core/commands';
 import type { ExportKind } from '../core/documentFile';
 import type { WarpStyle } from '../core/types';
 import type { BooleanOp } from '../engine/booleans';
-import type { EffectModalTarget } from './EffectModal';
+import type { EffectTarget } from './inspector/InspectorEffects';
 
 export interface MenuBarState {
   hasSelection: boolean;
   hasMultiSelection: boolean;
   hasPathSelection: boolean;
   hasTextSelection: boolean;
+  hasImageSelection: boolean;
+  hasGroupSelection: boolean;
+  canAttachTextToPath: boolean;
   hasEffects: boolean;
   canUndo: boolean;
   canRedo: boolean;
   showGrid: boolean;
+  showRulers: boolean;
+  showGuides: boolean;
   snapEnabled: boolean;
+  snapToGuides: boolean;
+  hasGuides: boolean;
   outlineMode: boolean;
   showToolbar: boolean;
   showLayers: boolean;
@@ -31,14 +38,21 @@ export interface MenuBarActions {
   onQuickExportPng: () => void;
   onOpenRasterExport: (format?: 'png' | 'jpg') => void;
   onExportDocument: (format: ExportKind) => void;
+  onExportSelectionSvg: () => void;
+  onExportSelectionRaster: () => void;
+  onAddArtboard: () => void;
   onOpenDocSetup: () => void;
   onUndo: () => void;
   onRedo: () => void;
   onCut: () => void;
   onCopy: () => void;
+  onCopySvg: () => void;
   onPaste: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
+  onGroup: () => void;
+  onUngroup: () => void;
+  onUploadFont: () => void;
   onOpenSettings: () => void;
   onOpenTutorial: () => void;
   onOpenShortcuts: () => void;
@@ -52,25 +66,32 @@ export interface MenuBarActions {
   onSimplifyPath: () => void;
   onCreateClipMask: () => void;
   onExpandAppearance: () => void;
+  onTraceImage: () => void;
   onConvertToOutlines: () => void;
+  onAttachTextToPath: () => void;
   onTransformTextCase: (mode: TextCaseMode) => void;
   onSelectAll: () => void;
   onDeselect: () => void;
   onInvertSelection: () => void;
   onSelectSimilar: (criterion: 'fill' | 'stroke' | 'type') => void;
-  onOpenEffect: (target: EffectModalTarget) => void;
+  onOpenEffect: (target: EffectTarget) => void;
   onClearEffects: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFitArtboard: () => void;
   onResetZoom100: () => void;
   onToggleGrid: () => void;
+  onToggleRulers: () => void;
+  onToggleGuides: () => void;
   onToggleSnap: () => void;
+  onToggleSnapToGuides: () => void;
+  onClearGuides: () => void;
   onToggleOutline: () => void;
   onToggleToolbar: () => void;
   onToggleLayers: () => void;
   onToggleInspector: () => void;
   onOpenCommandBar: () => void;
+  onRunPreflight: () => void;
 }
 
 type MenuItem =
@@ -241,9 +262,21 @@ export function MenuBar({
               { label: 'Вектор SVG (.svg)', onClick: () => actions.onExportDocument('svg') },
               { label: 'Photoshop PSD (.psd)', onClick: () => actions.onExportDocument('psd') },
               { label: 'Adobe Illustrator (.ai)', onClick: () => actions.onExportDocument('ai') },
+              { type: 'sep' },
+              {
+                label: 'Выделенное в SVG…',
+                disabled: !state.hasSelection,
+                onClick: actions.onExportSelectionSvg,
+              },
+              {
+                label: 'Выделенное в PNG/JPG…',
+                disabled: !state.hasSelection,
+                onClick: actions.onExportSelectionRaster,
+              },
             ],
           },
           { type: 'sep' },
+          { label: 'Добавить артборд', onClick: actions.onAddArtboard },
           { label: 'Параметры документа…', onClick: actions.onOpenDocSetup },
         ],
       },
@@ -256,6 +289,12 @@ export function MenuBar({
           { type: 'sep' },
           { label: 'Вырезать', shortcut: 'Ctrl+X', disabled: !state.hasSelection, onClick: actions.onCut },
           { label: 'Копировать', shortcut: 'Ctrl+C', disabled: !state.hasSelection, onClick: actions.onCopy },
+          {
+            label: 'Копировать как SVG',
+            shortcut: 'Ctrl+Shift+C',
+            disabled: !state.hasSelection,
+            onClick: actions.onCopySvg,
+          },
           { label: 'Вставить', shortcut: 'Ctrl+V', onClick: actions.onPaste },
           { label: 'Дублировать', shortcut: 'Ctrl+D', disabled: !state.hasSelection, onClick: actions.onDuplicate },
           { label: 'Удалить', shortcut: 'Del', disabled: !state.hasSelection, onClick: actions.onDelete },
@@ -289,6 +328,9 @@ export function MenuBar({
             ],
           },
           { type: 'sep' },
+          { label: 'Сгруппировать', shortcut: 'Ctrl+G', disabled: !state.hasSelection, onClick: actions.onGroup },
+          { label: 'Разгруппировать', shortcut: 'Ctrl+Shift+G', disabled: !state.hasGroupSelection, onClick: actions.onUngroup },
+          { type: 'sep' },
           {
             label: 'Обработка контуров',
             disabled: !state.hasMultiSelection,
@@ -306,12 +348,14 @@ export function MenuBar({
           { type: 'sep' },
           { label: 'Создать обтравочную маску', disabled: !state.hasMultiSelection, onClick: actions.onCreateClipMask },
           { label: 'Разобрать оформление (Expand)', disabled: !state.hasPathSelection, onClick: actions.onExpandAppearance },
+          { label: 'Векторизовать изображение (Image Trace)', disabled: !state.hasImageSelection, onClick: actions.onTraceImage },
         ],
       },
       {
         id: 'text',
         label: 'Текст',
         items: [
+          { label: 'Пустить текст по контуру', disabled: !state.canAttachTextToPath, onClick: actions.onAttachTextToPath },
           { label: 'Преобразовать в кривые', disabled: !state.hasTextSelection, onClick: actions.onConvertToOutlines },
           { type: 'sep' },
           {
@@ -323,6 +367,8 @@ export function MenuBar({
               { label: 'Каждое Слово С Заглавной', onClick: () => actions.onTransformTextCase('title') },
             ],
           },
+          { type: 'sep' },
+          { label: 'Загрузить шрифт (.ttf, .otf, .woff2)…', onClick: actions.onUploadFont },
         ],
       },
       {
@@ -398,6 +444,11 @@ export function MenuBar({
           { label: 'Вписать артборд', shortcut: 'Ctrl+0', onClick: actions.onFitArtboard },
           { label: 'Реальный размер (100%)', shortcut: 'Ctrl+1', onClick: actions.onResetZoom100 },
           { type: 'sep' },
+          { label: 'Линейки', shortcut: 'Ctrl+R', checked: state.showRulers, onClick: actions.onToggleRulers },
+          { label: 'Показать направляющие', checked: state.showGuides, onClick: actions.onToggleGuides },
+          { label: 'Привязка к направляющим', checked: state.snapToGuides, onClick: actions.onToggleSnapToGuides },
+          { label: 'Очистить направляющие', disabled: !state.hasGuides, onClick: actions.onClearGuides },
+          { type: 'sep' },
           { label: 'Показать сетку', checked: state.showGrid, onClick: actions.onToggleGrid },
           { label: 'Привязка к объектам', checked: state.snapEnabled, onClick: actions.onToggleSnap },
           { label: 'Режим каркаса (Outline)', shortcut: 'Ctrl+Y', checked: state.outlineMode, onClick: actions.onToggleOutline },
@@ -412,6 +463,7 @@ export function MenuBar({
           { label: 'Инспектор', checked: state.showInspector, onClick: actions.onToggleInspector },
           { type: 'sep' },
           { label: 'Командная строка ИИ', shortcut: 'Ctrl+K', onClick: actions.onOpenCommandBar },
+          { label: 'Проверить макет (Preflight)', onClick: actions.onRunPreflight },
         ],
       },
       {
@@ -436,6 +488,7 @@ export function MenuBar({
           <div key={menu.id} className="relative">
             <button
               type="button"
+              data-tour={menu.id === 'effect' ? 'menu.effects' : `menu.${menu.id}`}
               onClick={() => setOpenMenuId((cur) => (cur === menu.id ? null : menu.id))}
               onMouseEnter={() => {
                 if (openMenuId && openMenuId !== menu.id) {

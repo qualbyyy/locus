@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react';
 import {
+  Combine,
   Grid3x3,
   ImagePlus,
   Magnet,
@@ -7,7 +8,9 @@ import {
   MousePointer,
   MousePointer2,
   PenTool,
+  Pencil,
   Pipette,
+  Scissors,
   Shapes,
   Type,
 } from 'lucide-react';
@@ -35,7 +38,10 @@ const TOOLS: ToolButtonDef[] = [
   { id: 'select', label: 'Выделение (Select)', shortcut: 'V', Icon: MousePointer2 },
   { id: 'node', label: 'Прямое выделение (Direct Select)', shortcut: 'A', Icon: MousePointer },
   { id: 'pen', label: 'Перо (Pen)', shortcut: 'P', Icon: PenTool },
+  { id: 'pencil', label: 'Карандаш (Freehand)', shortcut: 'N', Icon: Pencil },
   { id: 'blob', label: 'Умная фигура (Smart Shape)', shortcut: 'B', Icon: Shapes },
+  { id: 'shapeBuilder', label: 'Конструктор фигур (Shape Builder)', shortcut: '⇧M', Icon: Combine },
+  { id: 'knife', label: 'Нож / Ножницы (Knife / Scissors)', shortcut: 'C', Icon: Scissors },
   { id: 'text', label: 'Текст (Type)', shortcut: 'T', Icon: Type },
   { id: 'eyedropper', label: 'Пипетка (Eyedropper)', shortcut: 'E', Icon: Pipette },
 ];
@@ -51,7 +57,10 @@ export function Toolbar({
   onFitArtboard,
 }: ToolbarProps) {
   return (
-    <aside className="flex w-11 shrink-0 flex-col items-center justify-between border-r border-paper-border bg-paper-panel py-2">
+    <aside
+      data-tour="toolbar.root"
+      className="flex w-11 shrink-0 flex-col items-center justify-between border-r border-paper-border bg-paper-panel py-2"
+    >
       <div className="flex flex-col items-center gap-1">
         {TOOLS.map(({ id, label, shortcut, Icon }) => {
           const active = activeTool === id;
@@ -59,6 +68,7 @@ export function Toolbar({
             <button
               key={id}
               type="button"
+              data-tour={`tool.${id}`}
               onClick={() => onSelectTool(id)}
               title={`${label} [${shortcut}]`}
               className={`relative flex h-8 w-8 items-center justify-center rounded border transition-colors ${
@@ -98,6 +108,7 @@ export function Toolbar({
         <span className="my-1 h-px w-6 bg-paper-border" />
         <button
           type="button"
+          data-tour="toolbar.grid"
           onClick={onToggleGrid}
           title="Сетка артборда (Ctrl+')"
           className={`flex h-8 w-8 items-center justify-center rounded border transition-colors ${
@@ -110,6 +121,7 @@ export function Toolbar({
         </button>
         <button
           type="button"
+          data-tour="toolbar.snap"
           onClick={onToggleSnap}
           title="Привязка и направляющие (Ctrl+Shift+')"
           className={`flex h-8 w-8 items-center justify-center rounded border transition-colors ${
@@ -122,6 +134,7 @@ export function Toolbar({
         </button>
         <button
           type="button"
+          data-tour="toolbar.fit"
           onClick={onFitArtboard}
           title="Вписать артборд (Ctrl+0)"
           className="flex h-8 w-8 items-center justify-center rounded text-paper-muted hover:bg-paper-hover hover:text-paper-ink"

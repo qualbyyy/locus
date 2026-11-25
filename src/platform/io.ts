@@ -266,6 +266,20 @@ export async function writeAppConfigText(
   MEMORY_CONFIG_FALLBACK.set(relPath, content);
 }
 
+export async function removeAppConfigFile(relPath: string): Promise<void> {
+  if (isTauri()) {
+    const { BaseDirectory, remove } = await import('@tauri-apps/plugin-fs');
+    await remove(relPath, { baseDir: BaseDirectory.AppConfig }).catch(() => {});
+    return;
+  }
+
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem(`locus:${relPath}`);
+    return;
+  }
+  MEMORY_CONFIG_FALLBACK.delete(relPath);
+}
+
 export async function subscribeFileDrop(
   onDrop: (paths: string[]) => void,
   onHoverChange?: (hovering: boolean) => void

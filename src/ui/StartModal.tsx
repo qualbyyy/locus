@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeftRight, FolderOpen, X } from 'lucide-react';
-import { DOCUMENT_PRESETS, type DocumentPreset } from '../core/types';
+import { ArrowLeftRight, FolderOpen, RotateCcw, X } from 'lucide-react';
+import { clearSceneDraft, loadSceneDraft } from '../core/settings';
+import { DOCUMENT_PRESETS, type DocumentPreset, type Scene } from '../core/types';
 import { NumberField } from './InspectorControls';
 import { ColorField } from './controls';
 
@@ -43,6 +44,7 @@ interface StartModalProps {
     background: string;
   }) => void;
   onOpenProject: () => void;
+  onRestoreDraft?: (scene: Scene) => void;
   onOpenTutorial?: () => void;
 }
 
@@ -51,6 +53,7 @@ export function StartModal({
   onClose,
   onCreateDocument,
   onOpenProject,
+  onRestoreDraft,
   onOpenTutorial,
 }: StartModalProps) {
   const [selectedPresetId, setSelectedPresetId] = useState<string>(
@@ -61,6 +64,18 @@ export function StartModal({
   const [height, setHeight] = useState(DOCUMENT_PRESETS[0].height);
   const [dpi, setDpi] = useState(DOCUMENT_PRESETS[0].dpi);
   const [background, setBackground] = useState('#ffffff');
+  const [draft, setDraft] = useState<{ savedAt: number; scene: Scene } | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    void loadSceneDraft().then((found) => {
+      if (!cancelled) setDraft(found);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -124,6 +139,47 @@ export function StartModal({
         </div>
 
         <form onSubmit={handleSubmit} className="flex flex-col">
+          {draft && onRestoreDraft && (
+            <div className="mx-4 mt-4 flex flex-wrap items-center justify-between gap-3 rounded border border-paper-accent/40 bg-paper-accent/8 px-3 py-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <RotateCcw className="h-4 w-4 shrink-0 text-paper-accent" strokeWidth={1.75} />
+                <div className="min-w-0">
+                  <div className="truncate text-[12px] font-medium text-paper-ink">
+                    Найден несохранённый черновик: «{draft.scene.name}»
+                  </div>
+                  <div className="font-display text-[11px] text-paper-muted">
+                    Слоёв: {draft.scene.layers.length} •{' '}
+                    {new Date(draft.savedAt).toLocaleString('ru-RU', {
+                      day: '2-digit',
+                      month: '2-digit',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </div>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onRestoreDraft(draft.scene)}
+                  className="h-7 rounded bg-paper-accent px-2.5 text-[11px] font-medium text-white hover:bg-paper-accent-hover"
+                >
+                  Восстановить
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void clearSceneDraft();
+                    setDraft(null);
+                  }}
+                  className="h-7 rounded border border-paper-border bg-paper-panel px-2.5 text-[11px] text-paper-muted hover:bg-paper-hover hover:text-paper-ink"
+                >
+                  Удалить
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 gap-4 p-4 md:grid-cols-2">
             <div className="flex flex-col gap-2">
               <span className="text-[11px] font-medium uppercase tracking-wide text-paper-muted">

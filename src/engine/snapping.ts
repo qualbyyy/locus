@@ -1,4 +1,4 @@
-import type { BBox, Point2D } from '../core/types';
+import type { BBox, Guide, Point2D } from '../core/types';
 
 export interface SmartGuideLine {
   orientation: 'vertical' | 'horizontal';
@@ -12,6 +12,8 @@ export interface SnapOptions {
   gridSize: number;
   snapToObjects: boolean;
   snapToArtboard: boolean;
+  snapToGuides?: boolean;
+  manualGuides?: Guide[];
   thresholdWorld: number;
 }
 
@@ -91,23 +93,25 @@ function findGridAxisDelta(
 export function snapBoundsMove(
   movingBox: BBox,
   otherBoxes: BBox[],
-  artboard: { width: number; height: number },
+  artboard: { x?: number; y?: number; width: number; height: number },
   opts: SnapOptions
 ): SnapResult {
   const threshold = Math.max(0.5, opts.thresholdWorld);
+  const abX = artboard.x ?? 0;
+  const abY = artboard.y ?? 0;
   const xTargets: AxisTarget[] = [];
   const yTargets: AxisTarget[] = [];
 
   if (opts.snapToArtboard) {
     xTargets.push(
-      { pos: 0, spanStart: 0, spanEnd: artboard.height },
-      { pos: artboard.width / 2, spanStart: 0, spanEnd: artboard.height },
-      { pos: artboard.width, spanStart: 0, spanEnd: artboard.height }
+      { pos: abX, spanStart: abY, spanEnd: abY + artboard.height },
+      { pos: abX + artboard.width / 2, spanStart: abY, spanEnd: abY + artboard.height },
+      { pos: abX + artboard.width, spanStart: abY, spanEnd: abY + artboard.height }
     );
     yTargets.push(
-      { pos: 0, spanStart: 0, spanEnd: artboard.width },
-      { pos: artboard.height / 2, spanStart: 0, spanEnd: artboard.width },
-      { pos: artboard.height, spanStart: 0, spanEnd: artboard.width }
+      { pos: abY, spanStart: abX, spanEnd: abX + artboard.width },
+      { pos: abY + artboard.height / 2, spanStart: abX, spanEnd: abX + artboard.width },
+      { pos: abY + artboard.height, spanStart: abX, spanEnd: abX + artboard.width }
     );
   }
 
@@ -123,6 +127,28 @@ export function snapBoundsMove(
         { pos: box.y + box.height / 2, spanStart: box.x, spanEnd: box.x + box.width },
         { pos: box.y + box.height, spanStart: box.x, spanEnd: box.x + box.width }
       );
+    }
+  }
+
+  if (opts.snapToGuides && opts.manualGuides && opts.manualGuides.length > 0) {
+    const spanXStart = Math.min(movingBox.x, abX) - 200;
+    const spanXEnd = Math.max(movingBox.x + movingBox.width, abX + artboard.width) + 200;
+    const spanYStart = Math.min(movingBox.y, abY) - 200;
+    const spanYEnd = Math.max(movingBox.y + movingBox.height, abY + artboard.height) + 200;
+    for (const guide of opts.manualGuides) {
+      if (guide.orientation === 'vertical') {
+        xTargets.push({
+          pos: guide.position,
+          spanStart: spanYStart,
+          spanEnd: spanYEnd,
+        });
+      } else {
+        yTargets.push({
+          pos: guide.position,
+          spanStart: spanXStart,
+          spanEnd: spanXEnd,
+        });
+      }
     }
   }
 

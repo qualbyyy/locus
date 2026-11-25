@@ -6,9 +6,21 @@ import {
   useRef,
   useState,
 } from 'react';
+import { ChevronRight, FolderOpen, X } from 'lucide-react';
 import paper from 'paper/dist/paper-core';
+import { getActiveArtboard, getSceneArtboards } from '../core/artboards';
 import { subscribeAssets } from '../core/assets';
-import { deleteLayers, updateLayers } from '../core/commands';
+import { addGuide, deleteLayers, updateLayers } from '../core/commands';
+import { subscribeFonts } from '../core/fonts';
+import {
+  findLayerById,
+  findLayerPath,
+  flattenLayers,
+  getLayerWorldMatrix,
+  getParentGroupId,
+} from '../core/layerTree';
+import { applyMatrixToPoint, decomposeMatrix } from '../core/math';
+import { getPrimaryColor } from '../core/paint';
 import { useSettingsStore } from '../core/settings';
 import { useCanvasBackdropStore } from '../core/canvasBackdrop';
 import { useEditorStore } from '../core/store';
@@ -21,12 +33,17 @@ import type {
 } from '../core/types';
 import { renderOverlay } from './overlay';
 import { syncSceneToPaper } from './sync';
+import { computeTextOnPathLocalBBox, resolveHostPathLayer } from './textOnPath';
+import { CanvasRulers } from '../ui/CanvasRulers';
 import { getWheelZoomFactor, isCanvasZoomWheel } from './zoom';
 import { createBlobTool } from './tools/blobTool';
 import { createEyedropperTool } from './tools/eyedropperTool';
+import { createKnifeTool } from './tools/knifeTool';
 import { createNodeTool } from './tools/nodeTool';
 import { createPenTool } from './tools/penTool';
+import { createPencilTool } from './tools/pencilTool';
 import { createSelectTool, findTopLayerAtPoint } from './tools/selectTool';
+import { createShapeBuilderTool } from './tools/shapeBuilderTool';
 import { createTextTool } from './tools/textTool';
 import type {
   CanvasToolController,
@@ -37,6 +54,7 @@ import type {
 
 export interface PaperCanvasHandle {
   fitArtboard: () => void;
+  focusArtboard: (artboardId: string) => void;
   resetZoom100: () => void;
   zoomIn: () => void;
   zoomOut: () => void;
@@ -65,7 +83,8 @@ interface PaperRig {
   artboardLayer: paper.Layer;
   sceneLayer: paper.Layer;
   overlayLayer: paper.Layer;
-  artboardRect: paper.Path.Rectangle | null;
+  artboardRects: paper.Path.Rectangle[];
+  artboardLabels: paper.PointText[];
   itemMap: Map<string, paper.Item>;
 }
 
@@ -138,9 +157,16 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     const showGrid = useSettingsStore((s) => s.settings.showGrid);
     const gridSize = useSettingsStore((s) => s.settings.gridSize);
     const gridOpacity = useSettingsStore((s) => s.settings.gridOpacity);
+    const showRulers = useSettingsStore((s) => s.settings.showRulers);
+    const showGuides = useSettingsStore((s) => s.settings.showGuides);
+    const updateSettings = useSettingsStore((s) => s.updateSettings);
     const accentColor = useSettingsStore((s) => s.settings.accentColor);
     const showPerfStats = useSettingsStore((s) => s.settings.showPerfStats);
     const canvasBackdrop = useCanvasBackdropStore((s) => s.meta?.url ?? null);
+    const activeGradientTarget = useEditorStore((s) => s.activeGradientTarget);
+    const editingGroupId = useEditorStore((s) => s.editingGroupId);
+    const activeArtboardId = useEditorStore((s) => s.activeArtboardId);
+    const setEditingGroupId = useEditorStore((s) => s.setEditingGroupId);
 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -150,6 +176,10 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     const selectedIdsRef = useRef(selectedIds);
     const selectedNodeRef = useRef(selectedNode);
     const activeToolRef = useRef(activeTool);
+    const activeGradientTargetRef = useRef(activeGradientTarget);
+    const editingGroupIdRef = useRef(editingGroupId);
+    const activeArtboardIdRef = useRef(activeArtboardId);
+    const outlineModeRef = useRef(outlineMode);
     const prevToolRef = useRef(activeTool);
     const isSpacePanningRef = useRef(isSpacePanning);
     const onZoomChangeRef = useRef(onZoomChange);
@@ -164,6 +194,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     const [isDraggingPan, setIsDraggingPan] = useState(false);
     const [editingText, setEditingText] = useState<EditingTextState | null>(null);
     const [viewTick, setViewTick] = useState(0);
+    const [cursorProjectPos, setCursorProjectPos] = useState<Point2D | null>(null);
 
     const editingTextRef = useRef<EditingTextState | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -173,6 +204,10 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     selectedIdsRef.current = selectedIds;
     selectedNodeRef.current = selectedNode;
     activeToolRef.current = activeTool;
+    activeGradientTargetRef.current = activeGradientTarget;
+    editingGroupIdRef.current = editingGroupId;
+    activeArtboardIdRef.current = activeArtboardId;
+    outlineModeRef.current = outlineMode;
     isSpacePanningRef.current = isSpacePanning;
     onZoomChangeRef.current = onZoomChange;
     onColorSampledRef.current = onColorSampled;
@@ -189,6 +224,9 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
         eyedropper: createEyedropperTool({
           onSampled: (hex, target) => onColorSampledRef.current?.(hex, target),
         }),
+        shapeBuilder: createShapeBuilderTool(),
+        pencil: createPencilTool(),
+        knife: createKnifeTool(),
       };
     }
 
@@ -200,11 +238,11 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       try {
         editingTextRef.current = null;
         setEditingText(null);
-        const layer = useEditorStore
-          .getState()
-          .scene.layers.find(
-            (l): l is TextLayer => l.id === current.layerId && l.type === 'text'
-          );
+        const found = findLayerById(
+          useEditorStore.getState().scene.layers,
+          current.layerId
+        );
+        const layer = found?.type === 'text' ? found : null;
         if (!layer) return;
         if (current.draft.trim().length === 0) {
           deleteLayers([layer.id]);
@@ -224,11 +262,11 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
         ) {
           commitTextEditing();
         }
-        const layer = useEditorStore
-          .getState()
-          .scene.layers.find(
-            (l): l is TextLayer => l.id === layerId && l.type === 'text'
-          );
+        const found = findLayerById(
+          useEditorStore.getState().scene.layers,
+          layerId
+        );
+        const layer = found?.type === 'text' ? found : null;
         if (!layer || layer.locked) return;
         const nextState: EditingTextState = {
           layerId: layer.id,
@@ -255,11 +293,16 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
           scene: sceneRef.current,
           selectedIds: selectedIdsRef.current,
           selectedNode: selectedNodeRef.current,
+          editingGroupId: editingGroupIdRef.current,
+          activeArtboardId: activeArtboardIdRef.current,
           activeTool: activeToolRef.current,
+          activeGradientTarget: activeGradientTargetRef.current,
           draftOverrides: overlayExtrasRef.current.draftOverrides,
           marquee: overlayExtrasRef.current.marquee,
           penDraft: overlayExtrasRef.current.penDraft,
           shapeDraft: overlayExtrasRef.current.shapeDraft,
+          shapeBuilder: overlayExtrasRef.current.shapeBuilder,
+          freehandDraft: overlayExtrasRef.current.freehandDraft,
           hoveredMaskId: overlayExtrasRef.current.hoveredMaskId,
           accentColor: settings.accentColor,
           grid: {
@@ -268,6 +311,8 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
             opacity: settings.gridOpacity,
           },
           guides: overlayExtrasRef.current.guides,
+          showGuides: settings.showGuides,
+          draggingGuide: overlayExtrasRef.current.draggingGuide,
         });
       },
       []
@@ -286,54 +331,71 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     );
 
     const updateArtboardBorderWidth = useCallback((rig: PaperRig) => {
-      if (rig.artboardRect) {
-        rig.artboardRect.strokeWidth = 1 / rig.scope.view.zoom;
+      const zoom = Math.max(0.05, rig.scope.view.zoom);
+      for (const rect of rig.artboardRects) {
+        rect.strokeWidth = (rect.data?.isActiveArtboard ? 1.5 : 1) / zoom;
+      }
+      for (const label of rig.artboardLabels) {
+        label.fontSize = 11 / zoom;
+        if (typeof label.data?.artboardY === 'number') {
+          label.point = new rig.scope.Point(
+            label.point.x,
+            label.data.artboardY - 6 / zoom
+          );
+        }
       }
     }, []);
 
+    const focusArtboard = useCallback(
+      (artboardId: string) => {
+        const rig = rigRef.current;
+        if (!rig) return;
+
+        const { scope } = rig;
+        const vw = scope.view.viewSize.width;
+        const vh = scope.view.viewSize.height;
+        if (vw <= 0 || vh <= 0) return;
+
+        const ab = getActiveArtboard(sceneRef.current, artboardId);
+        const padding = 48;
+        const availW = Math.max(40, vw - padding * 2);
+        const availH = Math.max(40, vh - padding * 2);
+        const zoom = clamp(
+          Math.min(availW / ab.width, availH / ab.height),
+          MIN_ZOOM,
+          4
+        );
+
+        scope.view.zoom = zoom;
+        scope.view.center = new scope.Point(
+          ab.x + ab.width / 2,
+          ab.y + ab.height / 2
+        );
+        updateArtboardBorderWidth(rig);
+        redrawOverlayFromRefs(rig);
+        scope.view.update();
+        onZoomChangeRef.current(Math.round(zoom * 100));
+        if (editingTextRef.current) {
+          setViewTick((t) => t + 1);
+        }
+      },
+      [redrawOverlayFromRefs, updateArtboardBorderWidth]
+    );
+
     const fitArtboard = useCallback(() => {
-      const rig = rigRef.current;
-      if (!rig) return;
-
-      const { scope } = rig;
-      const vw = scope.view.viewSize.width;
-      const vh = scope.view.viewSize.height;
-      if (vw <= 0 || vh <= 0) return;
-
-      const currentScene = sceneRef.current;
-      const padding = 48;
-      const availW = Math.max(40, vw - padding * 2);
-      const availH = Math.max(40, vh - padding * 2);
-      const zoom = clamp(
-        Math.min(availW / currentScene.width, availH / currentScene.height),
-        MIN_ZOOM,
-        4
-      );
-
-      scope.view.zoom = zoom;
-      scope.view.center = new scope.Point(
-        currentScene.width / 2,
-        currentScene.height / 2
-      );
-      updateArtboardBorderWidth(rig);
-      redrawOverlayFromRefs(rig);
-      scope.view.update();
-      onZoomChangeRef.current(Math.round(zoom * 100));
-      if (editingTextRef.current) {
-        setViewTick((t) => t + 1);
-      }
-    }, [redrawOverlayFromRefs, updateArtboardBorderWidth]);
+      focusArtboard(activeArtboardIdRef.current);
+    }, [focusArtboard]);
 
     const resetZoom100 = useCallback(() => {
       const rig = rigRef.current;
       if (!rig) return;
 
       const { scope } = rig;
-      const currentScene = sceneRef.current;
+      const ab = getActiveArtboard(sceneRef.current, activeArtboardIdRef.current);
       scope.view.zoom = 1;
       scope.view.center = new scope.Point(
-        currentScene.width / 2,
-        currentScene.height / 2
+        ab.x + ab.width / 2,
+        ab.y + ab.height / 2
       );
       updateArtboardBorderWidth(rig);
       redrawOverlayFromRefs(rig);
@@ -386,6 +448,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       ref,
       () => ({
         fitArtboard,
+        focusArtboard,
         resetZoom100,
         zoomIn,
         zoomOut,
@@ -395,6 +458,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       [
         finishActiveTool,
         fitArtboard,
+        focusArtboard,
         resetZoom100,
         startTextEditing,
         zoomIn,
@@ -402,25 +466,57 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       ]
     );
 
-    const drawArtboard = useCallback((rig: PaperRig, targetScene: Scene) => {
-      const { scope, artboardLayer, sceneLayer } = rig;
-      scope.activate();
-      artboardLayer.activate();
-      artboardLayer.removeChildren();
+    const drawArtboard = useCallback(
+      (rig: PaperRig, targetScene: Scene, activeAbId: string) => {
+        const { scope, artboardLayer, sceneLayer } = rig;
+        scope.activate();
+        artboardLayer.activate();
+        artboardLayer.removeChildren();
 
-      const rect = new scope.Path.Rectangle(
-        new scope.Rectangle(0, 0, targetScene.width, targetScene.height)
-      );
-      rect.applyMatrix = false;
-      rect.fillColor = new scope.Color(targetScene.background || '#ffffff');
-      rect.strokeColor = new scope.Color('#c8c0b2');
-      rect.strokeWidth = 1 / scope.view.zoom;
-      rect.locked = true;
-      rig.artboardRect = rect;
+        const zoom = Math.max(0.05, scope.view.zoom);
+        const accentHex = useSettingsStore.getState().settings.accentColor || '#da7756';
+        const artboards = getSceneArtboards(targetScene);
+        const rects: paper.Path.Rectangle[] = [];
+        const labels: paper.PointText[] = [];
 
-      sceneLayer.activate();
-      scope.view.update();
-    }, []);
+        for (const ab of artboards) {
+          const isActive = ab.id === activeAbId;
+          const highlightActive = artboards.length > 1 && isActive;
+          const rect = new scope.Path.Rectangle(
+            new scope.Rectangle(ab.x, ab.y, ab.width, ab.height)
+          );
+          rect.applyMatrix = false;
+          rect.fillColor = new scope.Color(ab.background || '#ffffff');
+          rect.strokeColor = new scope.Color(highlightActive ? accentHex : '#c8c0b2');
+          rect.strokeWidth = (highlightActive ? 1.5 : 1) / zoom;
+          rect.data = { isActiveArtboard: highlightActive };
+          rect.locked = true;
+          rects.push(rect);
+
+          if (artboards.length > 1) {
+            const label = new scope.PointText({
+              point: new scope.Point(ab.x, ab.y - 6 / zoom),
+              content: `${ab.name} · ${ab.width}×${ab.height}`,
+              fontFamily: 'Inter',
+              fontWeight: isActive ? 'bold' : 'normal',
+              fontSize: 11 / zoom,
+              fillColor: new scope.Color(isActive ? accentHex : '#7b746a'),
+              applyMatrix: false,
+            });
+            label.data = { artboardY: ab.y };
+            label.locked = true;
+            labels.push(label);
+          }
+        }
+
+        rig.artboardRects = rects;
+        rig.artboardLabels = labels;
+
+        sceneLayer.activate();
+        scope.view.update();
+      },
+      []
+    );
 
     useEffect(() => {
       const container = containerRef.current;
@@ -446,14 +542,16 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
         artboardLayer,
         sceneLayer,
         overlayLayer,
-        artboardRect: null,
+        artboardRects: [],
+        artboardLabels: [],
         itemMap: new Map(),
       };
       rigRef.current = rig;
-      drawArtboard(rig, sceneRef.current);
+      drawArtboard(rig, sceneRef.current, activeArtboardIdRef.current);
       rig.itemMap = syncSceneToPaper(scope, sceneLayer, sceneRef.current, {
         editingTextLayerId: editingTextRef.current?.layerId ?? null,
-        outlineMode,
+        outlineMode: outlineModeRef.current,
+        editingGroupId: editingGroupIdRef.current,
       });
       redrawOverlayFromRefs(rig);
       scope.view.update();
@@ -687,23 +785,29 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     ]);
 
     useEffect(() => {
-      return subscribeAssets(() => {
+      const resync = () => {
         const rig = rigRef.current;
         if (!rig) return;
         rig.itemMap = syncSceneToPaper(rig.scope, rig.sceneLayer, sceneRef.current, {
           editingTextLayerId: editingTextRef.current?.layerId ?? null,
+          outlineMode: outlineModeRef.current,
+          editingGroupId: editingGroupIdRef.current,
         });
         redrawOverlayFromRefs(rig);
         rig.scope.view.update();
-      });
+      };
+      const unsubAssets = subscribeAssets(resync);
+      const unsubFonts = subscribeFonts(resync);
+      return () => {
+        unsubAssets();
+        unsubFonts();
+      };
     }, [redrawOverlayFromRefs]);
 
     useEffect(() => {
       if (!editingText) return;
-      const exists = scene.layers.some(
-        (l) => l.id === editingText.layerId && l.type === 'text' && !l.locked
-      );
-      if (!exists) {
+      const found = findLayerById(scene.layers, editingText.layerId);
+      if (!found || found.type !== 'text' || found.locked) {
         editingTextRef.current = null;
         setEditingText(null);
       }
@@ -728,15 +832,31 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     useEffect(() => {
       const rig = rigRef.current;
       if (!rig) return;
-      drawArtboard(rig, scene);
+      drawArtboard(rig, scene, activeArtboardIdRef.current);
       rig.itemMap = syncSceneToPaper(rig.scope, rig.sceneLayer, scene, {
         editingTextLayerId: editingText?.layerId ?? null,
         outlineMode,
+        editingGroupId,
       });
       overlayExtrasRef.current.draftOverrides = undefined;
       redrawOverlayFromRefs(rig);
       rig.scope.view.update();
-    }, [drawArtboard, editingText?.layerId, outlineMode, redrawOverlayFromRefs, scene]);
+    }, [
+      drawArtboard,
+      editingGroupId,
+      editingText?.layerId,
+      outlineMode,
+      redrawOverlayFromRefs,
+      scene,
+    ]);
+
+    useEffect(() => {
+      const rig = rigRef.current;
+      if (!rig) return;
+      drawArtboard(rig, sceneRef.current, activeArtboardId);
+      redrawOverlayFromRefs(rig);
+      rig.scope.view.update();
+    }, [accentColor, activeArtboardId, drawArtboard, redrawOverlayFromRefs]);
 
     useEffect(() => {
       const rig = rigRef.current;
@@ -752,6 +872,8 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
           prevController?.cancel?.(ctx);
         }
         prevToolRef.current = activeTool;
+        overlayExtrasRef.current.shapeBuilder = null;
+        overlayExtrasRef.current.freehandDraft = null;
       }
 
       redrawOverlayFromRefs(rig);
@@ -770,7 +892,46 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       if (!rig) return;
       redrawOverlayFromRefs(rig);
       rig.scope.view.update();
-    }, [accentColor, gridOpacity, gridSize, redrawOverlayFromRefs, showGrid]);
+    }, [
+      accentColor,
+      activeGradientTarget,
+      gridOpacity,
+      gridSize,
+      redrawOverlayFromRefs,
+      showGrid,
+      showGuides,
+    ]);
+
+    const rulerViewToProject = useCallback((vx: number, vy: number): Point2D | null => {
+      const rig = rigRef.current;
+      if (!rig) return null;
+      const pt = rig.scope.view.viewToProject(new rig.scope.Point(vx, vy));
+      return { x: pt.x, y: pt.y };
+    }, []);
+
+    const rulerProjectToView = useCallback((px: number, py: number): Point2D | null => {
+      const rig = rigRef.current;
+      if (!rig) return null;
+      const pt = rig.scope.view.projectToView(new rig.scope.Point(px, py));
+      return { x: pt.x, y: pt.y };
+    }, []);
+
+    const handlePreviewGuide = useCallback(
+      (preview: { orientation: 'horizontal' | 'vertical'; position: number } | null) => {
+        const rig = rigRef.current;
+        if (!rig) return;
+        redrawOverlayFromRefs(rig, { draggingGuide: preview });
+        rig.scope.view.update();
+      },
+      [redrawOverlayFromRefs]
+    );
+
+    const handleCreateGuide = useCallback(
+      (orientation: 'horizontal' | 'vertical', position: number) => {
+        addGuide(orientation, position);
+      },
+      []
+    );
 
     const cursorClass = isDraggingPan
       ? 'cursor-grabbing'
@@ -778,24 +939,31 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
         ? 'cursor-grab'
         : activeTool === 'text'
           ? 'cursor-text'
-          : activeTool === 'pen' || activeTool === 'blob' || activeTool === 'eyedropper'
+          : activeTool === 'pen' ||
+              activeTool === 'blob' ||
+              activeTool === 'eyedropper' ||
+              activeTool === 'shapeBuilder' ||
+              activeTool === 'pencil' ||
+              activeTool === 'knife'
             ? 'cursor-crosshair'
             : 'cursor-default';
 
     void viewTick;
-    const editingLayer = editingText
-      ? scene.layers.find(
-          (l): l is TextLayer => l.id === editingText.layerId && l.type === 'text'
-        ) ?? null
+    const foundEditing = editingText
+      ? findLayerById(scene.layers, editingText.layerId)
       : null;
+    const editingLayer = foundEditing?.type === 'text' ? foundEditing : null;
 
     let textEditorOverlay: React.ReactNode = null;
     if (editingText && editingLayer && rigRef.current) {
       const rig = rigRef.current;
       const zoom = Math.max(0.05, rig.scope.view.zoom);
-      const viewPt = rig.scope.view.projectToView(
-        new rig.scope.Point(editingLayer.x, editingLayer.y)
-      );
+      const worldM = getLayerWorldMatrix(scene.layers, editingLayer.id);
+      const worldTransform = decomposeMatrix(worldM);
+      const hostPath = resolveHostPathLayer(scene.layers, editingLayer.pathId);
+      const pathBox = hostPath
+        ? computeTextOnPathLocalBBox(editingLayer, hostPath, scene.layers)
+        : null;
       const lines = (editingText.draft || '').split('\n');
       const worldWidth = measureTextDraftWorldWidth(
         editingLayer,
@@ -804,8 +972,17 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       const boxWidthPx = Math.max(80, worldWidth * zoom);
       const lineStepPx = editingLayer.fontSize * editingLayer.lineHeight * zoom;
       const boxHeightPx = Math.max(lineStepPx, lines.length * lineStepPx + 4);
+      const anchorWorld = pathBox
+        ? applyMatrixToPoint(worldM, {
+            x: pathBox.x + pathBox.width / 2,
+            y: pathBox.y + pathBox.height / 2 - lineStepPx / (2 * zoom),
+          })
+        : { x: worldTransform.x, y: worldTransform.y };
+      const viewPt = rig.scope.view.projectToView(
+        new rig.scope.Point(anchorWorld.x, anchorWorld.y)
+      );
       const offsetX =
-        editingLayer.align === 'center'
+        pathBox || editingLayer.align === 'center'
           ? -boxWidthPx / 2
           : editingLayer.align === 'right'
             ? -boxWidthPx
@@ -845,9 +1022,9 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
             lineHeight: String(editingLayer.lineHeight),
             letterSpacing: `${(editingLayer.letterSpacing ?? 0) * zoom}px`,
             textAlign: editingLayer.align,
-            color: editingLayer.fill,
+            color: getPrimaryColor(editingLayer.fill, '#1c1b1a'),
             transformOrigin: `${originX}px 0px`,
-            transform: `rotate(${editingLayer.rotation}deg) scale(${editingLayer.scaleX}, ${editingLayer.scaleY})`,
+            transform: `rotate(${worldTransform.rotation}deg) scale(${worldTransform.scaleX}, ${worldTransform.scaleY})`,
             outline: '1px dashed var(--color-paper-accent)',
             outlineOffset: '2px',
           }}
@@ -856,8 +1033,9 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       );
     }
 
+    const allSceneLayers = flattenLayers(scene.layers);
     const totalAnchors = showPerfStats
-      ? scene.layers.reduce(
+      ? allSceneLayers.reduce(
           (sum, layer) =>
             sum +
             (layer.type === 'path'
@@ -867,9 +1045,27 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
         )
       : 0;
 
+    const artboards = getSceneArtboards(scene);
+    const activeAb = getActiveArtboard(scene, activeArtboardId);
+    const groupTrail = editingGroupId
+      ? (findLayerPath(scene.layers, editingGroupId)?.filter(
+          (l) => l.type === 'group'
+        ) ?? [])
+      : [];
+
     return (
       <div
         ref={containerRef}
+        data-tour="canvas.root"
+        onPointerMove={(e) => {
+          if (!showRulers || !containerRef.current) return;
+          const rect = containerRef.current.getBoundingClientRect();
+          const pt = rulerViewToProject(e.clientX - rect.left, e.clientY - rect.top);
+          if (pt) setCursorProjectPos(pt);
+        }}
+        onPointerLeave={() => {
+          if (cursorProjectPos) setCursorProjectPos(null);
+        }}
         className={`relative flex-1 overflow-hidden bg-paper-canvas ${cursorClass}`}
         style={
           canvasBackdrop
@@ -882,17 +1078,95 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
         }
       >
         <canvas ref={canvasRef} className="block h-full w-full outline-none" />
+        {showRulers && (
+          <CanvasRulers
+            viewToProject={rulerViewToProject}
+            projectToView={rulerProjectToView}
+            viewTick={viewTick}
+            cursorProjectPos={cursorProjectPos}
+            showGuides={showGuides}
+            onToggleGuides={() => updateSettings({ showGuides: !showGuides })}
+            onPreviewGuide={handlePreviewGuide}
+            onCreateGuide={handleCreateGuide}
+          />
+        )}
         {textEditorOverlay}
+
+        {groupTrail.length > 0 && editingGroupId && (
+          <div
+            className={`animate-rise absolute z-20 flex items-center gap-1 rounded border border-paper-border bg-paper-panel px-2 py-1 text-[11px] text-paper-ink shadow ${
+              showRulers
+                ? 'left-7 top-7 max-w-[calc(100%-40px)]'
+                : 'left-3 top-3 max-w-[calc(100%-24px)]'
+            }`}
+          >
+            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-paper-accent" strokeWidth={1.75} />
+            <button
+              type="button"
+              onClick={() => {
+                setEditingGroupId(null);
+                useEditorStore.getState().setSelectedIds([]);
+              }}
+              className="rounded px-1 text-paper-muted hover:bg-paper-hover hover:text-paper-ink"
+            >
+              Сцена
+            </button>
+            {groupTrail.map((grp, idx) => {
+              const isCurrent = idx === groupTrail.length - 1;
+              return (
+                <span key={grp.id} className="flex items-center gap-1">
+                  <ChevronRight className="h-3 w-3 text-paper-muted" strokeWidth={1.75} />
+                  <button
+                    type="button"
+                    disabled={isCurrent}
+                    onClick={() => {
+                      setEditingGroupId(grp.id);
+                      useEditorStore.getState().setSelectedIds([]);
+                    }}
+                    className={`max-w-32 truncate rounded px-1 ${
+                      isCurrent
+                        ? 'font-medium text-paper-ink'
+                        : 'text-paper-muted hover:bg-paper-hover hover:text-paper-ink'
+                    }`}
+                  >
+                    {grp.name}
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              title="Выйти из группы (Esc)"
+              onClick={() => {
+                const parentId = getParentGroupId(scene.layers, editingGroupId);
+                setEditingGroupId(parentId);
+                useEditorStore.getState().setSelectedIds([]);
+              }}
+              className="ml-1 flex h-5 w-5 items-center justify-center rounded text-paper-muted hover:bg-paper-hover hover:text-paper-ink"
+            >
+              <X className="h-3 w-3" strokeWidth={1.75} />
+            </button>
+          </div>
+        )}
+
         <div className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-2 rounded border border-paper-border bg-paper-panel px-2.5 py-1 text-[11px] text-paper-muted font-display">
+          {artboards.length > 1 && (
+            <>
+              <span className="max-w-36 truncate font-medium text-paper-ink">
+                {activeAb.name}
+              </span>
+              <span className="text-paper-border">•</span>
+            </>
+          )}
           <span>
-            {scene.width} × {scene.height} px
+            {activeAb.width} × {activeAb.height} px
           </span>
           <span className="text-paper-border">•</span>
           <span>{scene.dpi} DPI</span>
           {showPerfStats && (
             <>
               <span className="text-paper-border">•</span>
-              <span>{scene.layers.length} сл.</span>
+              <span>{allSceneLayers.length} сл.</span>
               <span className="text-paper-border">•</span>
               <span>{totalAnchors} узл.</span>
             </>

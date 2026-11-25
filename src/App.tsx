@@ -7,10 +7,12 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react';
 import { BookOpen, X } from 'lucide-react';
+import { getActiveArtboard } from './core/artboards';
 import { inferImageMimeType, registerAssetFromBytes } from './core/assets';
 import {
   copyLayerStyle,
   copySelectedLayers,
+  copySelectionAsSvg,
   hasCopiedLayers,
   pasteLayers,
   pasteLayerStyle,
@@ -22,21 +24,28 @@ import {
   type ContextMenuArea,
 } from './core/contextMenu';
 import {
+  addArtboard,
   addLayer,
   addLayers,
   alignLayers,
+  attachTextToPath,
   booleanLayers,
+  clearGuides,
   combineCompoundPathLayers,
   convertTextLayersToOutlines,
   createClipMaskFromSelection,
   createImageLayer,
   createLayerId,
   deleteAnchor,
+  deleteArtboard,
   deleteLayers,
   deselectAllLayers,
+  detachTextFromPath,
+  duplicateArtboard,
   duplicateLayers,
   expandLayerAppearance,
   flipLayers,
+  groupLayers,
   invertSelection,
   loadScene,
   nudgeLayers,
@@ -55,16 +64,26 @@ import {
   simplifyPathLayers,
   smoothLayers,
   splitCompoundPathLayers,
+  traceImageLayer,
   transformTextCase,
   undoCommand,
+  ungroupLayers,
   updateArtboard,
+  updateArtboardById,
   updateLayerEffects,
   updateLayers,
   wobbleLayers,
 } from './core/commands';
-import { saveSceneDraft, useSettingsStore } from './core/settings';
+import { registerProjectFontFromBytes } from './core/fonts';
+import { findLayerById, flattenLayers, getParentGroupId } from './core/layerTree';
+import {
+  clearSceneDraft,
+  saveSceneDraft,
+  useSettingsStore,
+} from './core/settings';
 import {
   exportDocumentDialog,
+  exportSelectionDialog,
   openProjectDialog,
   quickExportPngDialog,
   saveProjectDialog,
@@ -74,8 +93,9 @@ import { openLocusFromBytes } from './export/projectFile';
 import { parseSvgToLayers } from './export/importSvg';
 import { matchShortcut } from './core/shortcuts';
 import { useCanRedo, useCanUndo, useEditorStore } from './core/store';
-import type { ImageLayer, Scene } from './core/types';
+import type { Artboard, ImageLayer, Scene } from './core/types';
 import type { BooleanOp } from './engine/booleans';
+import type { ImageTraceOptions } from './engine/imageTrace';
 import { isCanvasZoomWheel } from './engine/zoom';
 import { hasAnyEffects } from './engine/effects';
 import { PaperCanvas, type PaperCanvasHandle } from './engine/PaperCanvas';
@@ -88,13 +108,14 @@ import {
 import { ContextMenu } from './ui/ContextMenu';
 import { AiTaskIndicator } from './ui/AiTaskIndicator';
 import { CommandBar } from './ui/CommandBar';
-import { EffectModal, type EffectModalTarget } from './ui/EffectModal';
+import type { EffectTarget } from './ui/inspector/InspectorEffects';
 import { Inspector } from './ui/Inspector';
 import { LayersPanel } from './ui/LayersPanel';
 import type { MenuBarActions, MenuBarState } from './ui/MenuBar';
 import { RasterExportModal } from './ui/RasterExportModal';
 import { SettingsModal, type SettingsTabId } from './ui/SettingsModal';
 import { TutorialModal } from './ui/tutorial/TutorialModal';
+import { TutorialSpotlight } from './ui/tutorial/TutorialSpotlight';
 import { useTutorialStore } from './tutorial/store';
 import { dismissTutorialWelcome } from './tutorial/progress';
 import { StartModal } from './ui/StartModal';
@@ -140,15 +161,21 @@ export function App() {
   const selectedNode = useEditorStore((s) => s.selectedNode);
   const activeTool = useEditorStore((s) => s.activeTool);
   const smartShapeOptions = useEditorStore((s) => s.smartShapeOptions);
+  const pencilSmoothness = useEditorStore((s) => s.pencilSmoothness);
   const zoomPercent = useEditorStore((s) => s.zoomPercent);
   const isDirty = useEditorStore((s) => s.isDirty);
+  const activeArtboardId = useEditorStore((s) => s.activeArtboardId);
+  const editingGroupId = useEditorStore((s) => s.editingGroupId);
   const isAcademyOpen = useTutorialStore((state) => state.isAcademyOpen);
 
   const setSelectedIds = useEditorStore((s) => s.setSelectedIds);
   const setSelectedNode = useEditorStore((s) => s.setSelectedNode);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
   const setSmartShapeOptions = useEditorStore((s) => s.setSmartShapeOptions);
+  const setPencilSmoothness = useEditorStore((s) => s.setPencilSmoothness);
   const setZoomPercent = useEditorStore((s) => s.setZoomPercent);
+  const setActiveArtboardId = useEditorStore((s) => s.setActiveArtboardId);
+  const setEditingGroupId = useEditorStore((s) => s.setEditingGroupId);
 
   const canUndo = useCanUndo();
   const canRedo = useCanRedo();
@@ -161,9 +188,11 @@ export function App() {
   const [settingsInitialTab, setSettingsInitialTab] =
     useState<SettingsTabId | null>(null);
   const [isCommandBarOpen, setIsCommandBarOpen] = useState(false);
+  const [preflightTrigger, setPreflightTrigger] = useState(0);
   const [rasterExportOpen, setRasterExportOpen] = useState(false);
   const [rasterExportFormat, setRasterExportFormat] = useState<'png' | 'jpg'>('png');
-  const [activeEffectModal, setActiveEffectModal] = useState<EffectModalTarget | null>(null);
+  const [rasterExportScope, setRasterExportScope] = useState<'artboard' | 'selection'>('artboard');
+  const [focusedEffect, setFocusedEffect] = useState<EffectTarget | null>(null);
   const [showToolbar, setShowToolbar] = useState(true);
   const [showLayers, setShowLayers] = useState(true);
   const [showInspector, setShowInspector] = useState(true);
@@ -214,6 +243,37 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [settings.autosaveEnabled, settings.autosaveIntervalSec]);
 
+  useEffect(() => {
+    if (!settings.autosaveEnabled || !isDirty || scene.layers.length === 0) return;
+    const timer = window.setTimeout(() => {
+      const st = useEditorStore.getState();
+      if (st.isDirty && st.scene.layers.length > 0) {
+        void saveSceneDraft(st.scene);
+      }
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [isDirty, scene, settings.autosaveEnabled]);
+
+  useEffect(() => {
+    const flushDraft = () => {
+      const { autosaveEnabled } = useSettingsStore.getState().settings;
+      if (!autosaveEnabled) return;
+      const st = useEditorStore.getState();
+      if (st.isDirty && st.scene.layers.length > 0) {
+        void saveSceneDraft(st.scene);
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushDraft();
+    };
+    window.addEventListener('pagehide', flushDraft);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('pagehide', flushDraft);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, []);
+
   const showNotice = useCallback((message: string) => {
     setNotice(message);
     if (noticeTimerRef.current !== null) {
@@ -249,6 +309,7 @@ export function App() {
       if (choice === 'discard') {
         pendingActionRef.current = null;
         setIsUnsavedOpen(false);
+        void clearSceneDraft();
         action?.();
         return;
       }
@@ -318,6 +379,12 @@ export function App() {
     setIsCommandBarOpen(false);
   }, []);
 
+  const handleRunPreflight = useCallback(() => {
+    setContextMenu(null);
+    setIsCommandBarOpen(true);
+    setPreflightTrigger((n) => n + 1);
+  }, []);
+
   const handleOpenProject = useCallback(async () => {
     try {
       const loaded = await openProjectDialog();
@@ -376,6 +443,52 @@ export function App() {
     }
   }, [showNotice]);
 
+  const handleCopySvg = useCallback((ids?: string[]) => {
+    void (async () => {
+      try {
+        const svg = await copySelectionAsSvg(ids);
+        if (!svg) {
+          showNotice('Выберите хотя бы один слой для копирования');
+          return;
+        }
+        showNotice('SVG скопирован в буфер обмена');
+      } catch (err) {
+        showNotice(
+          err instanceof Error ? err.message : 'Не удалось скопировать SVG'
+        );
+      }
+    })();
+  }, [showNotice]);
+
+  const handleExportSelectionSvg = useCallback((ids?: string[]) => {
+    void (async () => {
+      try {
+        const target = await exportSelectionDialog('svg', ids);
+        if (target !== null) {
+          showNotice(`Экспортировано: ${target}`);
+        }
+      } catch (err) {
+        showNotice(
+          err instanceof Error ? err.message : 'Не удалось экспортировать выделенное'
+        );
+      }
+    })();
+  }, [showNotice]);
+
+  const handleExportSelectionRaster = useCallback((ids?: string[]) => {
+    const resolved = ids ?? useEditorStore.getState().selectedIds;
+    if (resolved.length === 0) {
+      showNotice('Выберите хотя бы один слой для экспорта');
+      return;
+    }
+    if (ids && ids.length > 0) {
+      useEditorStore.setState({ selectedIds: ids, selectedNode: null });
+    }
+    setRasterExportScope('selection');
+    setRasterExportFormat('png');
+    setRasterExportOpen(true);
+  }, [showNotice]);
+
   const insertDroppedImages = useCallback(
     async (entries: Array<{ name: string; bytes: Uint8Array }>) => {
       if (entries.length === 0) return;
@@ -432,13 +545,15 @@ export function App() {
         mimeType: inferImageMimeType(file.name, file.bytes),
       });
 
-      const scene = useEditorStore.getState().scene;
-      const previous = scene.layers.find(
+      const st = useEditorStore.getState();
+      const scene = st.scene;
+      const activeAb = getActiveArtboard(scene, st.activeArtboardId);
+      const previous = flattenLayers(scene.layers).find(
         (layer) => layer.type === 'image' && layer.name === BACKGROUND_LAYER_NAME
       );
       const coverScale = Math.max(
-        scene.width / Math.max(1, asset.naturalWidth),
-        scene.height / Math.max(1, asset.naturalHeight)
+        activeAb.width / Math.max(1, asset.naturalWidth),
+        activeAb.height / Math.max(1, asset.naturalHeight)
       );
 
       runCommandBatch(() => {
@@ -451,8 +566,8 @@ export function App() {
           type: 'image',
           visible: true,
           locked: true,
-          x: scene.width / 2,
-          y: scene.height / 2,
+          x: activeAb.x + activeAb.width / 2,
+          y: activeAb.y + activeAb.height / 2,
           rotation: 0,
           scaleX: coverScale,
           scaleY: coverScale,
@@ -507,7 +622,8 @@ export function App() {
   const insertSvgFiles = useCallback(
     async (entries: Array<{ name: string; bytes: Uint8Array }>) => {
       if (entries.length === 0) return;
-      const currentScene = useEditorStore.getState().scene;
+      const st = useEditorStore.getState();
+      const activeAb = getActiveArtboard(st.scene, st.activeArtboardId);
       const decoder = new TextDecoder('utf-8');
       const collected: ReturnType<typeof addLayers> = [];
       const allWarnings = new Set<string>();
@@ -517,11 +633,19 @@ export function App() {
         const result = await parseSvgToLayers(svgText, {
           fileName: entry.name,
           targetArtboard: {
-            width: currentScene.width,
-            height: currentScene.height,
+            width: activeAb.width,
+            height: activeAb.height,
           },
         });
-        collected.push(...result.layers);
+        const shifted =
+          activeAb.x !== 0 || activeAb.y !== 0
+            ? result.layers.map((layer) => ({
+                ...layer,
+                x: layer.x + activeAb.x,
+                y: layer.y + activeAb.y,
+              }))
+            : result.layers;
+        collected.push(...shifted);
         for (const w of result.warnings) {
           allWarnings.add(w);
         }
@@ -612,6 +736,26 @@ export function App() {
             ? err.message
             : 'Не удалось перевести текст в кривые'
         );
+      }
+    },
+    [showNotice]
+  );
+
+  const handleGroupLayers = useCallback(
+    (ids: string[]) => {
+      const group = groupLayers(ids);
+      if (!group) {
+        showNotice('Выберите хотя бы один незаблокированный слой');
+      }
+    },
+    [showNotice]
+  );
+
+  const handleUngroupLayers = useCallback(
+    (ids: string[]) => {
+      const released = ungroupLayers(ids);
+      if (released.length === 0) {
+        showNotice('Среди выделенных слоёв нет групп');
       }
     },
     [showNotice]
@@ -753,20 +897,46 @@ export function App() {
     showNotice(next ? 'Сетка включена' : 'Сетка скрыта');
   }, [showNotice, updateSettings]);
 
+  const handleToggleRulers = useCallback(() => {
+    const next = !useSettingsStore.getState().settings.showRulers;
+    updateSettings({ showRulers: next });
+    showNotice(next ? 'Линейки включены' : 'Линейки скрыты');
+  }, [showNotice, updateSettings]);
+
+  const handleToggleGuides = useCallback(() => {
+    const next = !useSettingsStore.getState().settings.showGuides;
+    updateSettings({ showGuides: next });
+    showNotice(next ? 'Направляющие показаны' : 'Направляющие скрыты');
+  }, [showNotice, updateSettings]);
+
+  const handleToggleSnapToGuides = useCallback(() => {
+    const next = !useSettingsStore.getState().settings.snapToGuides;
+    updateSettings({ snapToGuides: next });
+    showNotice(next ? 'Привязка к направляющим включена' : 'Привязка к направляющим выключена');
+  }, [showNotice, updateSettings]);
+
+  const handleClearGuides = useCallback(() => {
+    clearGuides();
+    showNotice('Направляющие очищены');
+  }, [showNotice]);
+
   const handleToggleSnap = useCallback(() => {
     const cur = useSettingsStore.getState().settings;
-    const isAnyEnabled = cur.snapToGrid || cur.snapToObjects || cur.snapToArtboard;
+    const isAnyEnabled =
+      cur.snapToGrid || cur.snapToObjects || cur.snapToArtboard || cur.snapToGuides;
     if (isAnyEnabled) {
       updateSettings({
         snapToGrid: false,
         snapToObjects: false,
         snapToArtboard: false,
+        snapToGuides: false,
       });
       showNotice('Привязка выключена');
     } else {
       updateSettings({
         snapToObjects: true,
         snapToArtboard: true,
+        snapToGuides: true,
       });
       showNotice('Привязка включена');
     }
@@ -775,6 +945,7 @@ export function App() {
   const handleRestoreDraft = useCallback(
     (draftScene: Scene) => {
       loadScene(draftScene);
+      useEditorStore.getState().setDirty(true);
       setIsStartModalOpen(false);
       setIsSettingsModalOpen(false);
       requestAnimationFrame(() => {
@@ -793,7 +964,7 @@ export function App() {
 
       if (action === 'app.openTutorial') {
         event.preventDefault();
-        if (isCommandBarOpen || rasterExportOpen || activeEffectModal) return;
+        if (isCommandBarOpen || rasterExportOpen) return;
         openTutorial();
         return;
       }
@@ -823,8 +994,7 @@ export function App() {
         isSettingsModalOpen ||
         isAcademyOpen ||
         isCommandBarOpen ||
-        rasterExportOpen ||
-        activeEffectModal !== null
+        rasterExportOpen
       ) {
         return;
       }
@@ -833,6 +1003,7 @@ export function App() {
       if (modKey && !event.altKey) {
         if (event.shiftKey && event.code === 'KeyE') {
           event.preventDefault();
+          setRasterExportScope('artboard');
           setRasterExportFormat('png');
           setRasterExportOpen(true);
           return;
@@ -885,6 +1056,12 @@ export function App() {
         return;
       }
 
+      if (action === 'view.toggleRulers') {
+        event.preventDefault();
+        if (!editable) handleToggleRulers();
+        return;
+      }
+
       if (action === 'file.save') {
         event.preventDefault();
         void handleSaveProject();
@@ -929,6 +1106,15 @@ export function App() {
           case 'tool.eyedropper':
             setActiveTool('eyedropper');
             return;
+          case 'tool.shapeBuilder':
+            setActiveTool('shapeBuilder');
+            return;
+          case 'tool.pencil':
+            setActiveTool('pencil');
+            return;
+          case 'tool.knife':
+            setActiveTool('knife');
+            return;
           case 'action.placeImage':
             void handlePlaceImage();
             return;
@@ -950,6 +1136,9 @@ export function App() {
             }
             return;
           }
+          case 'edit.copySvg':
+            handleCopySvg(st.selectedIds);
+            return;
           case 'edit.paste': {
             const created = pasteLayers({ inPlace: false });
             if (created.length === 0) {
@@ -1000,6 +1189,12 @@ export function App() {
                 action === 'layer.backward' ? 'backward' : 'forward'
               );
             }
+            return;
+          case 'layer.group':
+            handleGroupLayers(st.selectedIds);
+            return;
+          case 'layer.ungroup':
+            handleUngroupLayers(st.selectedIds);
             return;
         }
       }
@@ -1064,8 +1259,13 @@ export function App() {
         case 'Escape': {
           const handled = canvasRef.current?.finishActiveTool();
           if (!handled) {
-            setSelectedIds([]);
-            setSelectedNode(null);
+            const st = useEditorStore.getState();
+            if (st.selectedIds.length > 0 || st.selectedNode) {
+              setSelectedIds([]);
+              setSelectedNode(null);
+            } else if (st.editingGroupId) {
+              setEditingGroupId(getParentGroupId(st.scene.layers, st.editingGroupId));
+            }
             setNotice(null);
           }
           break;
@@ -1094,14 +1294,17 @@ export function App() {
   }, [
     handleCombineCompound,
     handleConvertToOutlines,
+    handleCopySvg,
+    handleGroupLayers,
     handlePlaceImage,
     handleSaveProject,
     handleSplitCompound,
     handleToggleGrid,
+    handleToggleRulers,
     handleToggleSnap,
+    handleUngroupLayers,
     requestNewProject,
     requestOpenProject,
-    activeEffectModal,
     isSettingsModalOpen,
     isStartModalOpen,
     isAcademyOpen,
@@ -1110,6 +1313,7 @@ export function App() {
     openTutorial,
     rasterExportOpen,
     setActiveTool,
+    setEditingGroupId,
     setSelectedIds,
     setSelectedNode,
     showNotice,
@@ -1139,6 +1343,7 @@ export function App() {
   const handleExportDocument = useCallback(
     (format: ExportKind) => {
       if (format === 'png' || format === 'jpg') {
+        setRasterExportScope('artboard');
         setRasterExportFormat(format);
         setRasterExportOpen(true);
         return;
@@ -1177,15 +1382,138 @@ export function App() {
   }, [showNotice]);
 
   const handleOpenEffect = useCallback(
-    (target: EffectModalTarget) => {
+    (target: EffectTarget) => {
       const ids = useEditorStore.getState().selectedIds;
       if (ids.length === 0) {
         showNotice('Сначала выберите слой для применения эффекта');
         return;
       }
-      setActiveEffectModal(target);
+      setShowInspector(true);
+      setFocusedEffect(target);
     },
     [showNotice]
+  );
+
+  const handleEnterGroup = useCallback(
+    (groupId: string | null) => {
+      setEditingGroupId(groupId);
+      setSelectedIds([]);
+      setSelectedNode(null);
+    },
+    [setEditingGroupId, setSelectedIds, setSelectedNode]
+  );
+
+  const handleUploadFont = useCallback(async () => {
+    const file = await pickOpenFile({
+      title: 'Загрузить шрифт в проект',
+      filters: [{ name: 'Шрифты', extensions: ['ttf', 'otf', 'woff2'] }],
+    });
+    if (!file) return;
+    try {
+      const entry = await registerProjectFontFromBytes({
+        bytes: file.bytes,
+        fileName: file.name,
+      });
+      const st = useEditorStore.getState();
+      const textIds = st.selectedIds.filter((id) => {
+        const layer = findLayerById(st.scene.layers, id);
+        return layer?.type === 'text' && !layer.locked;
+      });
+      if (textIds.length > 0) {
+        updateLayers(textIds, { fontFamily: entry.family });
+      }
+      showNotice(`Шрифт «${entry.family}» загружен`);
+    } catch (err) {
+      showNotice(
+        err instanceof Error
+          ? err.message
+          : `Не удалось загрузить шрифт «${file.name}»`
+      );
+    }
+  }, [showNotice]);
+
+  const handleSelectArtboard = useCallback(
+    (id: string) => {
+      setActiveArtboardId(id);
+      requestAnimationFrame(() => canvasRef.current?.focusArtboard(id));
+    },
+    [setActiveArtboardId]
+  );
+
+  const handleAddArtboard = useCallback(() => {
+    const ab = addArtboard();
+    requestAnimationFrame(() => canvasRef.current?.focusArtboard(ab.id));
+    showNotice(`Добавлен «${ab.name}»`);
+  }, [showNotice]);
+
+  const handleDuplicateArtboard = useCallback(
+    (id: string) => {
+      const ab = duplicateArtboard(id);
+      if (ab) {
+        requestAnimationFrame(() => canvasRef.current?.focusArtboard(ab.id));
+        showNotice(`Дублирован «${ab.name}»`);
+      }
+    },
+    [showNotice]
+  );
+
+  const handleDeleteArtboard = useCallback(
+    (id: string) => {
+      if (deleteArtboard(id)) {
+        showNotice('Артборд удалён');
+      }
+    },
+    [showNotice]
+  );
+
+  const handleUpdateActiveArtboard = useCallback(
+    (
+      patch: Partial<
+        Pick<Artboard, 'name' | 'x' | 'y' | 'width' | 'height' | 'background'>
+      > & { dpi?: number }
+    ) => {
+      if (patch.dpi !== undefined) {
+        updateArtboard({ dpi: patch.dpi });
+      }
+      const abPatch: Partial<
+        Pick<Artboard, 'name' | 'x' | 'y' | 'width' | 'height' | 'background'>
+      > = {};
+      if (patch.name !== undefined) abPatch.name = patch.name;
+      if (patch.x !== undefined) abPatch.x = patch.x;
+      if (patch.y !== undefined) abPatch.y = patch.y;
+      if (patch.width !== undefined) abPatch.width = patch.width;
+      if (patch.height !== undefined) abPatch.height = patch.height;
+      if (patch.background !== undefined) abPatch.background = patch.background;
+      if (Object.keys(abPatch).length > 0) {
+        updateArtboardById(useEditorStore.getState().activeArtboardId, abPatch);
+      }
+    },
+    []
+  );
+
+  const handleExportArtboard = useCallback(
+    (kind: ExportKind, artboardId: string) => {
+      if (kind === 'png' || kind === 'jpg') {
+        setActiveArtboardId(artboardId);
+        setRasterExportScope('artboard');
+        setRasterExportFormat(kind);
+        setRasterExportOpen(true);
+        return;
+      }
+      void (async () => {
+        try {
+          const target = await exportDocumentDialog(kind, artboardId);
+          if (target !== null) {
+            showNotice(`Экспортировано: ${target}`);
+          }
+        } catch (err) {
+          showNotice(
+            err instanceof Error ? err.message : `Не удалось экспортировать .${kind}`
+          );
+        }
+      })();
+    },
+    [setActiveArtboardId, showNotice]
   );
 
   const handleExpandAppearance = useCallback(
@@ -1200,22 +1528,67 @@ export function App() {
     [showNotice]
   );
 
+  const handleTraceImage = useCallback(
+    (layerId: string, options: Partial<ImageTraceOptions> = { mode: 'bw' }) => {
+      const result = traceImageLayer(layerId, options);
+      if (!result) {
+        showNotice('Не удалось векторизовать изображение');
+      } else {
+        showNotice(`Изображение переведено в вектор: «${result.name}»`);
+      }
+    },
+    [showNotice]
+  );
+
+  const handleAttachTextToPath = useCallback(
+    (textLayerId: string, pathLayerId: string) => {
+      const result = attachTextToPath(textLayerId, pathLayerId);
+      if (!result) {
+        showNotice('Выберите текстовый слой и векторный контур');
+      } else {
+        showNotice('Текст привязан к контуру');
+      }
+    },
+    [showNotice]
+  );
+
+  const handleDetachTextFromPath = useCallback(
+    (textLayerId: string) => {
+      if (detachTextFromPath(textLayerId)) {
+        showNotice('Текст откреплён от контура');
+      }
+    },
+    [showNotice]
+  );
+
   const snapEnabled =
-    settings.snapToGrid || settings.snapToObjects || settings.snapToArtboard;
+    settings.snapToGrid ||
+    settings.snapToObjects ||
+    settings.snapToArtboard ||
+    settings.snapToGuides;
 
   const menuState: MenuBarState = useMemo(() => {
     const idSet = new Set(selectedIds);
-    const selected = scene.layers.filter((l) => idSet.has(l.id));
+    const selected = flattenLayers(scene.layers).filter((l) => idSet.has(l.id));
+    const hasPairText = selected.some((l) => l.type === 'text' && !l.locked);
+    const hasPairPath = selected.some((l) => l.type === 'path' && !l.locked);
     return {
       hasSelection: selected.length > 0,
       hasMultiSelection: selected.length >= 2,
       hasPathSelection: selected.some((l) => l.type === 'path'),
       hasTextSelection: selected.some((l) => l.type === 'text'),
+      hasImageSelection: selected.some((l) => l.type === 'image' && !l.locked),
+      hasGroupSelection: selected.some((l) => l.type === 'group'),
+      canAttachTextToPath: selected.length === 2 && hasPairText && hasPairPath,
       hasEffects: selected.some((l) => hasAnyEffects(l.effects)),
       canUndo,
       canRedo,
       showGrid: settings.showGrid,
+      showRulers: settings.showRulers,
+      showGuides: settings.showGuides,
       snapEnabled,
+      snapToGuides: settings.snapToGuides,
+      hasGuides: Boolean(scene.guides && scene.guides.length > 0),
       outlineMode,
       showToolbar,
       showLayers,
@@ -1225,9 +1598,13 @@ export function App() {
     canRedo,
     canUndo,
     outlineMode,
+    scene.guides,
     scene.layers,
     selectedIds,
     settings.showGrid,
+    settings.showGuides,
+    settings.showRulers,
+    settings.snapToGuides,
     showInspector,
     showLayers,
     showToolbar,
@@ -1243,10 +1620,14 @@ export function App() {
       onImportSvg: () => void handleImportSvg(),
       onQuickExportPng: handleQuickExportPng,
       onOpenRasterExport: (fmt = 'png') => {
+        setRasterExportScope('artboard');
         setRasterExportFormat(fmt);
         setRasterExportOpen(true);
       },
       onExportDocument: handleExportDocument,
+      onExportSelectionSvg: () => handleExportSelectionSvg(),
+      onExportSelectionRaster: () => handleExportSelectionRaster(),
+      onAddArtboard: handleAddArtboard,
       onOpenDocSetup: () => {
         deselectAllLayers();
         setShowInspector(true);
@@ -1264,12 +1645,16 @@ export function App() {
         const count = copySelectedLayers(useEditorStore.getState().selectedIds);
         if (count > 0) showNotice(`Скопировано слоёв: ${count}`);
       },
+      onCopySvg: () => handleCopySvg(),
       onPaste: () => {
         const created = pasteLayers({ inPlace: false });
         if (created.length === 0) showNotice('Буфер обмена пуст');
       },
       onDuplicate: () => duplicateLayers(useEditorStore.getState().selectedIds, 16, 16),
       onDelete: () => deleteLayers(useEditorStore.getState().selectedIds),
+      onGroup: () => handleGroupLayers(useEditorStore.getState().selectedIds),
+      onUngroup: () => handleUngroupLayers(useEditorStore.getState().selectedIds),
+      onUploadFont: () => void handleUploadFont(),
       onOpenSettings: () => openSettingsTab(null),
       onOpenTutorial: openTutorial,
       onOpenShortcuts: () => openSettingsTab('shortcuts'),
@@ -1295,7 +1680,22 @@ export function App() {
         }
       },
       onExpandAppearance: () => handleExpandAppearance(useEditorStore.getState().selectedIds),
+      onTraceImage: () => {
+        const st = useEditorStore.getState();
+        const img = flattenLayers(st.scene.layers).find(
+          (l) => st.selectedIds.includes(l.id) && l.type === 'image' && !l.locked
+        );
+        if (img) handleTraceImage(img.id, { mode: 'bw' });
+      },
       onConvertToOutlines: () => void handleConvertToOutlines(useEditorStore.getState().selectedIds),
+      onAttachTextToPath: () => {
+        const st = useEditorStore.getState();
+        const idSet = new Set(st.selectedIds);
+        const sel = flattenLayers(st.scene.layers).filter((l) => idSet.has(l.id) && !l.locked);
+        const txt = sel.find((l) => l.type === 'text');
+        const pth = sel.find((l) => l.type === 'path');
+        if (txt && pth) handleAttachTextToPath(txt.id, pth.id);
+      },
       onTransformTextCase: (mode) => transformTextCase(useEditorStore.getState().selectedIds, mode),
       onSelectAll: selectAllLayers,
       onDeselect: deselectAllLayers,
@@ -1311,26 +1711,45 @@ export function App() {
       onFitArtboard: handleFitArtboard,
       onResetZoom100: () => canvasRef.current?.resetZoom100(),
       onToggleGrid: handleToggleGrid,
+      onToggleRulers: handleToggleRulers,
+      onToggleGuides: handleToggleGuides,
       onToggleSnap: handleToggleSnap,
+      onToggleSnapToGuides: handleToggleSnapToGuides,
+      onClearGuides: handleClearGuides,
       onToggleOutline: () => setOutlineMode((v) => !v),
       onToggleToolbar: () => setShowToolbar((v) => !v),
       onToggleLayers: () => setShowLayers((v) => !v),
       onToggleInspector: () => setShowInspector((v) => !v),
       onOpenCommandBar: openCommandBar,
+      onRunPreflight: handleRunPreflight,
     }),
     [
+      handleAddArtboard,
+      handleAttachTextToPath,
+      handleClearGuides,
       handleConvertToOutlines,
+      handleCopySvg,
       handleExpandAppearance,
       handleExportDocument,
+      handleExportSelectionRaster,
+      handleExportSelectionSvg,
       handleFitArtboard,
+      handleGroupLayers,
       handleOffsetLayers,
       handleOpenEffect,
       handleOutlineStroke,
       handlePlaceImage,
       handleQuickExportPng,
+      handleRunPreflight,
       handleSaveProject,
       handleToggleGrid,
+      handleToggleGuides,
+      handleToggleRulers,
       handleToggleSnap,
+      handleToggleSnapToGuides,
+      handleTraceImage,
+      handleUngroupLayers,
+      handleUploadFont,
       openCommandBar,
       openSettingsTab,
       openTutorial,
@@ -1409,6 +1828,12 @@ export function App() {
           if (count > 0) showNotice(`Скопировано слоёв: ${count}`);
           return;
         }
+        case 'copySvg':
+          handleCopySvg(ids);
+          return;
+        case 'exportSelection':
+          handleExportSelectionRaster(ids);
+          return;
         case 'cut': {
           if (copySelectedLayers(ids) > 0) deleteLayers(ids);
           return;
@@ -1424,6 +1849,12 @@ export function App() {
           return;
         case 'delete':
           if (ids.length > 0) deleteLayers(ids);
+          return;
+        case 'group':
+          handleGroupLayers(ids);
+          return;
+        case 'ungroup':
+          handleUngroupLayers(ids);
           return;
         case 'bringForward':
           ids.forEach((id) => reorderLayer(id, 'forward'));
@@ -1445,7 +1876,15 @@ export function App() {
           return;
       }
     },
-    [contextMenu, openCommandBar, showNotice]
+    [
+      contextMenu,
+      handleCopySvg,
+      handleExportSelectionRaster,
+      handleGroupLayers,
+      handleUngroupLayers,
+      openCommandBar,
+      showNotice,
+    ]
   );
 
   const handleCreateClipMask = useCallback(
@@ -1459,6 +1898,14 @@ export function App() {
   );
 
   const handleSelectLayer = (id: string, additive: boolean) => {
+    const st = useEditorStore.getState();
+    const parentId = getParentGroupId(st.scene.layers, id);
+    if (parentId !== st.editingGroupId) {
+      setEditingGroupId(parentId);
+      setSelectedIds([id]);
+      setSelectedNode(null);
+      return;
+    }
     if (additive) {
       if (selectedIds.includes(id)) {
         setSelectedIds(selectedIds.filter((item) => item !== id));
@@ -1614,13 +2061,15 @@ export function App() {
               <LayersPanel
                 layers={scene.layers}
                 selectedIds={selectedIds}
+                editingGroupId={editingGroupId}
                 onSelectLayer={handleSelectLayer}
+                onEnterGroup={handleEnterGroup}
                 onToggleVisible={(id) => {
-                  const target = scene.layers.find((l) => l.id === id);
+                  const target = findLayerById(scene.layers, id);
                   if (target) updateLayers([id], { visible: !target.visible });
                 }}
                 onToggleLocked={(id) => {
-                  const target = scene.layers.find((l) => l.id === id);
+                  const target = findLayerById(scene.layers, id);
                   if (target) updateLayers([id], { locked: !target.locked });
                 }}
                 onRenameLayer={(id, name) => updateLayers([id], { name })}
@@ -1644,12 +2093,24 @@ export function App() {
               <Inspector
                 scene={scene}
                 selectedIds={selectedIds}
+                activeArtboardId={activeArtboardId}
                 activeTool={activeTool}
                 smartShapeOptions={smartShapeOptions}
+                pencilSmoothness={pencilSmoothness}
                 onChangeSmartShapeOptions={setSmartShapeOptions}
-                onUpdateArtboard={updateArtboard}
+                onChangePencilSmoothness={setPencilSmoothness}
+                onSelectArtboard={handleSelectArtboard}
+                onAddArtboard={handleAddArtboard}
+                onDuplicateArtboard={handleDuplicateArtboard}
+                onDeleteArtboard={handleDeleteArtboard}
+                onUpdateArtboard={handleUpdateActiveArtboard}
+                onExportArtboard={handleExportArtboard}
                 onImportBackgroundImage={() => void handleImportBackgroundImage()}
                 onUpdateLayers={updateLayers}
+                onGroupLayers={handleGroupLayers}
+                onUngroupLayers={handleUngroupLayers}
+                onEnterGroup={handleEnterGroup}
+                onUploadFont={() => void handleUploadFont()}
                 onSmoothLayers={(ids) => smoothLayers(ids, 1)}
                 onWobbleLayers={(ids, intensity) => wobbleLayers(ids, intensity)}
                 onDuplicateLayers={(ids) => duplicateLayers(ids, 16, 16)}
@@ -1662,19 +2123,25 @@ export function App() {
                 onReleaseClipMask={(maskId) => releaseClipMask(maskId)}
                 onDetachFromMask={(layerId) => setClipMask(null, [layerId])}
                 onReplaceImage={(layerId) => void handleReplaceImage(layerId)}
+                onTraceImage={handleTraceImage}
                 onEditTextOnCanvas={(layerId) =>
                   canvasRef.current?.startTextEditing(layerId, false)
                 }
                 onTransformTextCase={transformTextCase}
                 onConvertToOutlines={(ids) => void handleConvertToOutlines(ids)}
+                onAttachTextToPath={handleAttachTextToPath}
+                onDetachTextFromPath={handleDetachTextFromPath}
                 onSplitCompound={handleSplitCompound}
                 onCombineCompound={handleCombineCompound}
                 onOffsetLayers={handleOffsetLayers}
                 onOutlineStroke={handleOutlineStroke}
                 onSimplifyLayers={(ids) => simplifyPathLayers(ids, 2.5)}
-                onOpenEffect={handleOpenEffect}
+                focusedEffect={focusedEffect}
+                onConsumeFocusedEffect={() => setFocusedEffect(null)}
                 onUpdateEffects={updateLayerEffects}
                 onExpandAppearance={handleExpandAppearance}
+                onCopySvg={() => handleCopySvg()}
+                onExportSelectionRaster={() => handleExportSelectionRaster()}
               />
             )}
           </aside>
@@ -1689,6 +2156,9 @@ export function App() {
             area: contextMenu.area,
             layerIds: contextMenu.layerIds,
             hasCopiedLayers: hasCopiedLayers(),
+            hasGroupSelected: contextMenu.layerIds.some(
+              (id) => findLayerById(scene.layers, id)?.type === 'group'
+            ),
           })}
           onAction={handleContextMenuAction}
           onClose={() => setContextMenu(null)}
@@ -1739,6 +2209,7 @@ export function App() {
 
       <CommandBar
         isOpen={isCommandBarOpen}
+        preflightTrigger={preflightTrigger}
         onClose={closeCommandBar}
         onOpenSettings={(tab) => {
           setIsCommandBarOpen(false);
@@ -1753,6 +2224,7 @@ export function App() {
         onClose={() => setIsStartModalOpen(false)}
         onCreateDocument={handleCreateDocument}
         onOpenProject={requestOpenProject}
+        onRestoreDraft={handleRestoreDraft}
         onOpenTutorial={openTutorial}
       />
 
@@ -1769,21 +2241,24 @@ export function App() {
 
       <TutorialModal />
 
+      <TutorialSpotlight
+        onEnsurePanel={(panel) => {
+          if (panel === 'toolbar') setShowToolbar(true);
+          else if (panel === 'layers') setShowLayers(true);
+          else if (panel === 'inspector') setShowInspector(true);
+        }}
+      />
+
       <RasterExportModal
         isOpen={rasterExportOpen}
         scene={scene}
         selectedIds={selectedIds}
+        activeArtboardId={activeArtboardId}
         initialFormat={rasterExportFormat}
+        initialScope={rasterExportScope}
         onClose={() => setRasterExportOpen(false)}
         onExported={(target) => showNotice(`Экспортировано: ${target}`)}
         onError={(msg) => showNotice(msg)}
-      />
-
-      <EffectModal
-        target={activeEffectModal}
-        selectedIds={selectedIds}
-        onClose={() => setActiveEffectModal(null)}
-        onApplied={(label) => showNotice(`Применён эффект: ${label}`)}
       />
 
       <UnsavedChangesModal

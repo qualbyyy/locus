@@ -5,6 +5,7 @@ import {
   localToWorld,
   localVectorToWorld,
 } from '../core/math';
+import { getPrimaryColor } from '../core/paint';
 import type { AnchorPoint, PathLayer, SubPath } from '../core/types';
 
 export type BooleanOp =
@@ -21,7 +22,7 @@ export interface BooleanResult {
   fillRule: 'nonzero' | 'evenodd';
 }
 
-function withHeadlessProject<T>(
+export function withHeadlessProject<T>(
   fn: (scope: paper.PaperScope) => T
 ): T {
   const scope = new paper.PaperScope();
@@ -50,9 +51,9 @@ function isCollinearOpposite(
   return dot < -0.995;
 }
 
-function buildWorldSubPath(
+export function buildWorldSubPath(
   scope: paper.PaperScope,
-  layer: PathLayer,
+  layer: Pick<PathLayer, 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY'>,
   sp: SubPath,
   forceClosed: boolean
 ): paper.Path | null {
@@ -76,7 +77,7 @@ function buildWorldSubPath(
   });
 }
 
-function buildWorldPathItem(
+export function buildWorldPathItem(
   scope: paper.PaperScope,
   layer: PathLayer,
   forceClosed = true
@@ -109,7 +110,7 @@ function buildWorldPathItem(
   return compound;
 }
 
-function extractSubPath(path: paper.Path): SubPath | null {
+export function extractSubPath(path: paper.Path): SubPath | null {
   if (path.segments.length < 2) {
     return null;
   }
@@ -134,7 +135,7 @@ function extractSubPath(path: paper.Path): SubPath | null {
   };
 }
 
-function extractSubPathsFromItem(
+export function extractSubPathsFromItem(
   scope: paper.PaperScope,
   item: paper.PathItem
 ): SubPath[] {
@@ -157,7 +158,7 @@ function extractSubPathsFromItem(
   return [];
 }
 
-function normalizeResult(
+export function normalizeResult(
   worldSubpaths: SubPath[],
   fillRule?: 'nonzero' | 'evenodd'
 ): BooleanResult | null {
@@ -246,7 +247,7 @@ function splitPathObjectsIntoIslands(paths: paper.Path[]): paper.Path[][] {
   return Array.from(islandMap.values());
 }
 
-function toPieceItems(
+export function toPieceItems(
   scope: paper.PaperScope,
   item: paper.PathItem
 ): paper.PathItem[] {
@@ -316,6 +317,51 @@ export function computeBooleanOperation(
       }
     }
 
+    const worldSubpaths = extractSubPathsFromItem(scope, acc);
+    return normalizeResult(worldSubpaths);
+  });
+}
+
+export function uniteBooleanResults(pieces: BooleanResult[]): BooleanResult | null {
+  if (pieces.length === 0) return null;
+  if (pieces.length === 1) return pieces[0];
+
+  return withHeadlessProject((scope) => {
+    const items: paper.PathItem[] = [];
+    for (const piece of pieces) {
+      const paths: paper.Path[] = [];
+      for (const sp of piece.subpaths) {
+        const path = buildWorldSubPath(
+          scope,
+          { x: piece.x, y: piece.y, rotation: 0, scaleX: 1, scaleY: 1 },
+          sp,
+          true
+        );
+        if (path) paths.push(path);
+      }
+      if (paths.length === 0) continue;
+      if (paths.length === 1) {
+        paths[0].fillRule = piece.fillRule;
+        items.push(paths[0]);
+      } else {
+        const cp = new scope.CompoundPath({
+          children: paths,
+          fillRule: piece.fillRule,
+          applyMatrix: false,
+          insert: false,
+        });
+        if (piece.fillRule === 'evenodd') {
+          cp.reorient(false, true);
+        }
+        items.push(cp);
+      }
+    }
+
+    if (items.length === 0) return null;
+    let acc = items[0];
+    for (let i = 1; i < items.length; i += 1) {
+      acc = acc.unite(items[i], { insert: false });
+    }
     const worldSubpaths = extractSubPathsFromItem(scope, acc);
     return normalizeResult(worldSubpaths);
   });
@@ -489,7 +535,7 @@ export function computeOutlineStroke(layer: PathLayer): BooleanResult | null {
 
     const join = stroke.lineJoin ?? 'round';
     const cap = stroke.lineCap ?? 'round';
-    item.strokeColor = new scope.Color(stroke.color);
+    item.strokeColor = new scope.Color(getPrimaryColor(stroke.color));
     item.strokeWidth = effectiveWidth;
     item.strokeJoin = join;
     item.strokeCap = cap;

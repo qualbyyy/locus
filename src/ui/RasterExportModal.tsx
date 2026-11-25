@@ -1,17 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Download, X } from 'lucide-react';
+import { getActiveArtboard, getSceneArtboards } from '../core/artboards';
 import { exportRasterDialog, type RasterExportOptions } from '../core/documentFile';
-import { clamp, computeCombinedWorldBBox } from '../core/math';
+import { flattenLayers, getParentWorldMatrix } from '../core/layerTree';
+import { clamp, computeLayerBBoxWithMatrix } from '../core/math';
 import type { Scene } from '../core/types';
 import { rasterizeSceneToBytes } from '../export/rasterize';
 import { HexColorRow, NumberField, SegmentedButton } from './InspectorControls';
-import { Checkbox, Slider } from './controls';
+import { Checkbox, Select, Slider } from './controls';
 
 interface RasterExportModalProps {
   isOpen: boolean;
   scene: Scene;
   selectedIds: string[];
+  activeArtboardId: string;
   initialFormat?: 'png' | 'jpg';
+  initialScope?: 'artboard' | 'selection';
   onClose: () => void;
   onExported: (target: string) => void;
   onError: (message: string) => void;
@@ -27,22 +31,33 @@ export function RasterExportModal({
   isOpen,
   scene,
   selectedIds,
+  activeArtboardId,
   initialFormat = 'png',
+  initialScope = 'artboard',
   onClose,
   onExported,
   onError,
 }: RasterExportModalProps) {
+  const artboards = useMemo(() => getSceneArtboards(scene), [scene]);
+  const [selectedArtboardId, setSelectedArtboardId] = useState(activeArtboardId);
+  const selectedArtboard = useMemo(
+    () => getActiveArtboard(scene, selectedArtboardId),
+    [scene, selectedArtboardId]
+  );
+
   const [format, setFormat] = useState<'png' | 'jpg'>(initialFormat);
   const [scale, setScale] = useState(2);
   const [quality, setQuality] = useState(90);
   const [transparent, setTransparent] = useState(false);
-  const [backgroundColor, setBackgroundColor] = useState(scene.background || '#ffffff');
+  const [backgroundColor, setBackgroundColor] = useState(
+    selectedArtboard.background || '#ffffff'
+  );
   const [scope, setScope] = useState<'artboard' | 'selection'>('artboard');
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [outputDims, setOutputDims] = useState<{ w: number; h: number }>({
-    w: scene.width * 2,
-    h: scene.height * 2,
+    w: selectedArtboard.width * 2,
+    h: selectedArtboard.height * 2,
   });
   const [estimatedBytes, setEstimatedBytes] = useState<number | null>(null);
   const [isExporting, setIsExporting] = useState(false);
@@ -50,9 +65,10 @@ export function RasterExportModal({
   useEffect(() => {
     if (!isOpen) return;
     setFormat(initialFormat);
-    setBackgroundColor(scene.background || '#ffffff');
-    if (selectedIds.length === 0) setScope('artboard');
-  }, [initialFormat, isOpen, scene.background, selectedIds.length]);
+    setSelectedArtboardId(activeArtboardId);
+    setBackgroundColor(getActiveArtboard(scene, activeArtboardId).background || '#ffffff');
+    setScope(selectedIds.length > 0 ? initialScope : 'artboard');
+  }, [activeArtboardId, initialFormat, initialScope, isOpen, scene, selectedIds.length]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -69,17 +85,33 @@ export function RasterExportModal({
   const baseSize = useMemo(() => {
     if (scope === 'selection' && selectedIds.length > 0) {
       const idSet = new Set(selectedIds);
-      const layers = scene.layers.filter((l) => idSet.has(l.id) && l.visible);
+      const layers = flattenLayers(scene.layers).filter((l) => idSet.has(l.id) && l.visible);
       if (layers.length > 0) {
-        const box = computeCombinedWorldBBox(layers);
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const layer of layers) {
+          const box = computeLayerBBoxWithMatrix(
+            layer,
+            getParentWorldMatrix(scene.layers, layer.id)
+          );
+          if (box.x < minX) minX = box.x;
+          if (box.y < minY) minY = box.y;
+          if (box.x + box.width > maxX) maxX = box.x + box.width;
+          if (box.y + box.height > maxY) maxY = box.y + box.height;
+        }
         return {
-          w: Math.max(1, Math.round(box.width)),
-          h: Math.max(1, Math.round(box.height)),
+          w: Math.max(1, Math.round(maxX - minX)),
+          h: Math.max(1, Math.round(maxY - minY)),
         };
       }
     }
-    return { w: Math.max(1, scene.width), h: Math.max(1, scene.height) };
-  }, [scene.height, scene.layers, scene.width, scope, selectedIds]);
+    return {
+      w: Math.max(1, selectedArtboard.width),
+      h: Math.max(1, selectedArtboard.height),
+    };
+  }, [scene.layers, scope, selectedArtboard.height, selectedArtboard.width, selectedIds]);
 
   const exportOptions: RasterExportOptions = useMemo(
     () => ({
@@ -90,8 +122,19 @@ export function RasterExportModal({
       backgroundColor,
       scope: selectedIds.length > 0 ? scope : 'artboard',
       selectedIds,
+      artboardId: artboards.length > 1 ? selectedArtboard.id : undefined,
     }),
-    [backgroundColor, format, quality, scale, scope, selectedIds, transparent]
+    [
+      artboards.length,
+      backgroundColor,
+      format,
+      quality,
+      scale,
+      scope,
+      selectedArtboard.id,
+      selectedIds,
+      transparent,
+    ]
   );
 
   useEffect(() => {
@@ -249,6 +292,25 @@ export function RasterExportModal({
                 </button>
               </div>
             </div>
+
+            {artboards.length > 1 && scope === 'artboard' && (
+              <div className="flex flex-col gap-1">
+                <span className="text-[11px] font-medium text-paper-muted">Артборд</span>
+                <Select
+                  ariaLabel="Артборд"
+                  value={selectedArtboard.id}
+                  options={artboards.map((ab) => ({
+                    value: ab.id,
+                    label: `${ab.name} (${ab.width}×${ab.height})`,
+                  }))}
+                  onChange={(nextId) => {
+                    setSelectedArtboardId(nextId);
+                    const nextAb = getActiveArtboard(scene, nextId);
+                    setBackgroundColor(nextAb.background || '#ffffff');
+                  }}
+                />
+              </div>
+            )}
 
             <div className="flex flex-col gap-1.5">
               <span className="text-[11px] font-medium text-paper-muted">Масштаб и размер</span>
