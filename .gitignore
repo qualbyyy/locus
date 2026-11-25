@@ -8,3 +8,5 @@ src-tauri/gen/
 
 .worktrees/
 *.locus
+test-results/
+playwright-report/

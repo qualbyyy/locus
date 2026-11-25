@@ -116,13 +116,13 @@ describe('UI features: context menu and canvas zoom', () => {
 
   it('formats safe diagnostic information without secrets', () => {
     const diagnostics = formatDiagnostics({
-      appVersion: '0.1.0',
+      appVersion: APP_INFO.version,
       platform: 'Linux x86_64',
       userAgent: 'TestBrowser/1.0',
       mode: 'Browser',
     });
 
-    expect(diagnostics).toContain('0.1.0');
+    expect(diagnostics).toContain(APP_INFO.version);
     expect(diagnostics).toContain('Linux x86_64');
     expect(diagnostics).toContain('Browser');
     expect(diagnostics).not.toContain('fake-api-key');
@@ -130,7 +130,7 @@ describe('UI features: context menu and canvas zoom', () => {
 
   it('exposes identity-only about data without a capabilities list', () => {
     expect(APP_INFO.name).toBe('Locus');
-    expect(APP_INFO.version.length).toBeGreaterThan(0);
+    expect(APP_INFO.version).toBe('1.0.0');
     expect(Object.keys(APP_INFO)).not.toContain('capabilities');
     expect(Object.keys(APP_INFO)).not.toContain('features');
   });

@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -37,6 +37,7 @@ describe('scripts/install-linux-launcher', () => {
     const result = await installLauncher({ binaryPath, projectRoot, homeDir });
 
     expect(result.binaryPath).toBe(path.join(homeDir, '.local', 'opt', 'locus', 'locus'));
+    expect(result.cliPath).toBe(path.join(homeDir, '.local', 'bin', 'locus'));
     expect(result.iconPath).toBe(
       path.join(homeDir, '.local', 'share', 'icons', 'hicolor', '128x128', 'apps', 'locus.png'),
     );
@@ -45,6 +46,9 @@ describe('scripts/install-linux-launcher', () => {
     );
 
     expect(await readFile(result.binaryPath, 'utf8')).toBe('first-binary');
+    const cliStat = await lstat(result.cliPath);
+    expect(cliStat.isSymbolicLink()).toBe(true);
+    expect(await readlink(result.cliPath)).toBe(result.binaryPath);
     const binaryStat = await stat(result.binaryPath);
     expect(binaryStat.mode & 0o111).not.toBe(0);
     expect(await readFile(result.iconPath, 'utf8')).toBe('icon-bytes');

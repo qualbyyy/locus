@@ -7,6 +7,7 @@ export interface InstallLauncherOptions {
 
 export interface InstalledLauncher {
   binaryPath: string;
+  cliPath: string;
   desktopPath: string;
   iconPath: string;
 }

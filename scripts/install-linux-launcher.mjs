@@ -1,7 +1,17 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, chmod, copyFile, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  access,
+  chmod,
+  copyFile,
+  mkdir,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -73,6 +83,18 @@ async function copyAtomic(sourcePath, targetPath, mode) {
   }
 }
 
+async function symlinkAtomic(linkTarget, linkPath) {
+  const tempPath = `${linkPath}.tmp-${process.pid}`;
+  await rm(tempPath, { force: true });
+  await symlink(linkTarget, tempPath);
+  try {
+    await rename(tempPath, linkPath);
+  } catch (error) {
+    await rm(tempPath, { force: true });
+    throw error;
+  }
+}
+
 async function runIfAvailable(command, args) {
   try {
     await execFileAsync(command, args, { timeout: 15000 });
@@ -98,6 +120,8 @@ export async function installLauncher({ binaryPath, projectRoot, homeDir, instal
 
   const baseDir = installRoot ? path.resolve(installRoot) : path.resolve(homeDir);
   const targetBinary = path.join(baseDir, '.local', 'opt', 'locus', 'locus');
+  const cliDir = path.join(baseDir, '.local', 'bin');
+  const cliPath = path.join(cliDir, 'locus');
   const iconDir = path.join(baseDir, '.local', 'share', 'icons', 'hicolor', '128x128', 'apps');
   const applicationsDir = path.join(baseDir, '.local', 'share', 'applications');
   const targetIcon = path.join(iconDir, 'locus.png');
@@ -110,16 +134,18 @@ export async function installLauncher({ binaryPath, projectRoot, homeDir, instal
   }
 
   await mkdir(path.dirname(targetBinary), { recursive: true });
+  await mkdir(cliDir, { recursive: true });
   await mkdir(iconDir, { recursive: true });
   await mkdir(applicationsDir, { recursive: true });
 
   await copyAtomic(sourceBinary, targetBinary, 0o755);
+  await symlinkAtomic(targetBinary, cliPath);
   await copyAtomic(sourceIcon, targetIcon, 0o644);
   await writeAtomic(targetDesktop, desktopEntry(targetBinary), 0o644);
 
   await refreshCaches(applicationsDir, path.join(baseDir, '.local', 'share', 'icons', 'hicolor'));
 
-  return { binaryPath: targetBinary, desktopPath: targetDesktop, iconPath: targetIcon };
+  return { binaryPath: targetBinary, cliPath, desktopPath: targetDesktop, iconPath: targetIcon };
 }
 
 const invokedDirectly =
@@ -138,6 +164,7 @@ if (invokedDirectly) {
       homeDir: process.env.HOME ?? homedir(),
     });
     console.log(`Бинарник: ${installed.binaryPath}`);
+    console.log(`Команда:  ${installed.cliPath}`);
     console.log(`Иконка:   ${installed.iconPath}`);
     console.log(`Ярлык:    ${installed.desktopPath}`);
   } catch (error) {
