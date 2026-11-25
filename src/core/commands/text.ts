@@ -1,8 +1,12 @@
+import { resolveHostPathLayer, computeTextOnPathLocalBBox } from '../../engine/textOnPath';
 import { convertTextLayerToOutlines } from '../../engine/textOutlines';
+import { findLayerById, flattenLayers, mapLayerTree } from '../layerTree';
 import { clamp } from '../math';
+import { clonePaint } from '../paint';
 import { useEditorStore } from '../store';
 import type {
-  BuiltinFontFamily,
+  FontFamily,
+  Paint,
   PathLayer,
   Scene,
   TextLayer,
@@ -17,18 +21,22 @@ export function createTextLayer(params: {
   y: number;
   content?: string;
   fontSize?: number;
-  fontFamily?: BuiltinFontFamily;
+  fontFamily?: FontFamily;
   fontWeight?: 400 | 700;
   lineHeight?: number;
   letterSpacing?: number;
   align?: 'left' | 'center' | 'right';
-  fill?: string;
+  fill?: Paint;
   name?: string;
   select?: boolean;
+  parentGroupId?: string | null;
+  pathId?: string;
+  pathOffset?: number;
+  pathFlip?: boolean;
 }): TextLayer {
   const state = useEditorStore.getState();
   const sameTypeCount =
-    state.scene.layers.filter((l) => l.type === 'text').length + 1;
+    flattenLayers(state.scene.layers).filter((l) => l.type === 'text').length + 1;
 
   const layer: TextLayer = {
     id: createLayerId('text'),
@@ -50,11 +58,80 @@ export function createTextLayer(params: {
     ...(params.letterSpacing !== undefined
       ? { letterSpacing: clamp(params.letterSpacing, -20, 200) }
       : {}),
-    fill: params.fill ?? '#1c1b1a',
+    fill: clonePaint(params.fill ?? '#1c1b1a'),
     align: params.align ?? 'left',
+    ...(params.pathId ? { pathId: params.pathId } : {}),
+    ...(params.pathOffset !== undefined
+      ? { pathOffset: clamp(params.pathOffset, 0, 100) }
+      : {}),
+    ...(params.pathFlip ? { pathFlip: true } : {}),
   };
 
-  return addLayer(layer, { select: params.select }) as TextLayer;
+  return addLayer(layer, {
+    select: params.select,
+    parentGroupId: params.parentGroupId,
+  }) as TextLayer;
+}
+
+export function attachTextToPath(
+  textLayerId: string,
+  pathLayerId: string
+): TextLayer | null {
+  let updated: TextLayer | null = null;
+  commitScene((scene) => {
+    const textLayer = findLayerById(scene.layers, textLayerId);
+    const pathLayer = resolveHostPathLayer(scene.layers, pathLayerId);
+    if (!textLayer || textLayer.type !== 'text' || textLayer.locked || !pathLayer) {
+      return scene;
+    }
+    const nextLayers = mapLayerTree(scene.layers, (layer) => {
+      if (layer.id !== textLayerId || layer.type !== 'text') return layer;
+      const next: TextLayer = {
+        ...layer,
+        x: 0,
+        y: 0,
+        rotation: 0,
+        scaleX: 1,
+        scaleY: 1,
+        pathId: pathLayer.id,
+        pathOffset: layer.pathOffset ?? 0,
+        pathFlip: Boolean(layer.pathFlip),
+      };
+      updated = next;
+      return next;
+    });
+    return updated ? { ...scene, layers: nextLayers } : scene;
+  });
+  return updated;
+}
+
+export function detachTextFromPath(textLayerId: string): TextLayer | null {
+  let updated: TextLayer | null = null;
+  commitScene((scene) => {
+    const textLayer = findLayerById(scene.layers, textLayerId);
+    if (!textLayer || textLayer.type !== 'text' || textLayer.locked || !textLayer.pathId) {
+      return scene;
+    }
+    const hostPath = resolveHostPathLayer(scene.layers, textLayer.pathId);
+    const box = hostPath
+      ? computeTextOnPathLocalBBox(textLayer, hostPath, scene.layers)
+      : null;
+
+    const nextLayers = mapLayerTree(scene.layers, (layer) => {
+      if (layer.id !== textLayerId || layer.type !== 'text') return layer;
+      const copy: TextLayer = {
+        ...layer,
+        ...(box ? { x: Math.round(box.x), y: Math.round(box.y) } : {}),
+      };
+      delete copy.pathId;
+      delete copy.pathOffset;
+      delete copy.pathFlip;
+      updated = copy;
+      return copy;
+    });
+    return updated ? { ...scene, layers: nextLayers } : scene;
+  });
+  return updated;
 }
 
 export function transformTextCase(layerIds: string[], mode: TextCaseMode): Scene {
@@ -64,7 +141,7 @@ export function transformTextCase(layerIds: string[], mode: TextCaseMode): Scene
   const idSet = new Set(layerIds);
   return commitScene((scene) => {
     let changed = false;
-    const nextLayers = scene.layers.map((layer) => {
+    const nextLayers = mapLayerTree(scene.layers, (layer) => {
       if (!idSet.has(layer.id) || layer.type !== 'text' || layer.locked) {
         return layer;
       }
@@ -95,16 +172,19 @@ export async function convertTextLayersToOutlines(
   if (layerIds.length === 0) return [];
   const state = useEditorStore.getState();
   const idSet = new Set(layerIds);
-  const targets = state.scene.layers.filter(
+  const targets = flattenLayers(state.scene.layers).filter(
     (l): l is TextLayer => idSet.has(l.id) && l.type === 'text' && !l.locked
   );
   if (targets.length === 0) return [];
 
   const converted = await Promise.all(
-    targets.map(async (layer) => ({
-      layer,
-      outline: await convertTextLayerToOutlines(layer),
-    }))
+    targets.map(async (layer) => {
+      const hostPath = resolveHostPathLayer(state.scene.layers, layer.pathId);
+      return {
+        layer,
+        outline: await convertTextLayerToOutlines(layer, hostPath, state.scene.layers),
+      };
+    })
   );
 
   const replacements = new Map<string, PathLayer>();
@@ -124,9 +204,10 @@ export async function convertTextLayersToOutlines(
       scaleX: 1,
       scaleY: 1,
       opacity: layer.opacity,
+      ...(layer.blendMode ? { blendMode: layer.blendMode } : {}),
       subpaths: outline.subpaths,
       fillRule: outline.fillRule,
-      fill: layer.fill,
+      fill: clonePaint(layer.fill),
       stroke: null,
       ...(layer.clipMaskId ? { clipMaskId: layer.clipMaskId } : {}),
     };
@@ -138,7 +219,7 @@ export async function convertTextLayersToOutlines(
 
   commitScene((scene) => {
     let changed = false;
-    const nextLayers = scene.layers.map((layer) => {
+    const nextLayers = mapLayerTree(scene.layers, (layer) => {
       const replacement = replacements.get(layer.id);
       if (!replacement) return layer;
       changed = true;

@@ -7,21 +7,37 @@ import {
   computeSimplifiedPath,
   computeSplitCompoundPath,
   type BooleanOp,
+  type BooleanResult,
 } from '../../engine/booleans';
 import { randomizeAnchors, roundPathCorners, smoothSubPaths } from '../../engine/geometry';
+import {
+  rasterizeImageAssetToRgba,
+  traceRgbaToVectorPaths,
+  type ImageTraceOptions,
+} from '../../engine/imageTrace';
+import { computeKnifeSlice, computeScissorsCut } from '../../engine/knife';
 import {
   hasVectorEffects,
   resolveEffectivePathGeometry,
 } from '../../engine/effects';
 import {
+  findLayerById,
+  flattenLayers,
+  mapLayerTree,
+} from '../layerTree';
+import {
   cloneSubPaths,
   normalizePathLayer,
   splitCubicBezier,
 } from '../math';
+import { clonePaint, cloneStroke } from '../paint';
 import { useEditorStore } from '../store';
 import type {
+  GroupLayer,
+  ImageLayer,
   Layer,
   PathLayer,
+  Point2D,
   Scene,
   SelectedNodeRef,
   SubPath,
@@ -31,8 +47,9 @@ import {
   createLayerId,
   findSharedClipMaskId,
   replaceLayersAtHighestIndex,
+  validateSelectionAgainstScene,
 } from './helpers';
-import { updateLayers } from './layers';
+import { deleteLayers, updateLayers } from './layers';
 
 const BOOLEAN_LABELS: Record<BooleanOp, string> = {
   unite: 'Объединение',
@@ -49,7 +66,7 @@ export function updatePathSubpaths(
   let result: PathLayer | null = null;
   commitScene((scene) => {
     let changed = false;
-    const nextLayers = scene.layers.map((layer) => {
+    const nextLayers = mapLayerTree(scene.layers, (layer) => {
       if (layer.id !== layerId || layer.type !== 'path') return layer;
       changed = true;
       const normalized = normalizePathLayer({
@@ -70,9 +87,7 @@ export function insertAnchorOnSegment(
   segmentIndex: number,
   t: number
 ): SelectedNodeRef | null {
-  const layer = useEditorStore
-    .getState()
-    .scene.layers.find((item) => item.id === layerId);
+  const layer = findLayerById(useEditorStore.getState().scene.layers, layerId);
   if (!layer || layer.type !== 'path') return null;
 
   const sp = layer.subpaths[subpathIndex];
@@ -117,9 +132,7 @@ export function deleteAnchor(
   subpathIndex: number,
   anchorIndex: number
 ): boolean {
-  const layer = useEditorStore
-    .getState()
-    .scene.layers.find((item) => item.id === layerId);
+  const layer = findLayerById(useEditorStore.getState().scene.layers, layerId);
   if (!layer || layer.type !== 'path') return false;
 
   const sp = layer.subpaths[subpathIndex];
@@ -147,9 +160,7 @@ export function toggleAnchorSmooth(
   subpathIndex: number,
   anchorIndex: number
 ): boolean {
-  const layer = useEditorStore
-    .getState()
-    .scene.layers.find((item) => item.id === layerId);
+  const layer = findLayerById(useEditorStore.getState().scene.layers, layerId);
   if (!layer || layer.type !== 'path') return false;
 
   const sp = layer.subpaths[subpathIndex];
@@ -222,7 +233,7 @@ export function wobbleLayers(
 export function divideLayers(layerIds: string[]): PathLayer[] {
   const state = useEditorStore.getState();
   const idSet = new Set(layerIds);
-  const targets = state.scene.layers.filter(
+  const targets = flattenLayers(state.scene.layers).filter(
     (layer): layer is PathLayer =>
       idSet.has(layer.id) && layer.type === 'path' && !layer.locked
   );
@@ -255,8 +266,8 @@ export function divideLayers(layerIds: string[]): PathLayer[] {
       opacity: src.opacity,
       subpaths: piece.subpaths,
       fillRule: piece.fillRule,
-      fill: src.fill,
-      stroke: src.stroke ? { ...src.stroke } : null,
+      fill: clonePaint(src.fill),
+      stroke: cloneStroke(src.stroke),
       ...(preserveClipMaskId ? { clipMaskId: preserveClipMaskId } : {}),
     };
   });
@@ -276,7 +287,7 @@ export function booleanLayers(
 
   const state = useEditorStore.getState();
   const idSet = new Set(layerIds);
-  const targets = state.scene.layers.filter(
+  const targets = flattenLayers(state.scene.layers).filter(
     (layer): layer is PathLayer =>
       idSet.has(layer.id) && layer.type === 'path' && !layer.locked
   );
@@ -315,8 +326,8 @@ export function booleanLayers(
     opacity: styleSource.opacity,
     subpaths: result.subpaths,
     fillRule: result.fillRule,
-    fill: styleSource.fill,
-    stroke: styleSource.stroke ? { ...styleSource.stroke } : null,
+    fill: clonePaint(styleSource.fill),
+    stroke: cloneStroke(styleSource.stroke),
     ...(preserveClipMaskId ? { clipMaskId: preserveClipMaskId } : {}),
   };
 
@@ -324,17 +335,43 @@ export function booleanLayers(
   return newLayer;
 }
 
+function replacePerIdInList(
+  layers: Layer[],
+  replacements: Map<string, Layer[]>
+): Layer[] {
+  let changed = false;
+  const next: Layer[] = [];
+  for (const rawLayer of layers) {
+    let layer = rawLayer;
+    if (layer.type === 'group') {
+      const nextChildren = replacePerIdInList(layer.children, replacements);
+      if (nextChildren !== layer.children) {
+        layer = { ...layer, children: nextChildren };
+        changed = true;
+      }
+    }
+    const items = replacements.get(layer.id);
+    if (items) {
+      changed = true;
+      next.push(...items);
+    } else {
+      next.push(layer);
+    }
+  }
+  return changed ? next : layers;
+}
+
 export function splitCompoundPathLayers(layerIds: string[]): PathLayer[] {
   if (layerIds.length === 0) return [];
   const state = useEditorStore.getState();
   const idSet = new Set(layerIds);
-  const targets = state.scene.layers.filter(
+  const targets = flattenLayers(state.scene.layers).filter(
     (l): l is PathLayer =>
       idSet.has(l.id) && l.type === 'path' && !l.locked && l.subpaths.length > 1
   );
   if (targets.length === 0) return [];
 
-  const splitMap = new Map<string, PathLayer[]>();
+  const splitMap = new Map<string, Layer[]>();
   const splitSourceIds = new Set<string>();
   const createdAll: PathLayer[] = [];
 
@@ -357,8 +394,8 @@ export function splitCompoundPathLayers(layerIds: string[]): PathLayer[] {
       opacity: layer.opacity,
       subpaths: part.subpaths,
       fillRule: part.fillRule,
-      fill: layer.fill,
-      stroke: layer.stroke ? { ...layer.stroke } : null,
+      fill: clonePaint(layer.fill),
+      stroke: cloneStroke(layer.stroke),
       ...(layer.clipMaskId ? { clipMaskId: layer.clipMaskId } : {}),
     }));
     splitMap.set(layer.id, createdForLayer);
@@ -368,22 +405,16 @@ export function splitCompoundPathLayers(layerIds: string[]): PathLayer[] {
   if (createdAll.length === 0) return [];
 
   commitScene((scene) => {
-    const nextLayers: Layer[] = [];
-    for (const layer of scene.layers) {
-      const parts = splitMap.get(layer.id);
-      if (parts) {
-        nextLayers.push(...parts);
-        continue;
-      }
+    const replaced = replacePerIdInList(scene.layers, splitMap);
+    const cleaned = mapLayerTree(replaced, (layer) => {
       if (layer.clipMaskId && splitSourceIds.has(layer.clipMaskId)) {
-        const cleaned = { ...layer };
-        delete cleaned.clipMaskId;
-        nextLayers.push(cleaned);
-      } else {
-        nextLayers.push(layer);
+        const copy = { ...layer };
+        delete copy.clipMaskId;
+        return copy;
       }
-    }
-    return { ...scene, layers: nextLayers };
+      return layer;
+    });
+    return { ...scene, layers: cleaned };
   });
 
   useEditorStore.setState({
@@ -397,7 +428,7 @@ export function splitCompoundPathLayers(layerIds: string[]): PathLayer[] {
 export function combineCompoundPathLayers(layerIds: string[]): PathLayer | null {
   const state = useEditorStore.getState();
   const idSet = new Set(layerIds);
-  const targets = state.scene.layers.filter(
+  const targets = flattenLayers(state.scene.layers).filter(
     (l): l is PathLayer => idSet.has(l.id) && l.type === 'path' && !l.locked
   );
   if (targets.length < 2) return null;
@@ -425,8 +456,8 @@ export function combineCompoundPathLayers(layerIds: string[]): PathLayer | null 
     opacity: styleSource.opacity,
     subpaths: combined.subpaths,
     fillRule: 'evenodd',
-    fill: styleSource.fill,
-    stroke: styleSource.stroke ? { ...styleSource.stroke } : null,
+    fill: clonePaint(styleSource.fill),
+    stroke: cloneStroke(styleSource.stroke),
     ...(preserveClipMaskId ? { clipMaskId: preserveClipMaskId } : {}),
   };
 
@@ -442,14 +473,14 @@ export function offsetPathLayers(
   if (layerIds.length === 0 || Math.abs(distance) < 1e-4) return [];
   const state = useEditorStore.getState();
   const idSet = new Set(layerIds);
-  const targets = state.scene.layers.filter(
+  const targets = flattenLayers(state.scene.layers).filter(
     (l): l is PathLayer => idSet.has(l.id) && l.type === 'path' && !l.locked
   );
   if (targets.length === 0) return [];
 
   const copyBehind = Boolean(opts?.copyBehind);
   const join = opts?.join ?? 'round';
-  const results = new Map<string, PathLayer>();
+  const replacements = new Map<string, Layer[]>();
   const created: PathLayer[] = [];
 
   for (const layer of targets) {
@@ -471,11 +502,11 @@ export function offsetPathLayers(
         opacity: layer.opacity,
         subpaths: res.subpaths,
         fillRule: res.fillRule,
-        fill: layer.fill,
-        stroke: layer.stroke ? { ...layer.stroke } : null,
+        fill: clonePaint(layer.fill),
+        stroke: cloneStroke(layer.stroke),
         ...(layer.clipMaskId ? { clipMaskId: layer.clipMaskId } : {}),
       };
-      results.set(layer.id, copyLayer);
+      replacements.set(layer.id, [copyLayer, layer]);
       created.push(copyLayer);
     } else {
       const updatedLayer: PathLayer = {
@@ -488,7 +519,7 @@ export function offsetPathLayers(
         subpaths: res.subpaths,
         fillRule: res.fillRule,
       };
-      results.set(layer.id, updatedLayer);
+      replacements.set(layer.id, [updatedLayer]);
       created.push(updatedLayer);
     }
   }
@@ -496,20 +527,8 @@ export function offsetPathLayers(
   if (created.length === 0) return [];
 
   commitScene((scene) => {
-    const nextLayers: Layer[] = [];
-    for (const layer of scene.layers) {
-      const mapped = results.get(layer.id);
-      if (!mapped) {
-        nextLayers.push(layer);
-        continue;
-      }
-      if (copyBehind) {
-        nextLayers.push(mapped, layer);
-      } else {
-        nextLayers.push(mapped);
-      }
-    }
-    return { ...scene, layers: nextLayers };
+    const nextLayers = replacePerIdInList(scene.layers, replacements);
+    return nextLayers === scene.layers ? scene : { ...scene, layers: nextLayers };
   });
 
   if (copyBehind) {
@@ -526,7 +545,7 @@ export function outlineStrokeLayers(layerIds: string[]): PathLayer[] {
   if (layerIds.length === 0) return [];
   const state = useEditorStore.getState();
   const idSet = new Set(layerIds);
-  const targets = state.scene.layers.filter(
+  const targets = flattenLayers(state.scene.layers).filter(
     (l): l is PathLayer =>
       idSet.has(l.id) &&
       l.type === 'path' &&
@@ -536,10 +555,7 @@ export function outlineStrokeLayers(layerIds: string[]): PathLayer[] {
   );
   if (targets.length === 0) return [];
 
-  const replacements = new Map<
-    string,
-    { updatedBase: PathLayer; extraStrokeLayer?: PathLayer }
-  >();
+  const replacements = new Map<string, Layer[]>();
   const resultSelected: PathLayer[] = [];
 
   for (const layer of targets) {
@@ -556,10 +572,10 @@ export function outlineStrokeLayers(layerIds: string[]): PathLayer[] {
         scaleY: 1,
         subpaths: outlined.subpaths,
         fillRule: outlined.fillRule,
-        fill: layer.stroke.color,
+        fill: clonePaint(layer.stroke.color),
         stroke: null,
       };
-      replacements.set(layer.id, { updatedBase: converted });
+      replacements.set(layer.id, [converted]);
       resultSelected.push(converted);
     } else {
       const strippedBase: PathLayer = {
@@ -580,14 +596,11 @@ export function outlineStrokeLayers(layerIds: string[]): PathLayer[] {
         opacity: layer.opacity,
         subpaths: outlined.subpaths,
         fillRule: outlined.fillRule,
-        fill: layer.stroke.color,
+        fill: clonePaint(layer.stroke.color),
         stroke: null,
         ...(layer.clipMaskId ? { clipMaskId: layer.clipMaskId } : {}),
       };
-      replacements.set(layer.id, {
-        updatedBase: strippedBase,
-        extraStrokeLayer: strokeLayer,
-      });
+      replacements.set(layer.id, [strippedBase, strokeLayer]);
       resultSelected.push(strokeLayer);
     }
   }
@@ -595,19 +608,8 @@ export function outlineStrokeLayers(layerIds: string[]): PathLayer[] {
   if (resultSelected.length === 0) return [];
 
   commitScene((scene) => {
-    const nextLayers: Layer[] = [];
-    for (const layer of scene.layers) {
-      const entry = replacements.get(layer.id);
-      if (!entry) {
-        nextLayers.push(layer);
-        continue;
-      }
-      nextLayers.push(entry.updatedBase);
-      if (entry.extraStrokeLayer) {
-        nextLayers.push(entry.extraStrokeLayer);
-      }
-    }
-    return { ...scene, layers: nextLayers };
+    const nextLayers = replacePerIdInList(scene.layers, replacements);
+    return nextLayers === scene.layers ? scene : { ...scene, layers: nextLayers };
   });
 
   useEditorStore.setState({
@@ -623,7 +625,7 @@ export function simplifyPathLayers(layerIds: string[], tolerance = 2.5): Scene {
   const idSet = new Set(layerIds);
   return commitScene((scene) => {
     let changed = false;
-    const nextLayers = scene.layers.map((layer) => {
+    const nextLayers = mapLayerTree(scene.layers, (layer) => {
       if (!idSet.has(layer.id) || layer.type !== 'path' || layer.locked) {
         return layer;
       }
@@ -652,73 +654,375 @@ export function expandLayerAppearance(layerIds: string[]): PathLayer[] {
   const resultingIds: string[] = [];
 
   commitScene((scene) => {
-    let changed = false;
-    const nextLayers: Layer[] = [];
+    const expandInList = (layers: Layer[]): Layer[] => {
+      let changed = false;
+      const next: Layer[] = [];
 
-    for (const layer of scene.layers) {
-      if (
-        !idSet.has(layer.id) ||
-        layer.type !== 'path' ||
-        layer.locked ||
-        !hasVectorEffects(layer.effects)
-      ) {
-        nextLayers.push(layer);
-        continue;
-      }
-
-      changed = true;
-      const { subpaths, extrudeFaces } = resolveEffectivePathGeometry(layer);
-      const remainingEffects = layer.effects
-        ? {
-            ...(layer.effects.blur !== undefined ? { blur: layer.effects.blur } : {}),
-            ...(layer.effects.dropShadow ? { dropShadow: layer.effects.dropShadow } : {}),
-            ...(layer.effects.outerGlow ? { outerGlow: layer.effects.outerGlow } : {}),
+      for (const layer of layers) {
+        if (layer.type === 'group') {
+          const nextChildren = expandInList(layer.children);
+          if (nextChildren !== layer.children) {
+            changed = true;
+            next.push({ ...layer, children: nextChildren });
+          } else {
+            next.push(layer);
           }
-        : undefined;
-      const cleanEffects =
-        remainingEffects && Object.keys(remainingEffects).length > 0
-          ? remainingEffects
+          continue;
+        }
+        if (
+          !idSet.has(layer.id) ||
+          layer.type !== 'path' ||
+          layer.locked ||
+          !hasVectorEffects(layer.effects)
+        ) {
+          next.push(layer);
+          continue;
+        }
+
+        changed = true;
+        const { subpaths, extrudeFaces } = resolveEffectivePathGeometry(layer);
+        const remainingEffects = layer.effects
+          ? {
+              ...(layer.effects.blur !== undefined ? { blur: layer.effects.blur } : {}),
+              ...(layer.effects.dropShadow ? { dropShadow: layer.effects.dropShadow } : {}),
+              ...(layer.effects.outerGlow ? { outerGlow: layer.effects.outerGlow } : {}),
+            }
           : undefined;
+        const cleanEffects =
+          remainingEffects && Object.keys(remainingEffects).length > 0
+            ? remainingEffects
+            : undefined;
 
-      extrudeFaces.forEach((face, idx) => {
-        const faceLayer = normalizePathLayer({
-          id: createLayerId('face'),
-          name: `${layer.name} грань ${idx + 1}`,
-          type: 'path',
-          visible: layer.visible,
-          locked: false,
-          x: layer.x,
-          y: layer.y,
-          rotation: layer.rotation,
-          scaleX: layer.scaleX,
-          scaleY: layer.scaleY,
-          opacity: layer.opacity,
-          clipMaskId: layer.clipMaskId,
-          subpaths: face.subpaths,
-          fillRule: 'nonzero',
-          fill: face.fill,
-          stroke: null,
+        extrudeFaces.forEach((face, idx) => {
+          const faceLayer = normalizePathLayer({
+            id: createLayerId('face'),
+            name: `${layer.name} грань ${idx + 1}`,
+            type: 'path',
+            visible: layer.visible,
+            locked: false,
+            x: layer.x,
+            y: layer.y,
+            rotation: layer.rotation,
+            scaleX: layer.scaleX,
+            scaleY: layer.scaleY,
+            opacity: layer.opacity,
+            clipMaskId: layer.clipMaskId,
+            subpaths: face.subpaths,
+            fillRule: 'nonzero',
+            fill: face.fill,
+            stroke: null,
+          });
+          next.push(faceLayer);
+          resultingIds.push(faceLayer.id);
         });
-        nextLayers.push(faceLayer);
-        resultingIds.push(faceLayer.id);
-      });
 
-      const updated = normalizePathLayer({
-        ...layer,
-        subpaths,
-        effects: cleanEffects,
-      });
-      nextLayers.push(updated);
-      resultingIds.push(updated.id);
-    }
+        const updated = normalizePathLayer({
+          ...layer,
+          subpaths,
+          effects: cleanEffects,
+        });
+        next.push(updated);
+        resultingIds.push(updated.id);
+      }
+      return changed ? next : layers;
+    };
 
-    return changed ? { ...scene, layers: nextLayers } : scene;
+    const nextLayers = expandInList(scene.layers);
+    return nextLayers === scene.layers ? scene : { ...scene, layers: nextLayers };
   });
 
   if (resultingIds.length === 0) return [];
   useEditorStore.setState({ selectedIds: resultingIds, selectedNode: null });
   const idOut = new Set(resultingIds);
-  return useEditorStore
-    .getState()
-    .scene.layers.filter((l): l is PathLayer => l.type === 'path' && idOut.has(l.id));
+  return flattenLayers(useEditorStore.getState().scene.layers).filter(
+    (l): l is PathLayer => l.type === 'path' && idOut.has(l.id)
+  );
+}
+
+export function applyShapeBuilderOperation(
+  sourceLayerIds: string[],
+  pieces: Array<BooleanResult & { sourceIndex: number }>
+): PathLayer[] {
+  if (sourceLayerIds.length === 0) return [];
+  const state = useEditorStore.getState();
+  const idSet = new Set(sourceLayerIds);
+  const targets = flattenLayers(state.scene.layers).filter(
+    (layer): layer is PathLayer =>
+      idSet.has(layer.id) && layer.type === 'path' && !layer.locked
+  );
+  if (targets.length === 0) return [];
+
+  const targetSet = new Set(targets.map((t) => t.id));
+  if (pieces.length === 0) {
+    deleteLayers(Array.from(targetSet));
+    return [];
+  }
+
+  const preserveClipMaskId = findSharedClipMaskId(targets, targetSet);
+  const createdLayers: PathLayer[] = pieces.map((piece, idx) => {
+    const src = targets[piece.sourceIndex] ?? targets[0];
+    return {
+      id: createLayerId('path'),
+      name: `Фигура ${idx + 1}`,
+      type: 'path',
+      visible: true,
+      locked: false,
+      x: piece.x,
+      y: piece.y,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+      opacity: src.opacity,
+      ...(src.blendMode ? { blendMode: src.blendMode } : {}),
+      subpaths: piece.subpaths,
+      fillRule: piece.fillRule,
+      fill: clonePaint(src.fill),
+      stroke: cloneStroke(src.stroke),
+      ...(preserveClipMaskId ? { clipMaskId: preserveClipMaskId } : {}),
+    };
+  });
+
+  replaceLayersAtHighestIndex(targetSet, createdLayers);
+  return createdLayers;
+}
+
+export function cutPathAtPoint(
+  layerId: string,
+  scopePoint: Point2D,
+  tolerance = 8
+): PathLayer[] {
+  const state = useEditorStore.getState();
+  const layer = findLayerById(state.scene.layers, layerId);
+  if (!layer || layer.type !== 'path' || layer.locked) return [];
+
+  const parts = computeScissorsCut(layer, scopePoint, tolerance);
+  if (!parts || parts.length === 0) return [];
+
+  const hasOpen = parts.some((p) => p.subpaths.some((sp) => !sp.closed));
+  const fallbackStroke =
+    hasOpen && layer.fill === null && layer.stroke === null
+      ? { color: '#1c1b1a', width: 2, lineCap: 'round' as const, lineJoin: 'round' as const }
+      : null;
+
+  const created: PathLayer[] = parts.map((part, idx) => ({
+    id: createLayerId('path'),
+    name: parts.length > 1 ? `${layer.name} · ${idx + 1}` : layer.name,
+    type: 'path',
+    visible: layer.visible,
+    locked: false,
+    x: part.x,
+    y: part.y,
+    rotation: 0,
+    scaleX: 1,
+    scaleY: 1,
+    opacity: layer.opacity,
+    ...(layer.blendMode ? { blendMode: layer.blendMode } : {}),
+    subpaths: part.subpaths,
+    fillRule: part.fillRule,
+    fill: clonePaint(layer.fill),
+    stroke: cloneStroke(layer.stroke) ?? fallbackStroke,
+    ...(layer.clipMaskId ? { clipMaskId: layer.clipMaskId } : {}),
+  }));
+
+  const replacedIds = new Set([layer.id]);
+  const map = new Map<string, Layer[]>([[layer.id, created]]);
+
+  commitScene((scene) => {
+    const replaced = replacePerIdInList(scene.layers, map);
+    const cleaned = mapLayerTree(replaced, (node) => {
+      let nextNode = node;
+      if (nextNode.clipMaskId && replacedIds.has(nextNode.clipMaskId)) {
+        const copy = { ...nextNode };
+        delete copy.clipMaskId;
+        nextNode = copy;
+      }
+      if (nextNode.type === 'text' && nextNode.pathId && replacedIds.has(nextNode.pathId)) {
+        const copy = { ...nextNode };
+        delete copy.pathId;
+        delete copy.pathOffset;
+        delete copy.pathFlip;
+        nextNode = copy;
+      }
+      return nextNode;
+    });
+    return { ...scene, layers: cleaned };
+  });
+
+  useEditorStore.setState({
+    selectedIds: created.map((l) => l.id),
+    selectedNode: null,
+  });
+  return created;
+}
+
+export function slicePathLayers(
+  layerIds: string[],
+  cutScopePoints: Point2D[]
+): PathLayer[] {
+  if (layerIds.length === 0 || cutScopePoints.length < 2) return [];
+  const state = useEditorStore.getState();
+  const idSet = new Set(layerIds);
+  const targets = flattenLayers(state.scene.layers).filter(
+    (l): l is PathLayer => idSet.has(l.id) && l.type === 'path' && !l.locked
+  );
+  if (targets.length === 0) return [];
+
+  const replacements = new Map<string, Layer[]>();
+  const slicedIds = new Set<string>();
+  const createdAll: PathLayer[] = [];
+
+  for (const layer of targets) {
+    const pieces = computeKnifeSlice(layer, cutScopePoints);
+    if (!pieces || pieces.length < 2) continue;
+
+    slicedIds.add(layer.id);
+    const createdForLayer: PathLayer[] = pieces.map((piece, idx) => ({
+      id: createLayerId('path'),
+      name: `${layer.name} · ${idx + 1}`,
+      type: 'path',
+      visible: layer.visible,
+      locked: false,
+      x: piece.x,
+      y: piece.y,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+      opacity: layer.opacity,
+      ...(layer.blendMode ? { blendMode: layer.blendMode } : {}),
+      subpaths: piece.subpaths,
+      fillRule: piece.fillRule,
+      fill: clonePaint(layer.fill),
+      stroke: cloneStroke(layer.stroke),
+      ...(layer.clipMaskId ? { clipMaskId: layer.clipMaskId } : {}),
+    }));
+    replacements.set(layer.id, createdForLayer);
+    createdAll.push(...createdForLayer);
+  }
+
+  if (createdAll.length === 0) return [];
+
+  commitScene((scene) => {
+    const replaced = replacePerIdInList(scene.layers, replacements);
+    const cleaned = mapLayerTree(replaced, (node) => {
+      let nextNode = node;
+      if (nextNode.clipMaskId && slicedIds.has(nextNode.clipMaskId)) {
+        const copy = { ...nextNode };
+        delete copy.clipMaskId;
+        nextNode = copy;
+      }
+      if (nextNode.type === 'text' && nextNode.pathId && slicedIds.has(nextNode.pathId)) {
+        const copy = { ...nextNode };
+        delete copy.pathId;
+        delete copy.pathOffset;
+        delete copy.pathFlip;
+        nextNode = copy;
+      }
+      return nextNode;
+    });
+    return { ...scene, layers: cleaned };
+  });
+
+  useEditorStore.setState({
+    selectedIds: createdAll.map((l) => l.id),
+    selectedNode: null,
+  });
+  return createdAll;
+}
+
+export function traceImageLayer(
+  layerId: string,
+  options?: Partial<ImageTraceOptions>,
+  precomputedRgba?: { data: Uint8ClampedArray; width: number; height: number }
+): Layer | null {
+  const state = useEditorStore.getState();
+  const found = findLayerById(state.scene.layers, layerId);
+  if (!found || found.type !== 'image' || found.locked) return null;
+  const imgLayer: ImageLayer = found;
+
+  const pixels = precomputedRgba ?? rasterizeImageAssetToRgba(imgLayer.assetId);
+  if (!pixels) return null;
+
+  const traced = traceRgbaToVectorPaths(
+    pixels.data,
+    pixels.width,
+    pixels.height,
+    imgLayer.width,
+    imgLayer.height,
+    options
+  );
+  if (traced.length === 0) return null;
+
+  let replacement: Layer;
+  if (traced.length === 1) {
+    replacement = normalizePathLayer({
+      id: createLayerId('path'),
+      name: `${imgLayer.name} (вектор)`,
+      type: 'path',
+      visible: imgLayer.visible,
+      locked: false,
+      x: imgLayer.x,
+      y: imgLayer.y,
+      rotation: imgLayer.rotation,
+      scaleX: imgLayer.scaleX,
+      scaleY: imgLayer.scaleY,
+      opacity: imgLayer.opacity,
+      ...(imgLayer.blendMode ? { blendMode: imgLayer.blendMode } : {}),
+      ...(imgLayer.clipMaskId ? { clipMaskId: imgLayer.clipMaskId } : {}),
+      subpaths: traced[0].subpaths,
+      fillRule: traced[0].fillRule,
+      fill: traced[0].fill,
+      stroke: null,
+    });
+  } else {
+    const children: PathLayer[] = traced.map((item, idx) =>
+      normalizePathLayer({
+        id: createLayerId('path'),
+        name: `${imgLayer.name} · ${idx + 1}`,
+        type: 'path',
+        visible: true,
+        locked: false,
+        x: 0,
+        y: 0,
+        rotation: 0,
+        scaleX: 1,
+        scaleY: 1,
+        opacity: 1,
+        subpaths: item.subpaths,
+        fillRule: item.fillRule,
+        fill: item.fill,
+        stroke: null,
+      })
+    );
+    const group: GroupLayer = {
+      id: createLayerId('group'),
+      name: `${imgLayer.name} (вектор)`,
+      type: 'group',
+      visible: imgLayer.visible,
+      locked: false,
+      x: imgLayer.x,
+      y: imgLayer.y,
+      rotation: imgLayer.rotation,
+      scaleX: imgLayer.scaleX,
+      scaleY: imgLayer.scaleY,
+      opacity: imgLayer.opacity,
+      ...(imgLayer.blendMode ? { blendMode: imgLayer.blendMode } : {}),
+      ...(imgLayer.clipMaskId ? { clipMaskId: imgLayer.clipMaskId } : {}),
+      children,
+    };
+    replacement = group;
+  }
+
+  const nextScene = commitScene((scene) => ({
+    ...scene,
+    layers: mapLayerTree(scene.layers, (layer) =>
+      layer.id === imgLayer.id ? replacement : layer
+    ),
+  }));
+
+  useEditorStore.setState({
+    selectedIds: [replacement.id],
+    selectedNode: null,
+  });
+  validateSelectionAgainstScene(nextScene);
+  return replacement;
 }

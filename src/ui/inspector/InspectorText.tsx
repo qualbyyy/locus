@@ -8,19 +8,21 @@ import {
   Spline,
 } from 'lucide-react';
 import type { TextCaseMode } from '../../core/commands';
+import { useEditorStore } from '../../core/store';
 import type { Layer, TextLayer } from '../../core/types';
+import { Checkbox, Select, Slider } from '../controls';
 import {
   FontFamilySelect,
-  HexColorRow,
   NumberField,
   SegmentedButton,
   TextContentField,
 } from '../InspectorControls';
-import { DocumentColorSwatches } from './InspectorAppearance';
+import { PaintEditor } from './PaintEditor';
 
 interface InspectorTextProps {
   layer: TextLayer;
   documentColors: string[];
+  availablePaths?: Array<{ id: string; name: string }>;
   onUpdateLayers: (
     layerIds: string[],
     patch: Partial<Layer> | ((layer: Layer) => Layer)
@@ -28,6 +30,9 @@ interface InspectorTextProps {
   onEditTextOnCanvas: (layerId: string) => void;
   onTransformTextCase: (layerIds: string[], mode: TextCaseMode) => void;
   onConvertToOutlines: (layerIds: string[]) => void;
+  onAttachTextToPath?: (textLayerId: string, pathLayerId: string) => void;
+  onDetachTextFromPath?: (textLayerId: string) => void;
+  onUploadFont?: () => void;
 }
 
 const ALIGN_BUTTONS: Array<{
@@ -43,13 +48,20 @@ const ALIGN_BUTTONS: Array<{
 export function InspectorText({
   layer,
   documentColors,
+  availablePaths = [],
   onUpdateLayers,
   onEditTextOnCanvas,
   onTransformTextCase,
   onConvertToOutlines,
+  onAttachTextToPath,
+  onDetachTextFromPath,
+  onUploadFont,
 }: InspectorTextProps) {
   return (
-    <div className="flex flex-col gap-2.5 border-t border-paper-border pt-2.5">
+    <div
+      data-tour="inspector.text"
+      className="flex flex-col gap-2.5 border-t border-paper-border pt-2.5"
+    >
       <div className="flex items-center justify-between">
         <span className="text-[11px] font-medium text-paper-muted">
           Типографика
@@ -73,6 +85,7 @@ export function InspectorText({
         <FontFamilySelect
           value={layer.fontFamily}
           onChange={(fontFamily) => onUpdateLayers([layer.id], { fontFamily })}
+          onUploadFont={onUploadFont}
         />
       </div>
 
@@ -181,16 +194,76 @@ export function InspectorText({
 
       <div className="flex flex-col gap-1">
         <span className="text-[11px] text-paper-muted">Цвет текста</span>
-        <HexColorRow
+        <PaintEditor
           value={layer.fill}
+          documentColors={documentColors}
+          onFocusGradient={() =>
+            useEditorStore.getState().setActiveGradientTarget('fill')
+          }
           onChange={(fill) => onUpdateLayers([layer.id], { fill })}
         />
-        <DocumentColorSwatches
-          colors={documentColors}
-          activeColor={layer.fill}
-          onSelect={(fill) => onUpdateLayers([layer.id], { fill })}
-        />
       </div>
+
+      {(availablePaths.length > 0 || layer.pathId) && (
+        <div className="flex flex-col gap-2 border-t border-paper-border pt-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-medium text-paper-muted">
+              Текст по контуру
+            </span>
+            {layer.pathId && onDetachTextFromPath && (
+              <button
+                type="button"
+                onClick={() => onDetachTextFromPath(layer.id)}
+                className="text-[11px] text-paper-muted hover:text-paper-danger"
+              >
+                Открепить
+              </button>
+            )}
+          </div>
+          <Select
+            ariaLabel="Контур для текста"
+            value={layer.pathId ?? ''}
+            options={[
+              { value: '', label: 'Нет (свободный текст)' },
+              ...availablePaths.map((p) => ({ value: p.id, label: p.name })),
+            ]}
+            onChange={(nextId) => {
+              if (!nextId) {
+                onDetachTextFromPath?.(layer.id);
+              } else {
+                onAttachTextToPath?.(layer.id, nextId);
+              }
+            }}
+          />
+          {layer.pathId && (
+            <>
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center justify-between text-[11px] text-paper-muted">
+                  <span>Смещение по кривой</span>
+                  <span className="font-display text-paper-ink">
+                    {Math.round(layer.pathOffset ?? 0)}%
+                  </span>
+                </div>
+                <Slider
+                  value={layer.pathOffset ?? 0}
+                  min={0}
+                  max={100}
+                  step={1}
+                  ariaLabel="Смещение текста по контуру"
+                  onChange={(pathOffset) =>
+                    onUpdateLayers([layer.id], { pathOffset })
+                  }
+                />
+              </div>
+              <Checkbox
+                checked={Boolean(layer.pathFlip)}
+                onChange={(pathFlip) => onUpdateLayers([layer.id], { pathFlip })}
+                label="Перевернуть сторону"
+              />
+            </>
+          )}
+        </div>
+      )}
 
       <button
         type="button"
