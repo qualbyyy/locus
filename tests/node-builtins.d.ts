@@ -22,3 +22,7 @@ declare module 'node:path' {
   };
   export default pathApi;
 }
+
+declare module 'node:stream/web' {
+  export const ReadableStream: typeof globalThis.ReadableStream;
+}
