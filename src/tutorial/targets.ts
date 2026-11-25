@@ -3,19 +3,23 @@ export type TutorialTargetId =
   | 'topbar.undo'
   | 'topbar.redo'
   | 'topbar.commandBar'
-  | 'topbar.export'
   | 'topbar.zoom'
   | 'topbar.settings'
   | 'menu.file'
   | 'menu.object'
+  | 'menu.text'
   | 'menu.effects'
   | 'menu.view'
+  | 'menu.window'
   | 'menu.help'
   | 'toolbar.root'
   | 'tool.select'
   | 'tool.node'
   | 'tool.pen'
+  | 'tool.pencil'
   | 'tool.blob'
+  | 'tool.shapeBuilder'
+  | 'tool.knife'
   | 'tool.text'
   | 'tool.eyedropper'
   | 'toolbar.fit'
@@ -27,8 +31,10 @@ export type TutorialTargetId =
   | 'inspector.root'
   | 'inspector.transform'
   | 'inspector.appearance'
+  | 'inspector.effects'
   | 'inspector.vectorOps'
-  | 'inspector.text';
+  | 'inspector.text'
+  | 'inspector.export';
 
 export interface TutorialTargetDefinition {
   selector: string;
@@ -43,13 +49,14 @@ export const TUTORIAL_TARGETS: Record<
   'topbar.undo': { selector: '[data-tour="topbar.undo"]' },
   'topbar.redo': { selector: '[data-tour="topbar.redo"]' },
   'topbar.commandBar': { selector: '[data-tour="topbar.commandBar"]' },
-  'topbar.export': { selector: '[data-tour="topbar.export"]' },
   'topbar.zoom': { selector: '[data-tour="topbar.zoom"]' },
   'topbar.settings': { selector: '[data-tour="topbar.settings"]' },
   'menu.file': { selector: '[data-tour="menu.file"]' },
   'menu.object': { selector: '[data-tour="menu.object"]' },
+  'menu.text': { selector: '[data-tour="menu.text"]' },
   'menu.effects': { selector: '[data-tour="menu.effects"]' },
   'menu.view': { selector: '[data-tour="menu.view"]' },
+  'menu.window': { selector: '[data-tour="menu.window"]' },
   'menu.help': { selector: '[data-tour="menu.help"]' },
   'toolbar.root': {
     selector: '[data-tour="toolbar.root"]',
@@ -58,7 +65,13 @@ export const TUTORIAL_TARGETS: Record<
   'tool.select': { selector: '[data-tour="tool.select"]', panel: 'toolbar' },
   'tool.node': { selector: '[data-tour="tool.node"]', panel: 'toolbar' },
   'tool.pen': { selector: '[data-tour="tool.pen"]', panel: 'toolbar' },
+  'tool.pencil': { selector: '[data-tour="tool.pencil"]', panel: 'toolbar' },
   'tool.blob': { selector: '[data-tour="tool.blob"]', panel: 'toolbar' },
+  'tool.shapeBuilder': {
+    selector: '[data-tour="tool.shapeBuilder"]',
+    panel: 'toolbar',
+  },
+  'tool.knife': { selector: '[data-tour="tool.knife"]', panel: 'toolbar' },
   'tool.text': { selector: '[data-tour="tool.text"]', panel: 'toolbar' },
   'tool.eyedropper': {
     selector: '[data-tour="tool.eyedropper"]',
@@ -82,12 +95,20 @@ export const TUTORIAL_TARGETS: Record<
     selector: '[data-tour="inspector.appearance"]',
     panel: 'inspector',
   },
+  'inspector.effects': {
+    selector: '[data-tour="inspector.effects"]',
+    panel: 'inspector',
+  },
   'inspector.vectorOps': {
     selector: '[data-tour="inspector.vectorOps"]',
     panel: 'inspector',
   },
   'inspector.text': {
     selector: '[data-tour="inspector.text"]',
+    panel: 'inspector',
+  },
+  'inspector.export': {
+    selector: '[data-tour="inspector.export"]',
     panel: 'inspector',
   },
 };

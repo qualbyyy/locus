@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   TUTORIAL_CHAPTERS,
@@ -58,6 +60,73 @@ describe('tutorial/content', () => {
             expect(shortcutIds.has(step.shortcutActionId)).toBe(true);
           }
         }
+      }
+    }
+  });
+
+  it('covers section 5 tools, live inspector effects, rulers, drafts, export and AI features', () => {
+    const requiredLessons = [
+      'start.drafts',
+      'shapes.trace',
+      'curves.pencil',
+      'text.path',
+      'paths.shapeBuilder',
+      'paths.knife',
+      'ai.tools',
+      'export.selection',
+    ];
+    for (const id of requiredLessons) {
+      expect(TUTORIAL_LESSON_BY_ID[id]).toBeDefined();
+    }
+
+    expect(TUTORIAL_TARGETS['tool.pencil']).toBeDefined();
+    expect(TUTORIAL_TARGETS['tool.shapeBuilder']).toBeDefined();
+    expect(TUTORIAL_TARGETS['tool.knife']).toBeDefined();
+    expect(TUTORIAL_TARGETS['inspector.effects']).toBeDefined();
+
+    const effectsLesson = TUTORIAL_LESSON_BY_ID['effects.warp'];
+    expect(effectsLesson.steps.some((s) => s.target === 'inspector.effects')).toBe(
+      true
+    );
+
+    const guidesLesson = TUTORIAL_LESSON_BY_ID['automation.guides'];
+    expect(
+      guidesLesson.steps.some((s) => s.shortcutActionId === 'view.toggleRulers')
+    ).toBe(true);
+
+    const copySvgLesson = TUTORIAL_LESSON_BY_ID['export.selection'];
+    expect(
+      copySvgLesson.steps.some((s) => s.shortcutActionId === 'edit.copySvg')
+    ).toBe(true);
+  });
+
+  it('has matching data-tour attributes in UI components for every target', () => {
+    const collectSources = (dir: string): string[] => {
+      const files: string[] = [];
+      for (const entry of readdirSync(dir)) {
+        const full = path.join(dir, entry);
+        if (statSync(full).isDirectory()) files.push(...collectSources(full));
+        else if (full.endsWith('.tsx')) files.push(full);
+      }
+      return files;
+    };
+
+    const uiText = collectSources(path.resolve(__dirname, '../src'))
+      .map((file) => readFileSync(file, 'utf8'))
+      .join('\n');
+
+    for (const id of Object.keys(TUTORIAL_TARGETS)) {
+      if (id.startsWith('tool.')) {
+        const toolName = id.slice('tool.'.length);
+        expect(uiText).toContain(`id: '${toolName}'`);
+        expect(uiText).toContain('data-tour={`tool.${id}`}');
+      } else if (id.startsWith('menu.')) {
+        const menuName = id.slice('menu.'.length);
+        const menuId = menuName === 'effects' ? 'effect' : menuName;
+        expect(uiText).toContain(`id: '${menuId}'`);
+        expect(uiText).toContain("data-tour={menu.id === 'effect' ? 'menu.effects' : `menu.${menu.id}`}");
+      } else {
+        expect(uiText).toContain(`data-tour="${id}"`);
       }
     }
   });

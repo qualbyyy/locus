@@ -44,7 +44,7 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
   {
     id: 'start',
     title: 'Старт',
-    summary: 'Артборд, панели, зум и первый документ.',
+    summary: 'Артборд, панели, зум и восстановление черновика.',
     icon: 'start',
     lessons: [
       {
@@ -100,12 +100,37 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
           },
         ],
       },
+      {
+        id: 'start.drafts',
+        title: 'Автосохранение и черновик',
+        summary: 'Как не потерять макет при случайном закрытии.',
+        durationMin: 2,
+        steps: [
+          {
+            id: 'start.drafts.autosave',
+            title: 'Тихое автосохранение',
+            body: 'Locus автоматически сохраняет локальный черновик сцены каждые 45 секунд, если в документе есть правки.',
+          },
+          {
+            id: 'start.drafts.restore',
+            title: 'Восстановление при старте',
+            body: 'Если приложение закрылось без сохранения, на стартовом экране появится карточка «Найден несохранённый черновик» с кнопкой «Восстановить».',
+          },
+          {
+            id: 'start.drafts.settings',
+            title: 'Настройки черновика',
+            body: 'Отключить автосохранение, поменять интервал (15–300 сек) или восстановить последний черновик вручную можно в настройках.',
+            shortcutActionId: 'app.openSettings',
+            target: 'topbar.settings',
+          },
+        ],
+      },
     ],
   },
   {
     id: 'shapes',
     title: 'Фигуры',
-    summary: 'Пять умных примитивов с живыми параметрами.',
+    summary: 'Умные примитивы и векторизация растра (Image Trace).',
     icon: 'shapes',
     lessons: [
       {
@@ -156,6 +181,32 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
             title: 'Заливка',
             body: 'Цвет заливки задаётся здесь же. Кнопка «Без заливки» оставляет только контур.',
             target: 'inspector.appearance',
+          },
+        ],
+      },
+      {
+        id: 'shapes.trace',
+        title: 'Векторизация (Image Trace)',
+        summary: 'Перевести растровую картинку в редактируемый вектор.',
+        durationMin: 3,
+        steps: [
+          {
+            id: 'shapes.trace.image',
+            title: 'Выдели изображение',
+            body: 'Вставь картинку и кликни по ней на холсте — в инспекторе откроется блок «Векторизация (Image Trace)».',
+            shortcutActionId: 'action.placeImage',
+            target: 'inspector.root',
+          },
+          {
+            id: 'shapes.trace.mode',
+            title: 'Режим и детали',
+            body: 'Выбери «Силуэт (Ч/Б)» с порогом яркости и инверсией или «Цвета» (2–8 цветов). Ползунок «Сглаживание» убирает лишние узлы.',
+          },
+          {
+            id: 'shapes.trace.run',
+            title: 'Векторизовать',
+            body: 'Нажми «Векторизовать» в инспекторе (или «Объект → Векторизовать изображение») — получится обычный Path-слой.',
+            target: 'menu.object',
           },
         ],
       },
@@ -222,7 +273,7 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
   {
     id: 'curves',
     title: 'Кривые',
-    summary: 'Перо, узлы и усики.',
+    summary: 'Перо, карандаш, узлы и усики.',
     icon: 'curves',
     lessons: [
       {
@@ -248,6 +299,33 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
             id: 'curves.pen.close',
             title: 'Замкнуть',
             body: 'Клик по первой точке замыкает контур. Enter или Escape завершает открытый.',
+          },
+        ],
+      },
+      {
+        id: 'curves.pencil',
+        title: 'Карандаш N',
+        summary: 'Свободное рисование с авто-сглаживанием.',
+        durationMin: 3,
+        steps: [
+          {
+            id: 'curves.pencil.draw',
+            title: 'Линия от руки',
+            body: 'Нажми N или выбери «Карандаш» и проведи по холсту — штрих сам превратится в плавную кривую Безье.',
+            shortcutActionId: 'tool.pencil',
+            target: 'tool.pencil',
+          },
+          {
+            id: 'curves.pencil.close',
+            title: 'Замкнуть фигуру',
+            body: 'Верни курсор к начальной точке в конце штриха — контур замкнётся автоматически и получит заливку.',
+            target: 'canvas.root',
+          },
+          {
+            id: 'curves.pencil.smooth',
+            title: 'Авто-сглаживание',
+            body: 'Ползунок «Авто-сглаживание» в инспекторе меняет точность: меньше — ближе к движению руки, больше — меньше узлов.',
+            target: 'inspector.root',
           },
         ],
       },
@@ -338,7 +416,7 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
   {
     id: 'text',
     title: 'Текст',
-    summary: 'Шесть шрифтов, трекинг и перевод в кривые.',
+    summary: 'Шрифты, трекинг, текст по контуру и перевод в кривые.',
     icon: 'text',
     lessons: [
       {
@@ -387,6 +465,31 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
             id: 'text.style.outlines',
             title: 'В кривые',
             body: 'Ctrl+Shift+O превращает текст в редактируемый контур. Обратно в текст уже нельзя.',
+            shortcutActionId: 'vector.textToOutlines',
+          },
+        ],
+      },
+      {
+        id: 'text.path',
+        title: 'Текст по контуру',
+        summary: 'Разместить надпись вдоль любой кривой.',
+        durationMin: 3,
+        steps: [
+          {
+            id: 'text.path.attach',
+            title: 'Привязать к кривой',
+            body: 'Выдели текстовый слой и в блоке «Текст по контуру» в инспекторе выбери нужную кривую — либо выдели оба слоя и нажми «Пустить текст по контуру» в меню «Текст».',
+            target: 'inspector.text',
+          },
+          {
+            id: 'text.path.offset',
+            title: 'Смещение и сторона',
+            body: 'Ползунок «Смещение по кривой» двигает надпись вдоль пути, а флажок «Перевернуть сторону» переносит её внутрь или наружу.',
+          },
+          {
+            id: 'text.path.detach',
+            title: 'Открепить или в кривые',
+            body: 'Кнопка «Открепить» возвращает свободный текст, а Ctrl+Shift+O переводит надпись по дуге в кривые Безье.',
             shortcutActionId: 'vector.textToOutlines',
           },
         ],
@@ -452,7 +555,7 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
   {
     id: 'paths',
     title: 'Контуры',
-    summary: 'Булевы операции и составные контуры.',
+    summary: 'Булевы операции, конструктор фигур, нож и составные контуры.',
     icon: 'paths',
     lessons: [
       {
@@ -476,6 +579,59 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
             id: 'paths.boolean.other',
             title: 'Остальные',
             body: 'Intersect оставляет общее, Exclude — необщее, Divide делит на части.',
+          },
+        ],
+      },
+      {
+        id: 'paths.shapeBuilder',
+        title: 'Конструктор фигур',
+        summary: 'Объединять и вырезать пересечения прямо на холсте.',
+        durationMin: 3,
+        steps: [
+          {
+            id: 'paths.shapeBuilder.tool',
+            title: 'Инструмент Shift+M',
+            body: 'Выдели пересекающиеся контуры и нажми Shift+M — области подсветятся как отдельные фрагменты.',
+            shortcutActionId: 'tool.shapeBuilder',
+            target: 'tool.shapeBuilder',
+          },
+          {
+            id: 'paths.shapeBuilder.merge',
+            title: 'Объединить области',
+            body: 'Проведи курсором через несколько фрагментов — они сольются в один контур.',
+            target: 'canvas.root',
+          },
+          {
+            id: 'paths.shapeBuilder.erase',
+            title: 'Удалить фрагмент',
+            body: 'Зажми Alt и кликни или проведи по области, чтобы вырезать её из пересечения.',
+            tip: 'Если ничего не выделено, инструмент работает со всеми видимыми контурами в текущей группе или артборде.',
+          },
+        ],
+      },
+      {
+        id: 'paths.knife',
+        title: 'Нож и Ножницы C',
+        summary: 'Разрезать фигуры линией или разомкнуть контур в точке.',
+        durationMin: 3,
+        steps: [
+          {
+            id: 'paths.knife.slice',
+            title: 'Нож (протяжка)',
+            body: 'Нажми C и проведи через фигуру — она разрежется на отдельные замкнутые части.',
+            shortcutActionId: 'tool.knife',
+            target: 'tool.knife',
+          },
+          {
+            id: 'paths.knife.straight',
+            title: 'Прямой срез',
+            body: 'Зажми Shift во время протяжки, чтобы линия разреза оставалась ровной.',
+            target: 'canvas.root',
+          },
+          {
+            id: 'paths.knife.scissors',
+            title: 'Ножницы (клик)',
+            body: 'Короткий клик по краю контура разрезает его в этой точке — удобно, чтобы разомкнуть путь или отделить сегмент.',
           },
         ],
       },
@@ -509,53 +665,58 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
   {
     id: 'effects',
     title: 'Эффекты',
-    summary: 'Деформация, объём, тень и размытие.',
+    summary: 'Живое редактирование в инспекторе: деформация, объём, тень и размытие.',
     icon: 'effects',
     lessons: [
       {
         id: 'effects.warp',
-        title: 'Деформация',
-        summary: 'Живые искажения контура.',
+        title: 'Деформация и живой инспектор',
+        summary: 'Неразрушающие эффекты прямо в правой панели.',
         durationMin: 3,
         steps: [
           {
             id: 'effects.warp.menu',
-            title: 'Эффекты → Деформация',
-            body: 'Выбери стиль: флаг, волна, дуга, арка, выпуклость и другие.',
-            target: 'menu.effects',
+            title: 'Добавить эффект',
+            body: 'Открой блок «Эффекты» в инспекторе и нажми «+ Добавить» — или выбери стиль в меню «Эффекты» (флаг, волна, дуга, арка и другие).',
+            target: 'inspector.effects',
           },
           {
             id: 'effects.warp.dialog',
-            title: 'Настройки',
-            body: 'В окне задай силу и примени. Эффект остаётся живым, пока не разобрать оформление.',
+            title: 'Живая настройка',
+            body: 'Крути ползунки прямо в карточке эффекта: результат на холсте обновляется сразу, без модальных окон, а эффект остаётся живым.',
+            target: 'inspector.effects',
           },
           {
             id: 'effects.warp.expand',
-            title: 'Разобрать',
-            body: 'Expand превращает эффект в обычные узлы контура.',
+            title: 'Разобрать оформление',
+            body: 'Кнопка «Разобрать оформление» (Expand) под списком эффектов превращает векторные искажения в обычные узлы контура.',
+            target: 'inspector.effects',
           },
         ],
       },
       {
         id: 'effects.depth',
         title: 'Объём и свет',
-        summary: '3D, тень и свечение.',
+        summary: '3D, искажения, тень и свечение в инспекторе.',
         durationMin: 3,
         steps: [
           {
             id: 'effects.depth.3d',
-            title: '3D',
-            body: 'Поворот и выдавливание добавляют перспективу.',
+            title: '3D и искажения',
+            body: '«3D Поворот», «3D Выдавливание», «Зигзаг», «Загрубление» и «Скругление углов» настраиваются в своих карточках инспектора.',
+            target: 'inspector.effects',
           },
           {
             id: 'effects.depth.shadow',
-            title: 'Тень',
-            body: 'Падающая тень настраивается в «Эффекты → Стилизация».',
+            title: 'Падающая тень',
+            body: 'В карточке «Падающая тень» задай цвет, непрозрачность, смещение X/Y и размытие. Клик по заголовку сворачивает карточку.',
+            target: 'inspector.effects',
           },
           {
             id: 'effects.depth.glow',
             title: 'Свечение и размытие',
-            body: 'Внешнее свечение и размытие по Гауссу — там же.',
+            body: '«Внешнее свечение» и «Размытие по Гауссу» добавляются там же через «+ Добавить», а лишний эффект убирается крестиком или кнопкой «Очистить».',
+            target: 'menu.effects',
           },
         ],
       },
@@ -616,8 +777,8 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
       },
       {
         id: 'automation.guides',
-        title: 'Привязки',
-        summary: 'Smart Guides, сетка и каркас.',
+        title: 'Линейки, направляющие и привязки',
+        summary: 'Smart Guides, ручные направляющие, сетка и каркас.',
         durationMin: 3,
         steps: [
           {
@@ -626,15 +787,23 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
             body: 'При перетаскивании появляются подсказки по краям и центрам соседних слоёв.',
           },
           {
+            id: 'automation.guides.rulers',
+            title: 'Линейки и направляющие',
+            body: 'Ctrl+R включает линейки по краям холста. Потяни от верхней или левой линейки внутрь — появится направляющая, к которой липнут объекты.',
+            shortcutActionId: 'view.toggleRulers',
+            target: 'menu.view',
+          },
+          {
             id: 'automation.guides.grid',
             title: 'Сетка',
-            body: 'Включи сетку и привязку к ней в настройках или на панели.',
+            body: 'Включи сетку и привязку к ней в настройках или внизу левой панели.',
             shortcutActionId: 'view.toggleGrid',
+            target: 'toolbar.grid',
           },
           {
             id: 'automation.guides.outline',
             title: 'Каркас',
-            body: 'Ctrl+Y показывает только контуры — удобно проверять геометрию.',
+            body: 'Ctrl+Y показывает только контуры без заливок — удобно проверять стыки и геометрию.',
           },
         ],
       },
@@ -643,7 +812,7 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
   {
     id: 'ai',
     title: 'ИИ',
-    summary: 'Командная строка и контроль результата.',
+    summary: 'Командная строка, перекраска по референсу и проверка макета.',
     icon: 'ai',
     lessons: [
       {
@@ -668,6 +837,32 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
             id: 'ai.chat.result',
             title: 'Результат',
             body: 'ИИ вызывает инструменты редактора. Всё остаётся вектором и редактируется.',
+          },
+        ],
+      },
+      {
+        id: 'ai.tools',
+        title: 'Перекраска и проверка макета',
+        summary: 'Палитра с референса и автоматический Preflight.',
+        durationMin: 3,
+        steps: [
+          {
+            id: 'ai.tools.recolor',
+            title: 'Перекраска по референсу',
+            body: 'Прикрепи изображение в окне Ctrl+K — под ним появятся цвета палитры и кнопка «Перекрасить по референсу» для переноса оттенков на слои с сохранением контраста текста.',
+            shortcutActionId: 'app.commandBar',
+            target: 'topbar.commandBar',
+          },
+          {
+            id: 'ai.tools.preflight',
+            title: 'Проверка макета (Preflight)',
+            body: 'Нажми «Проверить макет» в шапке Ctrl+K (или «Окно → Проверить макет (Preflight)»). Поиск найдёт слабый контраст текста, мелкий кегль для 300 dpi и слои за краями артборда.',
+            target: 'menu.window',
+          },
+          {
+            id: 'ai.tools.fix',
+            title: 'Переход и исправление',
+            body: 'Клик по строке в отчёте сразу выделяет проблемный слой на холсте, а кнопка «Исправить с ИИ» передаёт замечания ассистенту.',
           },
         ],
       },
@@ -700,7 +895,7 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
   {
     id: 'export',
     title: 'Экспорт',
-    summary: 'Проект, вектор, растр и PSD.',
+    summary: 'Проект, Copy as SVG, экспорт выделенного, растр и PSD.',
     icon: 'export',
     lessons: [
       {
@@ -712,7 +907,7 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
           {
             id: 'export.vector.svg',
             title: 'SVG',
-            body: 'Файл → Экспорт → SVG. Контуры, текст и маски остаются векторными.',
+            body: 'Файл → Экспорт → Вектор SVG (.svg). Контуры, текст и маски остаются векторными.',
             target: 'menu.file',
           },
           {
@@ -725,6 +920,33 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
             title: 'Проект',
             body: 'Ctrl+S сохраняет .locus со сценой и картинками. Это не экспорт, а рабочий файл.',
             shortcutActionId: 'file.save',
+          },
+        ],
+      },
+      {
+        id: 'export.selection',
+        title: 'Copy as SVG и выделенное',
+        summary: 'Забрать выбранные слои в буфер или в отдельный файл.',
+        durationMin: 2,
+        steps: [
+          {
+            id: 'export.selection.copySvg',
+            title: 'Копировать как SVG',
+            body: 'Выдели один или несколько слоёв и нажми Ctrl+Shift+C (или кнопку «Копировать SVG» в инспекторе) — чистый SVG-код попадёт в буфер обмена.',
+            shortcutActionId: 'edit.copySvg',
+            target: 'inspector.root',
+          },
+          {
+            id: 'export.selection.svg',
+            title: 'Выделенное в SVG',
+            body: '«Файл → Экспорт → Выделенное в SVG…» сохраняет только выбранные слои с обрезкой по их границам.',
+            target: 'menu.file',
+          },
+          {
+            id: 'export.selection.raster',
+            title: 'Выделенное в PNG/JPG',
+            body: 'Кнопка «Экспорт PNG» в инспекторе или «Файл → Экспорт → Выделенное в PNG/JPG…» рендерит только выделенные слои с нужным масштабом.',
+            target: 'inspector.export',
           },
         ],
       },

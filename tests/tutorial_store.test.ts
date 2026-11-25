@@ -104,4 +104,18 @@ describe('tutorial/store', () => {
     expect(useTutorialStore.getState().activeLessonId).toBe('paths.compound');
     expect(useTutorialStore.getState().activeChapterId).toBe('paths');
   });
+
+  it('closes academy when highlighting a target and clears highlight on reopen', () => {
+    useTutorialStore.getState().openAcademy();
+    useTutorialStore.getState().highlightTarget('tool.pen', 'curves.pen.start');
+
+    expect(useTutorialStore.getState().isAcademyOpen).toBe(false);
+    expect(useTutorialStore.getState().highlight).toEqual({
+      targetId: 'tool.pen',
+      stepId: 'curves.pen.start',
+    });
+
+    useTutorialStore.getState().clearHighlight();
+    expect(useTutorialStore.getState().highlight).toBeNull();
+  });
 });

@@ -5,10 +5,16 @@ import {
   TUTORIAL_CHAPTER_BY_ID,
   TUTORIAL_LESSON_BY_ID,
 } from './content';
+import type { TutorialTargetId } from './targets';
 
 interface OpenAcademyOptions {
   chapterId?: string;
   lessonId?: string;
+}
+
+export interface TutorialHighlight {
+  targetId: TutorialTargetId;
+  stepId?: string;
 }
 
 export interface TutorialStoreState {
@@ -16,12 +22,15 @@ export interface TutorialStoreState {
   activeChapterId: string | null;
   activeLessonId: string | null;
   search: string;
+  highlight: TutorialHighlight | null;
   openAcademy: (options?: OpenAcademyOptions) => void;
   closeAcademy: () => void;
   selectChapter: (chapterId: string) => void;
   openLesson: (lessonId: string) => void;
   backToChapter: () => void;
   setSearch: (search: string) => void;
+  highlightTarget: (targetId: TutorialTargetId, stepId?: string) => void;
+  clearHighlight: () => void;
 }
 
 function chapterForLesson(lessonId: string): string | null {
@@ -43,6 +52,7 @@ export const useTutorialStore = create<TutorialStoreState>((set, get) => ({
   activeChapterId: null,
   activeLessonId: null,
   search: '',
+  highlight: null,
 
   openAcademy: (options) => {
     const state = get();
@@ -70,6 +80,7 @@ export const useTutorialStore = create<TutorialStoreState>((set, get) => ({
       activeChapterId: chapterId,
       activeLessonId: lessonId,
       search: '',
+      highlight: null,
     });
   },
 
@@ -98,4 +109,12 @@ export const useTutorialStore = create<TutorialStoreState>((set, get) => ({
   backToChapter: () => set({ activeLessonId: null }),
 
   setSearch: (search) => set({ search }),
+
+  highlightTarget: (targetId, stepId) =>
+    set({
+      isAcademyOpen: false,
+      highlight: { targetId, stepId },
+    }),
+
+  clearHighlight: () => set({ highlight: null }),
 }));

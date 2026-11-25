@@ -5,6 +5,7 @@ import {
   Check,
   ChevronLeft,
   Download,
+  Eye,
   Layers,
   MousePointer2,
   Palette,
@@ -37,6 +38,7 @@ import {
 } from '../../tutorial/progress';
 import { searchTutorial } from '../../tutorial/search';
 import { useTutorialStore } from '../../tutorial/store';
+import type { TutorialTargetId } from '../../tutorial/targets';
 
 const CHAPTER_ICONS: Record<
   TutorialChapterIcon,
@@ -74,6 +76,7 @@ function LessonView({
   customShortcuts,
   onBack,
   onComplete,
+  onHighlightTarget,
 }: {
   chapter: TutorialChapter;
   lesson: TutorialLesson;
@@ -81,6 +84,7 @@ function LessonView({
   customShortcuts: Record<string, string>;
   onBack: () => void;
   onComplete: () => void;
+  onHighlightTarget: (targetId: TutorialTargetId, stepId: string) => void;
 }) {
   const stats = getLessonStats(progress, lesson);
 
@@ -138,15 +142,27 @@ function LessonView({
               >
                 {done ? <Check className="h-3 w-3" strokeWidth={2.5} /> : index + 1}
               </span>
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[12px] font-medium text-paper-ink">
-                    {step.title}
-                  </span>
-                  {combo && (
-                    <kbd className="rounded border border-paper-border bg-paper-panel px-1.5 py-0.5 font-display text-[10px] text-paper-muted">
-                      {combo}
-                    </kbd>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[12px] font-medium text-paper-ink">
+                      {step.title}
+                    </span>
+                    {combo && (
+                      <kbd className="rounded border border-paper-border bg-paper-panel px-1.5 py-0.5 font-display text-[10px] text-paper-muted">
+                        {combo}
+                      </kbd>
+                    )}
+                  </div>
+                  {step.target && (
+                    <button
+                      type="button"
+                      onClick={() => onHighlightTarget(step.target!, step.id)}
+                      className="flex h-6 shrink-0 items-center gap-1 rounded border border-paper-border bg-paper-panel px-2 text-[11px] text-paper-ink hover:border-paper-accent hover:text-paper-accent"
+                    >
+                      <Eye className="h-3 w-3" strokeWidth={1.75} />
+                      <span>Показать</span>
+                    </button>
                   )}
                 </div>
                 <p className="mt-0.5 text-[12px] leading-relaxed text-paper-muted">
@@ -244,6 +260,7 @@ export function TutorialModal() {
   const openLesson = useTutorialStore((state) => state.openLesson);
   const backToChapter = useTutorialStore((state) => state.backToChapter);
   const setSearch = useTutorialStore((state) => state.setSearch);
+  const highlightTarget = useTutorialStore((state) => state.highlightTarget);
 
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.updateSettings);
@@ -441,6 +458,9 @@ export function TutorialModal() {
                 customShortcuts={settings.customShortcuts}
                 onBack={backToChapter}
                 onComplete={() => handleCompleteLesson(activeLesson)}
+                onHighlightTarget={(targetId, stepId) =>
+                  highlightTarget(targetId, stepId)
+                }
               />
             ) : activeChapter ? (
               <ChapterView
