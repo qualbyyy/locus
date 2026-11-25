@@ -31,7 +31,7 @@ async function setup() {
   };
 }
 
-describe('scripts/install-linux-launcher', () => {
+describe.skipIf(process.platform === 'win32')('scripts/install-linux-launcher', () => {
   it('installs binary, icon and desktop entry into the user tree', async () => {
     const { projectRoot, homeDir, binaryPath } = await setup();
     const result = await installLauncher({ binaryPath, projectRoot, homeDir });
