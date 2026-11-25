@@ -1,5 +1,10 @@
 import { getActiveArtboard, findArtboardAtPoint } from '../../core/artboards';
-import { deleteGuide, updateGuide, updateLayers } from '../../core/commands';
+import {
+  deleteGuide,
+  duplicateLayers,
+  updateGuide,
+  updateLayers,
+} from '../../core/commands';
 import {
   findLayerById,
   findLayerPath,
@@ -9,6 +14,7 @@ import {
   getParentWorldMatrix,
   getScopeLayers,
   getScopeWorldMatrix,
+  mapLayerTree,
 } from '../../core/layerTree';
 import {
   applyMatrixToPoint,
@@ -43,10 +49,14 @@ import type {
   Layer,
   PathLayer,
   Point2D,
+  Scene,
+  TextLayer,
 } from '../../core/types';
 import { resolveEffectivePathGeometry } from '../effects';
 import {
+  computeTextOnPathCaretAndAnchors,
   computeTextOnPathLocalBBox,
+  projectPointToTextPathOffset,
   resolveHostPathLayer,
 } from '../textOnPath';
 import {
@@ -54,11 +64,13 @@ import {
   type GradientHandleData,
   type MarqueeOverlay,
   type SelectHandleId,
+  type TextPathHandleId,
 } from '../overlay';
 import { snapBoundsMove, type SmartGuideLine } from '../snapping';
 import {
   applyLayerMatrixToItem,
   applyPathStyleToPaperItem,
+  buildTextLayerItem,
   toPaperColor,
 } from '../sync';
 import type { CanvasToolController, ToolContext, ToolPointerEvent } from './types';
@@ -71,6 +83,12 @@ type DragMode =
       otherWorldBoxes: BBox[];
       invScopeM: Matrix2D;
       hasMoved: boolean;
+      altDuplicateBase?: {
+        scene: Scene;
+        selectedIds: string[];
+        sourceIds: string[];
+        lastDelta: Point2D;
+      };
     }
   | {
       kind: 'rotate';
@@ -113,6 +131,15 @@ type DragMode =
       stopIndex?: number;
       initialGradient: GradientPaint;
       localBox: BBox;
+      hasMoved: boolean;
+    }
+  | {
+      kind: 'text-path-handle';
+      layer: TextLayer;
+      hostPath: PathLayer;
+      handleKind: TextPathHandleId;
+      invTextWorldM: Matrix2D;
+      grabDelta: number;
       hasMoved: boolean;
     }
   | {
@@ -163,6 +190,120 @@ function getSelectHandleHit(
     }
   }
   return null;
+}
+
+export function getTextPathHandleHit(
+  ctx: ToolContext,
+  point: Point2D
+): TextPathHandleId | null {
+  const tolerance = 10 / Math.max(0.05, ctx.scope.view.zoom);
+  const children = ctx.overlayLayer.children;
+  for (let i = children.length - 1; i >= 0; i--) {
+    const child = children[i];
+    const handle = child.data?.textPathHandle as TextPathHandleId | undefined;
+    if (!handle) continue;
+    const dist = Math.hypot(point.x - child.position.x, point.y - child.position.y);
+    if (dist <= tolerance) {
+      return handle;
+    }
+  }
+  return null;
+}
+
+export interface TextPathHandleDragState {
+  layer: TextLayer;
+  hostPath: PathLayer;
+  handleKind: TextPathHandleId;
+  invTextWorldM: Matrix2D;
+  grabDelta: number;
+  hasMoved: boolean;
+}
+
+export function beginTextPathHandleDrag(
+  sceneLayers: Layer[],
+  targetLayer: TextLayer,
+  handleKind: TextPathHandleId,
+  point: Point2D
+): TextPathHandleDragState | null {
+  if (!targetLayer.pathId) return null;
+  const hostPath = resolveHostPathLayer(sceneLayers, targetLayer.pathId);
+  if (!hostPath) return null;
+
+  const worldM = getLayerWorldMatrix(sceneLayers, targetLayer.id);
+  const invTextWorldM = invertMatrix(worldM);
+  const localPt = applyMatrixToPoint(invTextWorldM, point);
+  let grabDelta = 0;
+
+  if (handleKind === 'baseline') {
+    const info = computeTextOnPathCaretAndAnchors(
+      targetLayer,
+      hostPath,
+      sceneLayers
+    );
+    const proj = projectPointToTextPathOffset(
+      targetLayer,
+      hostPath,
+      localPt,
+      sceneLayers
+    );
+    if (info && proj) {
+      grabDelta = proj.signedNormalDist - (targetLayer.pathBaselineOffset ?? 0);
+    }
+  }
+
+  return {
+    layer: targetLayer,
+    hostPath,
+    handleKind,
+    invTextWorldM,
+    grabDelta,
+    hasMoved: false,
+  };
+}
+
+export function computeTextPathHandlePatch(
+  dragState: TextPathHandleDragState,
+  point: Point2D,
+  sceneLayers: Layer[]
+): Partial<TextLayer> | null {
+  const localPt = applyMatrixToPoint(dragState.invTextWorldM, point);
+  const proj = projectPointToTextPathOffset(
+    dragState.layer,
+    dragState.hostPath,
+    localPt,
+    sceneLayers
+  );
+  if (!proj) return null;
+
+  dragState.hasMoved = true;
+  if (dragState.handleKind === 'offset') {
+    return {
+      pathOffset: proj.pathOffset,
+      ...(proj.align !== dragState.layer.align ? { align: proj.align } : {}),
+    };
+  }
+  const nextBaseline = clamp(
+    Math.round(proj.signedNormalDist - dragState.grabDelta),
+    -200,
+    200
+  );
+  return { pathBaselineOffset: nextBaseline };
+}
+
+export function rebuildTextLayerItemInPlace(
+  ctx: ToolContext,
+  textLayer: TextLayer,
+  effectiveLayers: Layer[]
+): void {
+  const item = ctx.getItemMap().get(textLayer.id);
+  if (!item || item.children.some((c) => c instanceof ctx.scope.Raster)) {
+    return;
+  }
+  const rebuilt = buildTextLayerItem(ctx.scope, textLayer, false, effectiveLayers);
+  ctx.scope.activate();
+  item.removeChildren();
+  item.addChildren(rebuilt.removeChildren());
+  rebuilt.remove();
 }
 
 function extractLayerIdFromHit(
@@ -399,15 +540,37 @@ export function createSelectTool(): CanvasToolController {
 
       if (
         merged.type === 'path' &&
-        ('fill' in patch || 'stroke' in patch)
+        ('fill' in patch ||
+          'stroke' in patch ||
+          isGradientPaint(merged.fill) ||
+          isGradientPaint(merged.stroke?.color))
       ) {
         applyPathStyleToPaperItem(ctx.scope, item, merged as PathLayer);
-      } else if (merged.type === 'text' && 'fill' in patch && patch.fill) {
+      } else if (
+        merged.type === 'text' &&
+        merged.pathId &&
+        ('pathOffset' in patch ||
+          'pathBaselineOffset' in patch ||
+          'align' in patch ||
+          'pathFlip' in patch)
+      ) {
+        rebuildTextLayerItemInPlace(ctx, merged as TextLayer, layers);
+      } else if (
+        merged.type === 'text' &&
+        ('fill' in patch || isGradientPaint(merged.fill))
+      ) {
         const localBox = resolveSelectLocalBBox(merged, layers);
-        const fillColor = toPaperColor(ctx.scope, merged.fill, localBox);
         for (const child of item.children) {
           if (child instanceof ctx.scope.PointText) {
-            child.fillColor = fillColor;
+            const m = child.matrix;
+            child.fillColor = toPaperColor(ctx.scope, merged.fill, localBox, {
+              a: m.a,
+              b: m.b,
+              c: m.c,
+              d: m.d,
+              tx: m.tx,
+              ty: m.ty,
+            });
           }
         }
       }
@@ -422,6 +585,26 @@ export function createSelectTool(): CanvasToolController {
             }
           }
         }
+      }
+    }
+
+    // Live-update any curved text attached to overridden path/group layers
+    const attachedTexts = flattenLayers(layers).filter(
+      (l): l is TextLayer =>
+        l.type === 'text' &&
+        Boolean(l.pathId) &&
+        l.visible &&
+        !overrides.has(l.id) &&
+        (overrides.has(l.pathId!) ||
+          findLayerPath(layers, l.pathId!)?.some((p) => overrides.has(p.id)) === true)
+    );
+    if (attachedTexts.length > 0) {
+      const effectiveLayers = mapLayerTree(layers, (n) => {
+        const p = overrides.get(n.id);
+        return p ? ({ ...n, ...p } as Layer) : n;
+      });
+      for (const txt of attachedTexts) {
+        rebuildTextLayerItemInPlace(ctx, txt, effectiveLayers);
       }
     }
 
@@ -455,6 +638,47 @@ export function createSelectTool(): CanvasToolController {
       const unlockedSelected = selectedLayers.filter((l) => !l.locked);
 
       if (unlockedSelected.length === 1 && selectedLayers.length === 1) {
+        const textPathHit = getTextPathHandleHit(ctx, event.point);
+        if (textPathHit) {
+          const targetLayer = unlockedSelected[0];
+          const hostPath =
+            targetLayer.type === 'text' && targetLayer.pathId
+              ? resolveHostPathLayer(state.scene.layers, targetLayer.pathId)
+              : null;
+          if (targetLayer.type === 'text' && hostPath) {
+            const worldM = getLayerWorldMatrix(state.scene.layers, targetLayer.id);
+            const invTextWorldM = invertMatrix(worldM);
+            const localPt = applyMatrixToPoint(invTextWorldM, event.point);
+            let grabDelta = 0;
+            if (textPathHit === 'baseline') {
+              const info = computeTextOnPathCaretAndAnchors(
+                targetLayer,
+                hostPath,
+                state.scene.layers
+              );
+              const proj = projectPointToTextPathOffset(
+                targetLayer,
+                hostPath,
+                localPt,
+                state.scene.layers
+              );
+              if (info && proj) {
+                grabDelta = proj.signedNormalDist - (targetLayer.pathBaselineOffset ?? 0);
+              }
+            }
+            drag = {
+              kind: 'text-path-handle',
+              layer: targetLayer,
+              hostPath,
+              handleKind: textPathHit,
+              invTextWorldM,
+              grabDelta,
+              hasMoved: false,
+            };
+            return;
+          }
+        }
+
         const gradHit = getGradientHandleHit(ctx, event.point);
         if (gradHit) {
           const targetLayer = unlockedSelected[0];
@@ -623,6 +847,30 @@ export function createSelectTool(): CanvasToolController {
           (l) => activeSet.has(l.id) && !l.locked
         );
         if (moveTargets.length > 0 && activeSet.has(hitLayer.id)) {
+          if (
+            moveTargets.length === 1 &&
+            moveTargets[0].type === 'text' &&
+            moveTargets[0].pathId &&
+            !event.altKey
+          ) {
+            const textTarget = moveTargets[0];
+            const hostPath = resolveHostPathLayer(state.scene.layers, textTarget.pathId);
+            if (hostPath) {
+              drag = {
+                kind: 'text-path-handle',
+                layer: textTarget,
+                hostPath,
+                handleKind: 'offset',
+                invTextWorldM: invertMatrix(
+                  getLayerWorldMatrix(state.scene.layers, textTarget.id)
+                ),
+                grabDelta: 0,
+                hasMoved: false,
+              };
+              return;
+            }
+          }
+
           const moveTargetIds = new Set(moveTargets.map((l) => l.id));
           const otherWorldBoxes = scopeLayers
             .filter((l) => l.visible && !moveTargetIds.has(l.id))
@@ -701,6 +949,39 @@ export function createSelectTool(): CanvasToolController {
 
     onMouseDrag(event: ToolPointerEvent, ctx: ToolContext) {
       if (!drag) return;
+
+      if (drag.kind === 'text-path-handle') {
+        const state = useEditorStore.getState();
+        const localPt = applyMatrixToPoint(drag.invTextWorldM, event.point);
+        const proj = projectPointToTextPathOffset(
+          drag.layer,
+          drag.hostPath,
+          localPt,
+          state.scene.layers
+        );
+        if (!proj) return;
+
+        drag.hasMoved = true;
+        const nextOverrides = new Map<string, Partial<Layer>>();
+        if (drag.handleKind === 'offset') {
+          nextOverrides.set(drag.layer.id, {
+            pathOffset: proj.pathOffset,
+            ...(proj.align !== drag.layer.align ? { align: proj.align } : {}),
+          });
+        } else {
+          const nextBaseline = clamp(
+            Math.round(proj.signedNormalDist - drag.grabDelta),
+            -200,
+            200
+          );
+          nextOverrides.set(drag.layer.id, {
+            pathBaselineOffset: nextBaseline,
+          });
+        }
+        draftOverrides = nextOverrides;
+        applyDraftToPaper(ctx, nextOverrides);
+        return;
+      }
 
       if (drag.kind === 'gradient-handle') {
         const localPt = applyMatrixToPoint(drag.invWorldM, event.point);
@@ -805,7 +1086,7 @@ export function createSelectTool(): CanvasToolController {
         let guides: SmartGuideLine[] | null = null;
         const settings = useSettingsStore.getState().settings;
         const canSnap =
-          !event.altKey &&
+          !(event.ctrlKey || event.metaKey) &&
           (settings.snapToGrid ||
             settings.snapToObjects ||
             settings.snapToArtboard ||
@@ -839,13 +1120,56 @@ export function createSelectTool(): CanvasToolController {
           guides = snap.guides.length > 0 ? snap.guides : null;
         }
 
+        const localDelta = applyMatrixToVector(drag.invScopeM, { x: dx, y: dy });
+
         if (Math.hypot(dx, dy) > 0.25) {
           drag.hasMoved = true;
         }
 
-        const localDelta = applyMatrixToVector(drag.invScopeM, { x: dx, y: dy });
+        if (event.altKey && !drag.altDuplicateBase && Math.hypot(dx, dy) > 0.25) {
+          const st = useEditorStore.getState();
+          const sourceIds = Array.from(drag.initialLayers.keys());
+          drag.altDuplicateBase = {
+            scene: st.scene,
+            selectedIds: st.selectedIds,
+            sourceIds,
+            lastDelta: localDelta,
+          };
+          useEditorStore.temporal.getState().pause();
+          const copies = duplicateLayers(sourceIds, localDelta.x, localDelta.y);
+          if (copies.length > 0) {
+            drag.initialLayers = new Map(
+              copies.map((c) => [
+                c.id,
+                { ...c, x: c.x - localDelta.x, y: c.y - localDelta.y },
+              ])
+            );
+            const nextOverrides = new Map<string, Partial<Layer>>();
+            for (const c of copies) {
+              nextOverrides.set(c.id, { x: c.x, y: c.y });
+            }
+            draftOverrides = nextOverrides;
+            ctx.redrawOverlay({ guides });
+            ctx.scope.view.update();
+            return;
+          }
+          useEditorStore.temporal.getState().resume();
+          drag.altDuplicateBase = undefined;
+        }
+
+        if (drag.altDuplicateBase) {
+          drag.altDuplicateBase.lastDelta = localDelta;
+        }
+
         const nextOverrides = new Map<string, Partial<Layer>>();
         for (const [id, initial] of drag.initialLayers.entries()) {
+          if (
+            initial.type === 'text' &&
+            initial.pathId &&
+            drag.initialLayers.has(initial.pathId)
+          ) {
+            continue;
+          }
           nextOverrides.set(id, {
             x: initial.x + localDelta.x,
             y: initial.y + localDelta.y,
@@ -884,6 +1208,13 @@ export function createSelectTool(): CanvasToolController {
         const nextOverrides = new Map<string, Partial<Layer>>();
 
         for (const [id, initial] of drag.initialLayers.entries()) {
+          if (
+            initial.type === 'text' &&
+            initial.pathId &&
+            drag.initialLayers.has(initial.pathId)
+          ) {
+            continue;
+          }
           const rx = initial.x - drag.pivotScope.x;
           const ry = initial.y - drag.pivotScope.y;
           nextOverrides.set(id, {
@@ -986,6 +1317,13 @@ export function createSelectTool(): CanvasToolController {
         drag.hasMoved = true;
         const nextOverrides = new Map<string, Partial<Layer>>();
         for (const [id, initial] of drag.initialLayers.entries()) {
+          if (
+            initial.type === 'text' &&
+            initial.pathId &&
+            drag.initialLayers.has(initial.pathId)
+          ) {
+            continue;
+          }
           nextOverrides.set(id, {
             x: drag.anchorScope.x + (initial.x - drag.anchorScope.x) * kx,
             y: drag.anchorScope.y + (initial.y - drag.anchorScope.y) * ky,
@@ -1064,6 +1402,16 @@ export function createSelectTool(): CanvasToolController {
             state.setSelectedIds(hitIds);
           }
         }
+        return;
+      }
+
+      if (drag.kind === 'move' && drag.altDuplicateBase) {
+        const { scene, selectedIds, sourceIds, lastDelta } = drag.altDuplicateBase;
+        drag.altDuplicateBase = undefined;
+        reset(ctx);
+        useEditorStore.setState({ scene, selectedIds });
+        useEditorStore.temporal.getState().resume();
+        duplicateLayers(sourceIds, lastDelta.x, lastDelta.y);
         return;
       }
 
@@ -1147,6 +1495,12 @@ export function createSelectTool(): CanvasToolController {
     },
 
     cancel(ctx: ToolContext) {
+      if (drag?.kind === 'move' && drag.altDuplicateBase) {
+        const { scene, selectedIds } = drag.altDuplicateBase;
+        drag.altDuplicateBase = undefined;
+        useEditorStore.setState({ scene, selectedIds });
+        useEditorStore.temporal.getState().resume();
+      }
       reset(ctx);
     },
   };

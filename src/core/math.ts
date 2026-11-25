@@ -483,6 +483,8 @@ function estimateTextLocalBBox(layer: TextLayer): BBox {
 
   const lineStep = layer.fontSize * layer.lineHeight;
   const height = Math.max(lineStep, lines.length * lineStep);
+  const halfStroke =
+    layer.stroke && layer.stroke.width > 0 ? layer.stroke.width / 2 : 0;
 
   let x = 0;
   if (layer.align === 'center') {
@@ -491,7 +493,12 @@ function estimateTextLocalBBox(layer: TextLayer): BBox {
     x = -width;
   }
 
-  return { x, y: 0, width, height };
+  return {
+    x: x - halfStroke,
+    y: -halfStroke,
+    width: width + halfStroke * 2,
+    height: height + halfStroke * 2,
+  };
 }
 
 export function computeLayerLocalBBox(layer: Layer): BBox {

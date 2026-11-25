@@ -15,8 +15,10 @@ import {
 } from '../core/math';
 import { getLayerWorldMatrix, getParentWorldMatrix } from '../core/layerTree';
 import type { Layer, PathLayer, Point2D, SubPath, TextLayer } from '../core/types';
-import { buildWorldSubPath } from './booleans';
-import { resolveEffectivePathGeometry } from './effects';
+import {
+  buildTransformedPaperPath,
+  resolveTextPathTracking,
+} from './textOnPath';
 
 export { createFontkitFont };
 
@@ -155,10 +157,18 @@ export async function convertTextLayerToOutlines(
   const lines = (layer.content || '').split('\n');
   const worldSubpaths: SubPath[] = [];
 
+  const scopes = (
+    paper.PaperScope as unknown as {
+      _scopes?: Record<string, paper.PaperScope>;
+    }
+  )?._scopes;
+  const fallbackScope = scopes
+    ? Object.values(scopes).find((s) => Boolean(s.project))
+    : undefined;
   const scope = new paper.PaperScope();
   scope.settings.applyMatrix = false;
   scope.settings.insertItems = false;
-  const project = new scope.Project(undefined as unknown as HTMLCanvasElement);
+  new scope.Project(undefined as unknown as HTMLCanvasElement);
 
   try {
     const extractGlyphSubpaths = (
@@ -271,46 +281,37 @@ export async function convertTextLayerToOutlines(
     };
 
     if (pathLayer) {
-      const hostSp = resolveEffectivePathGeometry(pathLayer).subpaths.find(
-        (sp) => sp.anchors.length >= 2
+      const relMatrix = sceneLayers
+        ? multiplyMatrices(
+            invertMatrix(getParentWorldMatrix(sceneLayers, layer.id)),
+            getLayerWorldMatrix(sceneLayers, pathLayer.id)
+          )
+        : getLayerMatrix(pathLayer);
+      const curve = buildTransformedPaperPath(
+        scope,
+        pathLayer,
+        relMatrix,
+        Boolean(layer.pathFlip)
       );
-      const curve = hostSp
-        ? buildWorldSubPath(
-            scope,
-            { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 },
-            hostSp,
-            false
-          )
-        : null;
       if (curve) {
-        const relMatrix = sceneLayers
-          ? multiplyMatrices(
-              invertMatrix(getParentWorldMatrix(sceneLayers, layer.id)),
-              getLayerWorldMatrix(sceneLayers, pathLayer.id)
-            )
-          : getLayerMatrix(pathLayer);
-        curve.transform(
-          new scope.Matrix(
-            relMatrix.a,
-            relMatrix.b,
-            relMatrix.c,
-            relMatrix.d,
-            relMatrix.tx,
-            relMatrix.ty
-          )
-        );
-        if (layer.pathFlip) {
-          curve.reverse();
-        }
 
         const curveLen = curve.length;
         const singleLine = (layer.content || '').replace(/\r?\n/g, ' ');
         if (singleLine.length > 0 && curveLen > 1e-4) {
           const run = font.layout(singleLine);
           const count = run.glyphs.length;
+          const widths = run.positions.map((pos) => pos.xAdvance * k);
+          const effectiveTracking = resolveTextPathTracking(
+            curveLen,
+            widths,
+            tracking,
+            curve.closed,
+            layer.pathStretch
+          );
           const totalW =
-            run.positions.reduce((sum, pos) => sum + pos.xAdvance * k, 0) +
-            Math.max(0, count - 1) * tracking;
+            widths.reduce((sum, w) => sum + w, 0) +
+            Math.max(0, count - 1) * effectiveTracking;
+          const baselineOffset = clamp(layer.pathBaselineOffset ?? 0, -200, 200);
           const baseOffset = (clamp(layer.pathOffset ?? 0, 0, 100) / 100) * curveLen;
           const alignShift =
             layer.align === 'center'
@@ -323,20 +324,22 @@ export async function convertTextLayerToOutlines(
           for (let j = 0; j < count; j += 1) {
             const glyph = run.glyphs[j];
             const pos = run.positions[j];
-            const adv = pos.xAdvance * k;
+            const adv = widths[j];
             const mid = cursor + adv / 2;
 
             let sampledAt = mid;
             if (curve.closed) {
               sampledAt = ((mid % curveLen) + curveLen) % curveLen;
             } else if (mid < 0 || mid > curveLen) {
-              cursor += adv + tracking;
+              cursor += adv + effectiveTracking;
               continue;
             }
 
             const anchorPt = curve.getPointAt(clamp(sampledAt, 0, curveLen));
             const tangent = curve.getTangentAt(clamp(sampledAt, 0, curveLen));
             if (anchorPt && tangent) {
+              const bx = anchorPt.x + tangent.y * baselineOffset;
+              const by = anchorPt.y - tangent.x * baselineOffset;
               const rad = Math.atan2(tangent.y, tangent.x);
               const cos = Math.cos(rad);
               const sin = Math.sin(rad);
@@ -344,15 +347,15 @@ export async function convertTextLayerToOutlines(
                 const rx = pos.xOffset * k + gx * k - adv / 2;
                 const ry = -(pos.yOffset * k + gy * k);
                 return localToWorld(layer, {
-                  x: anchorPt.x + rx * cos - ry * sin,
-                  y: anchorPt.y + rx * sin + ry * cos,
+                  x: bx + rx * cos - ry * sin,
+                  y: by + rx * sin + ry * cos,
                 });
               });
               if (glyphSubpaths.length > 0) {
                 worldSubpaths.push(...resolveGlyphOverlaps(scope, glyphSubpaths));
               }
             }
-            cursor += adv + tracking;
+            cursor += adv + effectiveTracking;
           }
         }
       }
@@ -395,7 +398,12 @@ export async function convertTextLayerToOutlines(
       });
     }
   } finally {
-    project.remove();
+    scope.remove();
+    if (fallbackScope && fallbackScope.project) {
+      fallbackScope.activate();
+    } else {
+      paper.activate();
+    }
   }
 
   if (worldSubpaths.length === 0) {

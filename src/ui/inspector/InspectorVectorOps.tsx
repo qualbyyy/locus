@@ -4,6 +4,7 @@ import {
   Expand,
   Scissors,
   Sparkles,
+  Spline,
   Split,
   SquaresExclude,
   SquaresIntersect,
@@ -25,6 +26,7 @@ interface InspectorVectorOpsProps {
   onOffsetLayers: (layerIds: string[], distance: number, copyBehind: boolean) => void;
   onOutlineStroke: (layerIds: string[]) => void;
   onSplitCompound: (layerIds: string[]) => void;
+  onCreateTextOnPath?: (pathLayerId: string) => void;
 }
 
 export function InspectorVectorOps({
@@ -35,6 +37,7 @@ export function InspectorVectorOps({
   onOffsetLayers,
   onOutlineStroke,
   onSplitCompound,
+  onCreateTextOnPath,
 }: InspectorVectorOpsProps) {
   const [wobbleIntensity, setWobbleIntensity] = useState(6);
   const [offsetDistance, setOffsetDistance] = useState(8);
@@ -159,6 +162,17 @@ export function InspectorVectorOps({
         >
           <Split className="h-3.5 w-3.5 text-paper-accent" strokeWidth={1.75} />
           <span>Разбить на части / буквы</span>
+        </button>
+      )}
+
+      {onCreateTextOnPath && (
+        <button
+          type="button"
+          onClick={() => onCreateTextOnPath(layer.id)}
+          className="flex h-7 items-center justify-center gap-1.5 rounded border border-paper-accent/40 bg-paper-accent/10 text-[12px] font-medium text-paper-ink hover:bg-paper-accent/20"
+        >
+          <Spline className="h-3.5 w-3.5 text-paper-accent" strokeWidth={1.75} />
+          <span>Текст по контуру (вокруг)</span>
         </button>
       )}
     </div>

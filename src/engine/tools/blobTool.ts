@@ -97,29 +97,35 @@ export function createBlobTool(): CanvasToolController {
 
     onMouseMove() {},
 
-    onMouseUp(_event: ToolPointerEvent, ctx: ToolContext) {
+    onMouseUp(event: ToolPointerEvent, ctx: ToolContext) {
       if (!isDragging) return;
       const box = lastBox;
       const currentSeed = seed;
       reset(ctx);
 
-      if (box && box.width >= 2 && box.height >= 2) {
-        const state = useEditorStore.getState();
-        const invScope = invertMatrix(
-          getScopeWorldMatrix(state.scene.layers, state.editingGroupId)
-        );
-        const centerScope = applyMatrixToPoint(invScope, { x: box.cx, y: box.cy });
-        const invDecomp = decomposeMatrix(invScope);
-        createShapeLayer({
-          x: centerScope.x,
-          y: centerScope.y,
-          width: box.width * Math.abs(invDecomp.scaleX),
-          height: box.height * Math.abs(invDecomp.scaleY),
-          options: state.smartShapeOptions,
-          seed: currentSeed,
-          parentGroupId: state.editingGroupId,
-        });
-      }
+      const finalBox: ShapeBox =
+        box && box.width >= 2 && box.height >= 2
+          ? box
+          : { cx: event.point.x, cy: event.point.y, width: 120, height: 120 };
+
+      const state = useEditorStore.getState();
+      const invScope = invertMatrix(
+        getScopeWorldMatrix(state.scene.layers, state.editingGroupId)
+      );
+      const centerScope = applyMatrixToPoint(invScope, {
+        x: finalBox.cx,
+        y: finalBox.cy,
+      });
+      const invDecomp = decomposeMatrix(invScope);
+      createShapeLayer({
+        x: centerScope.x,
+        y: centerScope.y,
+        width: finalBox.width * Math.abs(invDecomp.scaleX),
+        height: finalBox.height * Math.abs(invDecomp.scaleY),
+        options: state.smartShapeOptions,
+        seed: currentSeed,
+        parentGroupId: state.editingGroupId,
+      });
     },
 
     cancel(ctx: ToolContext) {

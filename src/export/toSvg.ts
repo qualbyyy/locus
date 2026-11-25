@@ -26,13 +26,18 @@ import type {
 } from '../core/types';
 import {
   colorWithOpacity,
+  hasActiveColorAdjust,
   hasRasterEffects,
   resolveEffectivePathGeometry,
 } from '../engine/effects';
 import {
+  buildOffsetPathSubPath,
   computeTextOnPathLocalBBox,
+  createTextCharMeasurer,
+  pickPrimaryHostSubPath,
   resolveHostPathLayer,
   resolvePathMatrixRelativeToText,
+  resolveTextPathTracking,
 } from '../engine/textOnPath';
 import {
   buildSvgPathData,
@@ -95,11 +100,35 @@ function buildTextPathDefs(
     if (layer.type !== 'text' || !layer.pathId) continue;
     const hostPath = resolveHostPathLayer(allSceneLayers, layer.pathId);
     if (!hostPath) continue;
+
     const geom = resolveEffectivePathGeometry(hostPath).subpaths.filter(
       (sp) => sp.anchors.length >= 2
     );
-    if (geom.length === 0) continue;
-    const sp = geom[0];
+    const sp = pickPrimaryHostSubPath(geom);
+    if (!sp) continue;
+    const isClosedCentered = Boolean(sp.closed && layer.align === 'center');
+
+    if (Math.abs(layer.pathBaselineOffset ?? 0) > 0.1 || isClosedCentered) {
+      const offsetSubpath = buildOffsetPathSubPath(
+        layer,
+        hostPath,
+        allSceneLayers,
+        isClosedCentered
+      );
+      if (offsetSubpath) {
+        const d = buildSvgPathData([offsetSubpath], (pt) => ({
+          x: pt.x,
+          y: pt.y,
+          lx: pt.x,
+          ly: pt.y,
+        }));
+        if (d) {
+          defs.push(`<path id="textpath-${safeSvgId(layer.id)}" d="${d}"/>`);
+        }
+      }
+      continue;
+    }
+
     const targetSubpath = layer.pathFlip
       ? {
           closed: sp.closed,
@@ -137,16 +166,62 @@ function buildTextSvg(layer: TextLayer, allSceneLayers: Layer[]): string {
         : colorToCssRgb(layer.fill)
     }"`,
   ];
-  if ((layer.letterSpacing ?? 0) !== 0) {
-    attrs.push(`letter-spacing="${formatNumber(layer.letterSpacing ?? 0)}"`);
+
+  let effectiveTracking = layer.letterSpacing ?? 0;
+  if (hostPath && layer.pathStretch) {
+    const singleLine = (layer.content || '').replace(/\r?\n/g, ' ');
+    const chars = Array.from(singleLine);
+    const measure = createTextCharMeasurer(layer);
+    const widths = chars.map(measure);
+    const offsetSubpath = buildOffsetPathSubPath(layer, hostPath, allSceneLayers);
+    const approxLen = offsetSubpath
+      ? offsetSubpath.anchors.reduce((sum, a, idx, arr) => {
+          const next = arr[(idx + 1) % arr.length];
+          if (!offsetSubpath.closed && idx === arr.length - 1) return sum;
+          return sum + Math.hypot(next.x - a.x, next.y - a.y);
+        }, 0)
+      : 0;
+    if (approxLen > 1e-4) {
+      effectiveTracking = resolveTextPathTracking(
+        approxLen,
+        widths,
+        effectiveTracking,
+        Boolean(offsetSubpath?.closed),
+        true
+      );
+    }
+  }
+  if (Math.abs(effectiveTracking) > 1e-4) {
+    attrs.push(`letter-spacing="${formatNumber(effectiveTracking)}"`);
+  }
+
+  if (layer.stroke && layer.stroke.width > 0) {
+    const strokeVal = isGradientPaint(layer.stroke.color)
+      ? `url(#grad-stroke-${sid})`
+      : colorToCssRgb(layer.stroke.color);
+    attrs.push(`stroke="${strokeVal}"`);
+    attrs.push(`stroke-width="${formatNumber(layer.stroke.width)}"`);
+    attrs.push(`stroke-linecap="${layer.stroke.lineCap ?? 'round'}"`);
+    attrs.push(`stroke-linejoin="${layer.stroke.lineJoin ?? 'round'}"`);
+    const dash = sanitizeDashArray(layer.stroke.dashArray);
+    if (dash) {
+      attrs.push(`stroke-dasharray="${dash.map(formatNumber).join(' ')}"`);
+      if (layer.stroke.dashOffset) {
+        attrs.push(`stroke-dashoffset="${formatNumber(layer.stroke.dashOffset)}"`);
+      }
+    }
+    attrs.push(`paint-order="stroke fill"`);
   }
 
   if (hostPath) {
     const singleLine = (layer.content || '').replace(/\r?\n/g, ' ');
     const basePct = clamp(layer.pathOffset ?? 0, 0, 100);
+    const isClosed = Boolean(pickPrimaryHostSubPath(hostPath.subpaths)?.closed);
     const startOffset =
       layer.align === 'center'
-        ? clamp(50 + basePct, 0, 100)
+        ? isClosed
+          ? 50
+          : clamp(50 + basePct, 0, 100)
         : layer.align === 'right'
           ? clamp(100 - basePct, 0, 100)
           : basePct;
@@ -318,20 +393,33 @@ function buildGradientDefs(visibleLayers: Layer[], allSceneLayers: Layer[]): str
           )
         );
       }
-    } else if (layer.type === 'text' && isGradientPaint(layer.fill)) {
+    } else if (layer.type === 'text') {
       const hostPath = resolveHostPathLayer(allSceneLayers, layer.pathId);
       const localBox = hostPath
         ? computeTextOnPathLocalBBox(layer, hostPath, allSceneLayers)
         : computeLayerLocalBBox(layer);
-      const ep = resolveGradientEndpoints(layer.fill, localBox);
-      defs.push(
-        formatSvgGradientDef(
-          `grad-fill-${sid}`,
-          layer.fill,
-          ep.origin,
-          ep.destination
-        )
-      );
+      if (isGradientPaint(layer.fill)) {
+        const ep = resolveGradientEndpoints(layer.fill, localBox);
+        defs.push(
+          formatSvgGradientDef(
+            `grad-fill-${sid}`,
+            layer.fill,
+            ep.origin,
+            ep.destination
+          )
+        );
+      }
+      if (layer.stroke && layer.stroke.width > 0 && isGradientPaint(layer.stroke.color)) {
+        const ep = resolveGradientEndpoints(layer.stroke.color, localBox);
+        defs.push(
+          formatSvgGradientDef(
+            `grad-stroke-${sid}`,
+            layer.stroke.color,
+            ep.origin,
+            ep.destination
+          )
+        );
+      }
     }
   }
   return defs.join('');
@@ -343,20 +431,121 @@ function buildFilterDefs(visibleLayers: Layer[]): string {
     .map((layer) => {
       const eff = layer.effects!;
       const primitives: string[] = [];
+      let cur = 'SourceGraphic';
+      let step = 0;
+      const nextId = () => `fx${(step += 1)}`;
+      const needsExplicitChain = Boolean(
+        hasActiveColorAdjust(eff.colorAdjust) || eff.innerShadow || eff.motionBlur
+      );
+
+      if (hasActiveColorAdjust(eff.colorAdjust) && eff.colorAdjust) {
+        const ca = eff.colorAdjust;
+        if (Math.abs(ca.brightness) > 0.5 || Math.abs(ca.contrast) > 0.5) {
+          const b = Math.max(0, 1 + ca.brightness / 100);
+          const c = Math.max(0, 1 + ca.contrast / 100);
+          const slope = formatNumber(c * b);
+          const intercept = formatNumber(0.5 * (1 - c));
+          const res = nextId();
+          primitives.push(
+            `<feComponentTransfer in="${cur}" result="${res}"><feFuncR type="linear" slope="${slope}" intercept="${intercept}"/><feFuncG type="linear" slope="${slope}" intercept="${intercept}"/><feFuncB type="linear" slope="${slope}" intercept="${intercept}"/></feComponentTransfer>`
+          );
+          cur = res;
+        }
+        if (Math.abs(ca.saturate) > 0.5) {
+          const res = nextId();
+          primitives.push(
+            `<feColorMatrix type="saturate" values="${formatNumber(Math.max(0, 1 + ca.saturate / 100))}" in="${cur}" result="${res}"/>`
+          );
+          cur = res;
+        }
+        if (Math.abs(ca.hue) > 0.5) {
+          const res = nextId();
+          primitives.push(
+            `<feColorMatrix type="hueRotate" values="${formatNumber(ca.hue)}" in="${cur}" result="${res}"/>`
+          );
+          cur = res;
+        }
+      }
+
+      if (eff.innerShadow) {
+        const is = eff.innerShadow;
+        const offId = nextId();
+        const blurId = nextId();
+        const maskId = nextId();
+        const floodId = nextId();
+        const shadowId = nextId();
+        const doneId = nextId();
+        primitives.push(
+          `<feOffset dx="${formatNumber(is.offsetX)}" dy="${formatNumber(is.offsetY)}" in="${cur}" result="${offId}"/>`
+        );
+        primitives.push(
+          `<feGaussianBlur stdDeviation="${formatNumber(is.blur / 2)}" in="${offId}" result="${blurId}"/>`
+        );
+        primitives.push(
+          `<feComposite operator="out" in="SourceAlpha" in2="${blurId}" result="${maskId}"/>`
+        );
+        primitives.push(
+          `<feFlood flood-color="${colorWithOpacity(is.color, is.opacity)}" result="${floodId}"/>`
+        );
+        primitives.push(
+          `<feComposite operator="in" in="${floodId}" in2="${maskId}" result="${shadowId}"/>`
+        );
+        primitives.push(
+          `<feComposite operator="over" in="${shadowId}" in2="${cur}" result="${doneId}"/>`
+        );
+        cur = doneId;
+      }
+
+      if (eff.motionBlur && eff.motionBlur.amount > 0.1) {
+        const rad = (eff.motionBlur.angle * Math.PI) / 180;
+        const rawSx = Math.abs(Math.cos(rad)) * (eff.motionBlur.amount / 2.5);
+        const rawSy = Math.abs(Math.sin(rad)) * (eff.motionBlur.amount / 2.5);
+        const sx = rawSx < 0.01 ? 0 : rawSx;
+        const sy = rawSy < 0.01 ? 0 : rawSy;
+        const res = nextId();
+        primitives.push(
+          `<feGaussianBlur stdDeviation="${formatNumber(sx)} ${formatNumber(sy)}" in="${cur}" result="${res}"/>`
+        );
+        cur = res;
+      }
+
       if (eff.blur && eff.blur > 0.1) {
-        primitives.push(`<feGaussianBlur stdDeviation="${formatNumber(eff.blur)}"/>`);
+        if (needsExplicitChain) {
+          const res = nextId();
+          primitives.push(
+            `<feGaussianBlur stdDeviation="${formatNumber(eff.blur)}" in="${cur}" result="${res}"/>`
+          );
+          cur = res;
+        } else {
+          primitives.push(`<feGaussianBlur stdDeviation="${formatNumber(eff.blur)}"/>`);
+        }
       }
+
       if (eff.outerGlow && eff.outerGlow.blur > 0) {
+        const inAttr = needsExplicitChain ? ` in="${cur}"` : '';
+        const res = needsExplicitChain ? nextId() : '';
+        const resAttr = res ? ` result="${res}"` : '';
         primitives.push(
-          `<feDropShadow dx="0" dy="0" stdDeviation="${formatNumber(eff.outerGlow.blur / 2)}" flood-color="${colorWithOpacity(eff.outerGlow.color, eff.outerGlow.opacity)}"/>`
+          `<feDropShadow dx="0" dy="0" stdDeviation="${formatNumber(eff.outerGlow.blur / 2)}" flood-color="${colorWithOpacity(eff.outerGlow.color, eff.outerGlow.opacity)}"${inAttr}${resAttr}/>`
         );
+        if (res) cur = res;
       }
+
       if (eff.dropShadow) {
+        const inAttr = needsExplicitChain ? ` in="${cur}"` : '';
         primitives.push(
-          `<feDropShadow dx="${formatNumber(eff.dropShadow.offsetX)}" dy="${formatNumber(eff.dropShadow.offsetY)}" stdDeviation="${formatNumber(eff.dropShadow.blur / 2)}" flood-color="${colorWithOpacity(eff.dropShadow.color, eff.dropShadow.opacity)}"/>`
+          `<feDropShadow dx="${formatNumber(eff.dropShadow.offsetX)}" dy="${formatNumber(eff.dropShadow.offsetY)}" stdDeviation="${formatNumber(eff.dropShadow.blur / 2)}" flood-color="${colorWithOpacity(eff.dropShadow.color, eff.dropShadow.opacity)}"${inAttr}/>`
         );
       }
-      return `<filter id="fx-${safeSvgId(layer.id)}" x="-60%" y="-60%" width="220%" height="220%">${primitives.join('')}</filter>`;
+
+      const largeBlur =
+        (eff.blur ?? 0) > 30 ||
+        (eff.motionBlur?.amount ?? 0) > 30 ||
+        (eff.dropShadow?.blur ?? 0) > 30;
+      const boundsAttrs = largeBlur
+        ? 'x="-200%" y="-200%" width="500%" height="500%"'
+        : 'x="-60%" y="-60%" width="220%" height="220%"';
+      return `<filter id="fx-${safeSvgId(layer.id)}" ${boundsAttrs}>${primitives.join('')}</filter>`;
     })
     .join('');
 }

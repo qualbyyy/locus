@@ -12,6 +12,8 @@ import {
   apply3DEffect,
   applyDistortToSubPaths,
   applyWarpToSubPaths,
+  getEffectsPadding,
+  hasRasterEffects,
 } from '../src/engine/effects';
 
 const rectSubPaths: SubPath[] = [
@@ -77,6 +79,28 @@ describe('effects engine and commands', () => {
       radius: 15,
     });
     expect(rc[0].anchors.length).toBe(8);
+
+    const bloat = applyDistortToSubPaths(rectSubPaths, {
+      kind: 'puckerBloat',
+      amount: 50,
+    });
+    expect(bloat[0].anchors).toHaveLength(4);
+    expect(Math.hypot(bloat[0].anchors[0].handleOut.x, bloat[0].anchors[0].handleOut.y)).toBeGreaterThan(10);
+
+    const pucker = applyDistortToSubPaths(rectSubPaths, {
+      kind: 'puckerBloat',
+      amount: -50,
+    });
+    expect(Math.abs(pucker[0].anchors[0].x)).toBeGreaterThan(100);
+  });
+
+  it('recognizes new raster effects and computes padding up to 150px blur', () => {
+    expect(hasRasterEffects({ motionBlur: { amount: 20, angle: 45 } })).toBe(true);
+    expect(hasRasterEffects({ innerShadow: { color: '#000', opacity: 0.5, offsetX: 0, offsetY: 4, blur: 6 } })).toBe(true);
+    expect(hasRasterEffects({ colorAdjust: { brightness: 0, contrast: 0, saturate: 0, hue: 0 } })).toBe(false);
+    expect(hasRasterEffects({ colorAdjust: { brightness: 15, contrast: 0, saturate: 0, hue: 0 } })).toBe(true);
+    expect(getEffectsPadding({ blur: 150 })).toBe(458);
+    expect(getEffectsPadding({ motionBlur: { amount: 40, angle: 0 } })).toBe(68);
   });
 
   it('projects 3D rotate and builds sorted extrude faces', () => {

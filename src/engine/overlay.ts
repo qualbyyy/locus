@@ -36,6 +36,7 @@ import type {
   SelectedNodeRef,
   StrokeStyle,
   SubPath,
+  TextLayer,
   ToolType,
 } from '../core/types';
 import { resolveEffectivePathGeometry } from './effects';
@@ -46,9 +47,12 @@ import {
   toPaperColor,
 } from './sync';
 import {
+  computeTextOnPathCaretAndAnchors,
   computeTextOnPathLocalBBox,
   resolveHostPathLayer,
 } from './textOnPath';
+
+export type TextPathHandleId = 'offset' | 'baseline';
 
 export type SelectHandleId =
   | 'nw'
@@ -124,6 +128,12 @@ export interface OverlayRenderState {
   shapeBuilder?: ShapeBuilderOverlay | null;
   freehandDraft?: FreehandDraftOverlay | null;
   hoveredMaskId?: string | null;
+  hoveredTextPathId?: string | null;
+  editingTextCaret?: {
+    layerId: string;
+    content: string;
+    caretIndex: number;
+  } | null;
   accentColor?: string;
   grid?: { show: boolean; size: number; opacity: number };
   guides?: SmartGuideLine[] | null;
@@ -151,8 +161,17 @@ export function resolveEditableGradient(
     }
     return null;
   }
-  if (layer.type === 'text' && isGradientPaint(layer.fill)) {
-    return { target: 'fill', gradient: layer.fill };
+  if (layer.type === 'text') {
+    if (preferred === 'stroke' && isGradientPaint(layer.stroke?.color)) {
+      return { target: 'stroke', gradient: layer.stroke.color };
+    }
+    if (isGradientPaint(layer.fill)) {
+      return { target: 'fill', gradient: layer.fill };
+    }
+    if (isGradientPaint(layer.stroke?.color)) {
+      return { target: 'stroke', gradient: layer.stroke.color };
+    }
+    return null;
   }
   return null;
 }
@@ -515,6 +534,73 @@ function renderGradientOverlay(
   }
 }
 
+function renderTextPathAnchors(
+  scope: paper.PaperScope,
+  overlayLayer: paper.Layer,
+  scene: Scene,
+  layer: TextLayer,
+  worldM: Matrix2D,
+  draftOverrides: Map<string, Partial<Layer>> | undefined,
+  zoom: number,
+  accentHex: string
+): void {
+  if (!layer.pathId) return;
+  const hostPath = resolveHostPathLayer(scene.layers, layer.pathId);
+  if (!hostPath) return;
+
+  const hostM = getDraftMatrices(scene, hostPath.id, draftOverrides).worldM;
+  const hostItem = buildPaperPathFromSubPaths(
+    scope,
+    resolveEffectivePathGeometry(hostPath).subpaths,
+    hostPath.fillRule
+  );
+  applyPaperMatrix(scope, hostItem, hostM);
+  hostItem.fillColor = null;
+  hostItem.strokeColor = new scope.Color(accentHex);
+  hostItem.strokeWidth = 1 / zoom;
+  hostItem.dashArray = [4 / zoom, 3 / zoom];
+  overlayLayer.addChild(hostItem);
+
+  const anchors = computeTextOnPathCaretAndAnchors(layer, hostPath, scene.layers);
+  if (!anchors) return;
+
+  const wCurve = applyMatrixToPoint(worldM, anchors.curvePt);
+  const wNormal = applyMatrixToPoint(worldM, anchors.normalPt);
+
+  const guide = new scope.Path.Line(
+    new scope.Point(wCurve.x, wCurve.y),
+    new scope.Point(wNormal.x, wNormal.y)
+  );
+  guide.strokeColor = new scope.Color(accentHex);
+  guide.strokeWidth = 1 / zoom;
+  guide.dashArray = [3 / zoom, 3 / zoom];
+  overlayLayer.addChild(guide);
+
+  // Diamond anchor on the host curve: drag to slide text along path
+  drawHandleSquare(
+    scope,
+    overlayLayer,
+    wCurve,
+    9 / zoom,
+    45,
+    1.4 / zoom,
+    WHITE_HEX,
+    accentHex,
+    { textPathHandle: 'offset' satisfies TextPathHandleId }
+  );
+
+  // Circle anchor along normal: drag inward/outward to change baseline offset
+  const offsetHandle = new scope.Path.Circle(
+    new scope.Point(wNormal.x, wNormal.y),
+    4.5 / zoom
+  );
+  offsetHandle.fillColor = new scope.Color(accentHex);
+  offsetHandle.strokeColor = new scope.Color(WHITE_HEX);
+  offsetHandle.strokeWidth = 1.4 / zoom;
+  offsetHandle.data = { textPathHandle: 'baseline' satisfies TextPathHandleId };
+  overlayLayer.addChild(offsetHandle);
+}
+
 function renderSelectOverlay(
   scope: paper.PaperScope,
   overlayLayer: paper.Layer,
@@ -556,70 +642,73 @@ function renderSelectOverlay(
 
     if (layer.locked) return;
 
-    const tm = { x: (tl.x + tr.x) / 2, y: (tl.y + tr.y) / 2 };
-    const rm = { x: (tr.x + br.x) / 2, y: (tr.y + br.y) / 2 };
-    const bm = { x: (br.x + bl.x) / 2, y: (br.y + bl.y) / 2 };
-    const lm = { x: (bl.x + tl.x) / 2, y: (bl.y + tl.y) / 2 };
-    const center = { x: (tl.x + br.x) / 2, y: (tl.y + br.y) / 2 };
+    const isPathText = layer.type === 'text' && Boolean(layer.pathId);
+    if (!isPathText) {
+      const tm = { x: (tl.x + tr.x) / 2, y: (tl.y + tr.y) / 2 };
+      const rm = { x: (tr.x + br.x) / 2, y: (tr.y + br.y) / 2 };
+      const bm = { x: (br.x + bl.x) / 2, y: (br.y + bl.y) / 2 };
+      const lm = { x: (bl.x + tl.x) / 2, y: (bl.y + tl.y) / 2 };
+      const center = { x: (tl.x + br.x) / 2, y: (tl.y + br.y) / 2 };
 
-    let upX = tm.x - center.x;
-    let upY = tm.y - center.y;
-    const upLen = Math.hypot(upX, upY);
-    if (upLen > 1e-6) {
-      upX /= upLen;
-      upY /= upLen;
-    } else {
-      const rad = (rotDeg * Math.PI) / 180;
-      upX = Math.sin(rad);
-      upY = -Math.cos(rad);
-    }
+      let upX = tm.x - center.x;
+      let upY = tm.y - center.y;
+      const upLen = Math.hypot(upX, upY);
+      if (upLen > 1e-6) {
+        upX /= upLen;
+        upY /= upLen;
+      } else {
+        const rad = (rotDeg * Math.PI) / 180;
+        upX = Math.sin(rad);
+        upY = -Math.cos(rad);
+      }
 
-    const rotPt = {
-      x: tm.x + upX * rotateOffset,
-      y: tm.y + upY * rotateOffset,
-    };
+      const rotPt = {
+        x: tm.x + upX * rotateOffset,
+        y: tm.y + upY * rotateOffset,
+      };
 
-    const stem = new scope.Path.Line(
-      new scope.Point(tm.x, tm.y),
-      new scope.Point(rotPt.x, rotPt.y)
-    );
-    stem.strokeColor = new scope.Color(accentHex);
-    stem.strokeWidth = strokeW;
-    overlayLayer.addChild(stem);
-
-    const rotHandle = new scope.Path.Circle(
-      new scope.Point(rotPt.x, rotPt.y),
-      4 / zoom
-    );
-    rotHandle.fillColor = new scope.Color(WHITE_HEX);
-    rotHandle.strokeColor = new scope.Color(accentHex);
-    rotHandle.strokeWidth = strokeW;
-    rotHandle.data = { selectHandle: 'rotate' satisfies SelectHandleId };
-    overlayLayer.addChild(rotHandle);
-
-    const handles: Array<{ id: SelectHandleId; pt: Point2D }> = [
-      { id: 'nw', pt: tl },
-      { id: 'n', pt: tm },
-      { id: 'ne', pt: tr },
-      { id: 'e', pt: rm },
-      { id: 'se', pt: br },
-      { id: 's', pt: bm },
-      { id: 'sw', pt: bl },
-      { id: 'w', pt: lm },
-    ];
-
-    for (const h of handles) {
-      drawHandleSquare(
-        scope,
-        overlayLayer,
-        h.pt,
-        handleSize,
-        rotDeg,
-        strokeW,
-        WHITE_HEX,
-        accentHex,
-        { selectHandle: h.id }
+      const stem = new scope.Path.Line(
+        new scope.Point(tm.x, tm.y),
+        new scope.Point(rotPt.x, rotPt.y)
       );
+      stem.strokeColor = new scope.Color(accentHex);
+      stem.strokeWidth = strokeW;
+      overlayLayer.addChild(stem);
+
+      const rotHandle = new scope.Path.Circle(
+        new scope.Point(rotPt.x, rotPt.y),
+        4 / zoom
+      );
+      rotHandle.fillColor = new scope.Color(WHITE_HEX);
+      rotHandle.strokeColor = new scope.Color(accentHex);
+      rotHandle.strokeWidth = strokeW;
+      rotHandle.data = { selectHandle: 'rotate' satisfies SelectHandleId };
+      overlayLayer.addChild(rotHandle);
+
+      const handles: Array<{ id: SelectHandleId; pt: Point2D }> = [
+        { id: 'nw', pt: tl },
+        { id: 'n', pt: tm },
+        { id: 'ne', pt: tr },
+        { id: 'e', pt: rm },
+        { id: 'se', pt: br },
+        { id: 's', pt: bm },
+        { id: 'sw', pt: bl },
+        { id: 'w', pt: lm },
+      ];
+
+      for (const h of handles) {
+        drawHandleSquare(
+          scope,
+          overlayLayer,
+          h.pt,
+          handleSize,
+          rotDeg,
+          strokeW,
+          WHITE_HEX,
+          accentHex,
+          { selectHandle: h.id }
+        );
+      }
     }
 
     const activeGrad = resolveEditableGradient(layer, activeGradientTarget);
@@ -638,21 +727,16 @@ function renderSelectOverlay(
     }
 
     if (layer.type === 'text' && layer.pathId) {
-      const hostPath = resolveHostPathLayer(scene.layers, layer.pathId);
-      if (hostPath) {
-        const hostM = getDraftMatrices(scene, hostPath.id, draftOverrides).worldM;
-        const hostItem = buildPaperPathFromSubPaths(
-          scope,
-          resolveEffectivePathGeometry(hostPath).subpaths,
-          hostPath.fillRule
-        );
-        applyPaperMatrix(scope, hostItem, hostM);
-        hostItem.fillColor = null;
-        hostItem.strokeColor = new scope.Color(accentHex);
-        hostItem.strokeWidth = 1 / zoom;
-        hostItem.dashArray = [4 / zoom, 3 / zoom];
-        overlayLayer.addChild(hostItem);
-      }
+      renderTextPathAnchors(
+        scope,
+        overlayLayer,
+        scene,
+        layer,
+        worldM,
+        draftOverrides,
+        zoom,
+        accentHex
+      );
     }
     return;
   }
@@ -1085,9 +1169,15 @@ export function renderOverlay(
       scaleY: 1,
     });
     const draftBox = computeSubPathsBBox(subpaths);
-    preview.fillColor = toPaperColor(scope, clonePaint(fill), draftBox);
+    const draftMatrix: Matrix2D = { a: 1, b: 0, c: 0, d: 1, tx: x, ty: y };
+    preview.fillColor = toPaperColor(scope, clonePaint(fill), draftBox, draftMatrix);
     if (stroke && stroke.width > 0) {
-      preview.strokeColor = toPaperColor(scope, clonePaint(stroke.color), draftBox);
+      preview.strokeColor = toPaperColor(
+        scope,
+        clonePaint(stroke.color),
+        draftBox,
+        draftMatrix
+      );
       preview.strokeWidth = stroke.width;
       preview.dashArray = sanitizeDashArray(stroke.dashArray) ?? [];
       preview.dashOffset = stroke.dashOffset ?? 0;
@@ -1153,6 +1243,44 @@ export function renderOverlay(
       trailPath.dashArray = [4 / zoom, 3 / zoom];
       overlayLayer.addChild(trailPath);
     }
+  } else if (state.activeTool === 'text') {
+    if (
+      !state.editingTextCaret &&
+      selectedLayers.length === 1 &&
+      selectedLayers[0].type === 'text' &&
+      selectedLayers[0].pathId &&
+      !selectedLayers[0].locked
+    ) {
+      const selText = selectedLayers[0];
+      const { worldM } = getDraftMatrices(state.scene, selText.id, state.draftOverrides);
+      renderTextPathAnchors(
+        scope,
+        overlayLayer,
+        state.scene,
+        selText,
+        worldM,
+        state.draftOverrides,
+        zoom,
+        accentHex
+      );
+    }
+    if (state.hoveredTextPathId) {
+      const hovered = layersById.get(state.hoveredTextPathId);
+      if (hovered && hovered.type === 'path') {
+        const { worldM } = getDraftMatrices(state.scene, hovered.id, state.draftOverrides);
+        const outline = buildPaperPathFromSubPaths(
+          scope,
+          resolveEffectivePathGeometry(hovered).subpaths,
+          hovered.fillRule
+        );
+        applyPaperMatrix(scope, outline, worldM);
+        outline.fillColor = null;
+        outline.strokeColor = new scope.Color(accentHex);
+        outline.strokeWidth = 1.6 / zoom;
+        outline.dashArray = [5 / zoom, 3 / zoom];
+        overlayLayer.addChild(outline);
+      }
+    }
   } else if (
     (state.activeTool === 'pencil' || state.activeTool === 'knife') &&
     state.freehandDraft &&
@@ -1182,6 +1310,49 @@ export function renderOverlay(
       ring.strokeColor = new scope.Color(accentHex);
       ring.strokeWidth = 1.5 / zoom;
       overlayLayer.addChild(ring);
+    }
+  }
+
+  if (state.editingTextCaret) {
+    const rawText = layersById.get(state.editingTextCaret.layerId);
+    if (rawText && rawText.type === 'text' && rawText.pathId) {
+      const hostPath = resolveHostPathLayer(state.scene.layers, rawText.pathId);
+      if (hostPath) {
+        const { worldM } = getDraftMatrices(state.scene, rawText.id, state.draftOverrides);
+        const info = computeTextOnPathCaretAndAnchors(
+          { ...rawText, content: state.editingTextCaret.content },
+          hostPath,
+          state.scene.layers,
+          state.editingTextCaret.caretIndex
+        );
+        if (info) {
+          if (state.activeTool !== 'select') {
+            const hostM = getDraftMatrices(state.scene, hostPath.id, state.draftOverrides).worldM;
+            const hostOutline = buildPaperPathFromSubPaths(
+              scope,
+              resolveEffectivePathGeometry(hostPath).subpaths,
+              hostPath.fillRule
+            );
+            applyPaperMatrix(scope, hostOutline, hostM);
+            hostOutline.fillColor = null;
+            hostOutline.strokeColor = new scope.Color(accentHex);
+            hostOutline.strokeWidth = 1 / zoom;
+            hostOutline.dashArray = [4 / zoom, 3 / zoom];
+            overlayLayer.addChild(hostOutline);
+          }
+
+          const wBot = applyMatrixToPoint(worldM, info.caretBottom);
+          const wTop = applyMatrixToPoint(worldM, info.caretTop);
+          const caretLine = new scope.Path.Line(
+            new scope.Point(wBot.x, wBot.y),
+            new scope.Point(wTop.x, wTop.y)
+          );
+          caretLine.strokeColor = new scope.Color(accentHex);
+          caretLine.strokeWidth = 2 / zoom;
+          caretLine.strokeCap = 'round';
+          overlayLayer.addChild(caretLine);
+        }
+      }
     }
   }
 

@@ -3,7 +3,7 @@ import { updateLayers } from '../../core/commands';
 import { findLayerById } from '../../core/layerTree';
 import { getPrimaryColor } from '../../core/paint';
 import { useEditorStore } from '../../core/store';
-import type { Layer, PathLayer, Point2D, StrokeStyle } from '../../core/types';
+import type { Layer, PathLayer, Point2D, StrokeStyle, TextLayer } from '../../core/types';
 import { findTopLayerAtPoint } from './selectTool';
 import type { CanvasToolController, ToolContext, ToolPointerEvent } from './types';
 
@@ -66,12 +66,15 @@ export function createEyedropperTool(opts?: {
               getPrimaryColor(preferredPaint);
           }
         } else if (hitLayer.type === 'text') {
-          if (typeof hitLayer.fill === 'string') {
-            sampled = hitLayer.fill;
-          } else {
+          const preferredPaint = event.altKey
+            ? hitLayer.stroke?.color ?? hitLayer.fill
+            : hitLayer.fill ?? hitLayer.stroke?.color ?? null;
+          if (typeof preferredPaint === 'string') {
+            sampled = preferredPaint;
+          } else if (preferredPaint) {
             sampled =
               sampleCanvasPixelHex(ctx, event.point) ??
-              getPrimaryColor(hitLayer.fill);
+              getPrimaryColor(preferredPaint);
           }
         }
       }
@@ -95,13 +98,13 @@ export function createEyedropperTool(opts?: {
       const targetMode: 'fill' | 'stroke' = event.altKey ? 'stroke' : 'fill';
 
       if (targetMode === 'stroke') {
-        const pathTargets = unlockedSelected.filter(
-          (l): l is PathLayer => l.type === 'path'
+        const strokeTargets = unlockedSelected.filter(
+          (l): l is PathLayer | TextLayer => l.type === 'path' || l.type === 'text'
         );
-        if (pathTargets.length > 0) {
-          const ids = pathTargets.map((l) => l.id);
+        if (strokeTargets.length > 0) {
+          const ids = strokeTargets.map((l) => l.id);
           updateLayers(ids, (layer) => {
-            if (layer.type !== 'path') return layer;
+            if (layer.type !== 'path' && layer.type !== 'text') return layer;
             const nextStroke: StrokeStyle = layer.stroke
               ? { ...layer.stroke, color: sampled! }
               : {

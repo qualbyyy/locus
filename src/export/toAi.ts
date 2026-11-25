@@ -22,12 +22,7 @@ import {
   computeTextOnPathPlacements,
   resolveHostPathLayer,
 } from '../engine/textOnPath';
-import {
-  isGradientPaint,
-  normalizeGradientStops,
-  resolveGradientEndpoints,
-  sanitizeDashArray,
-} from '../core/paint';
+import { getPrimaryColor, isGradientPaint, normalizeGradientStops, resolveGradientEndpoints, sanitizeDashArray } from '../core/paint';
 import type {
   BBox,
   BlendMode,
@@ -512,87 +507,111 @@ function drawTextLayer(
       )
     : null;
 
+  const hasStroke = Boolean(layer.stroke && layer.stroke.width > 0);
+  const strokeColor =
+    hasStroke && layer.stroke
+      ? toRgb(getPrimaryColor(layer.stroke.color, '#1c1b1a'))
+      : null;
+
+  const emitTextPass = (isStrokePass: boolean) => {
+    page.pushOperators(PDFOperator.of(PDFOperatorNames.BeginText));
+    if (isStrokePass && layer.stroke && strokeColor) {
+      page.pushOperators(
+        PDFOperator.of(PDFOperatorNames.SetTextRenderingMode, [num(1)]),
+        setStrokingRgbColor(strokeColor.red, strokeColor.green, strokeColor.blue),
+        setLineWidth(layer.stroke.width * scale),
+        setLineCap(lineCapStyle(layer.stroke.lineCap)),
+        setLineJoin(lineJoinStyle(layer.stroke.lineJoin))
+      );
+    } else {
+      page.pushOperators(
+        PDFOperator.of(PDFOperatorNames.SetTextRenderingMode, [num(0)])
+      );
+      if (fillPatternName) {
+        page.pushOperators(
+          PDFOperator.of(PDFOperatorNames.NonStrokingColorspace, [
+            PDFName.of('Pattern'),
+          ]),
+          PDFOperator.of(PDFOperatorNames.NonStrokingColorN, [
+            PDFName.of(fillPatternName),
+          ])
+        );
+      } else {
+        const fillColor = toRgb(layer.fill as string);
+        page.pushOperators(
+          setFillingRgbColor(fillColor.red, fillColor.green, fillColor.blue)
+        );
+      }
+    }
+    page.pushOperators(
+      setFontAndSizeOp(resourceName, size),
+      PDFOperator.of(PDFOperatorNames.SetCharacterSpacing, [num(hostPath ? 0 : tracking)])
+    );
+
+    if (hostPath) {
+      const placements = computeTextOnPathPlacements(
+        layer,
+        hostPath,
+        (ch) => Math.max(0.5, font.widthOfTextAtSize(ch, size) / scale),
+        sceneLayers
+      );
+      for (const p of placements) {
+        const rad = degToRad(p.angleDeg);
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        const startX = p.x - cos * (p.advance / 2);
+        const startY = p.y - sin * (p.advance / 2);
+        const gm = multiplyMatrices(worldMatrix, {
+          a: cos,
+          b: sin,
+          c: -sin,
+          d: cos,
+          tx: startX,
+          ty: startY,
+        });
+        const px = gm.tx * scale;
+        const py = (sceneHeight - gm.ty) * scale;
+        page.pushOperators(
+          PDFOperator.of(PDFOperatorNames.SetTextMatrix, [
+            num(gm.a),
+            num(-gm.b),
+            num(-gm.c),
+            num(gm.d),
+            num(px),
+            num(py),
+          ]),
+          PDFOperator.of(PDFOperatorNames.ShowText, [font.encodeText(p.char)])
+        );
+      }
+    } else {
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i];
+        const baselineY = layer.fontSize * 0.85 + i * layer.fontSize * layer.lineHeight;
+        const widthPx =
+          font.widthOfTextAtSize(line, size) / scale +
+          Math.max(0, line.length - 1) * (layer.letterSpacing ?? 0);
+        const shiftX = layer.align === 'center' ? -widthPx / 2 : layer.align === 'right' ? -widthPx : 0;
+        const anchor = applyMatrixToPoint(worldMatrix, { x: shiftX, y: baselineY });
+        const px = anchor.x * scale;
+        const py = (sceneHeight - anchor.y) * scale;
+        page.pushOperators(
+          PDFOperator.of(PDFOperatorNames.SetTextMatrix, [num(a), num(b), num(c), num(d), num(px), num(py)]),
+          PDFOperator.of(PDFOperatorNames.ShowText, [font.encodeText(line)])
+        );
+      }
+    }
+    page.pushOperators(PDFOperator.of(PDFOperatorNames.EndText));
+  };
+
   page.pushOperators(pushGraphicsState());
   if (graphicsState) {
     page.pushOperators(setGraphicsState(graphicsState));
   }
-  page.pushOperators(PDFOperator.of(PDFOperatorNames.BeginText));
-  if (fillPatternName) {
-    page.pushOperators(
-      PDFOperator.of(PDFOperatorNames.NonStrokingColorspace, [
-        PDFName.of('Pattern'),
-      ]),
-      PDFOperator.of(PDFOperatorNames.NonStrokingColorN, [
-        PDFName.of(fillPatternName),
-      ])
-    );
-  } else {
-    const fillColor = toRgb(layer.fill as string);
-    page.pushOperators(
-      setFillingRgbColor(fillColor.red, fillColor.green, fillColor.blue)
-    );
+  if (hasStroke) {
+    emitTextPass(true);
   }
-  page.pushOperators(
-    setFontAndSizeOp(resourceName, size),
-    PDFOperator.of(PDFOperatorNames.SetCharacterSpacing, [num(hostPath ? 0 : tracking)])
-  );
-
-  if (hostPath) {
-    const placements = computeTextOnPathPlacements(
-      layer,
-      hostPath,
-      (ch) => Math.max(0.5, font.widthOfTextAtSize(ch, size) / scale),
-      sceneLayers
-    );
-    for (const p of placements) {
-      const rad = degToRad(p.angleDeg);
-      const cos = Math.cos(rad);
-      const sin = Math.sin(rad);
-      const startX = p.x - cos * (p.advance / 2);
-      const startY = p.y - sin * (p.advance / 2);
-      const gm = multiplyMatrices(worldMatrix, {
-        a: cos,
-        b: sin,
-        c: -sin,
-        d: cos,
-        tx: startX,
-        ty: startY,
-      });
-      const px = gm.tx * scale;
-      const py = (sceneHeight - gm.ty) * scale;
-      page.pushOperators(
-        PDFOperator.of(PDFOperatorNames.SetTextMatrix, [
-          num(gm.a),
-          num(-gm.b),
-          num(-gm.c),
-          num(gm.d),
-          num(px),
-          num(py),
-        ]),
-        PDFOperator.of(PDFOperatorNames.ShowText, [font.encodeText(p.char)])
-      );
-    }
-    page.pushOperators(PDFOperator.of(PDFOperatorNames.EndText), popGraphicsState());
-    return;
-  }
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    const baselineY = layer.fontSize * 0.85 + i * layer.fontSize * layer.lineHeight;
-    const widthPx =
-      font.widthOfTextAtSize(line, size) / scale +
-      Math.max(0, line.length - 1) * (layer.letterSpacing ?? 0);
-    const shiftX = layer.align === 'center' ? -widthPx / 2 : layer.align === 'right' ? -widthPx : 0;
-    const anchor = applyMatrixToPoint(worldMatrix, { x: shiftX, y: baselineY });
-    const px = anchor.x * scale;
-    const py = (sceneHeight - anchor.y) * scale;
-    page.pushOperators(
-      PDFOperator.of(PDFOperatorNames.SetTextMatrix, [num(a), num(b), num(c), num(d), num(px), num(py)]),
-      PDFOperator.of(PDFOperatorNames.ShowText, [font.encodeText(line)])
-    );
-  }
-
-  page.pushOperators(PDFOperator.of(PDFOperatorNames.EndText), popGraphicsState());
+  emitTextPass(false);
+  page.pushOperators(popGraphicsState());
 }
 
 function setFontAndSizeOp(resourceName: string, size: number) {

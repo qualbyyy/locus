@@ -1,17 +1,23 @@
 import paper from 'paper/dist/paper-core';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { copyLayerStyle, pasteLayerStyle } from '../src/core/clipboard';
 import {
   applyShapeBuilderOperation,
+  applyTextPathArc,
   attachTextToPath,
   convertTextLayersToOutlines,
+  createCircleTextPreset,
   createImageLayer,
   createShapeLayer,
   createTextLayer,
+  createTextOnPathFromShape,
   cutPathAtPoint,
   deleteLayers,
+  deselectAllLayers,
   detachTextFromPath,
   resetDocument,
   slicePathLayers,
+  splitTextLayers,
   traceImageLayer,
   undoCommand,
   updateLayers,
@@ -29,7 +35,11 @@ import {
   computeShapeBuilderRegions,
   hitTestShapeBuilderRegions,
 } from '../src/engine/shapeBuilder';
-import { computeTextOnPathPlacements } from '../src/engine/textOnPath';
+import {
+  computeTextOnPathCaretAndAnchors,
+  computeTextOnPathPlacements,
+  projectPointToTextPathOffset,
+} from '../src/engine/textOnPath';
 import { sceneToSvg } from '../src/export/toSvg';
 
 // Valid 1x1 white PNG bytes
@@ -336,5 +346,173 @@ describe('Section 2 Roadmap Tools', () => {
       (l) => l.id === imgLayer.id
     );
     expect(restored?.type).toBe('image');
+  });
+
+  it('5. Circle text preset, baseline offset, pathStretch, text stroke, and splitTextLayers work with Undo', async () => {
+    const circle = createShapeLayer({
+      preset: 'ellipse',
+      x: 400,
+      y: 400,
+      width: 240,
+      height: 240,
+      fill: null,
+      stroke: { color: '#1c1b1a', width: 2 },
+    });
+
+    const onShape = createTextOnPathFromShape(circle.id, {
+      content: 'AROUND CIRCLE',
+      fontSize: 24,
+      baselineOffset: 16,
+      arc: 'top',
+    });
+    expect(onShape).not.toBeNull();
+    expect(onShape!.pathId).toBe(circle.id);
+    expect(onShape!.pathBaselineOffset).toBe(16);
+
+    const basePlacements = computeTextOnPathPlacements(
+      { ...onShape!, pathBaselineOffset: 0 },
+      circle
+    );
+    const offsetPlacements = computeTextOnPathPlacements(onShape!, circle);
+    expect(offsetPlacements.length).toBe(basePlacements.length);
+    const distBase = Math.hypot(basePlacements[0].x - 400, basePlacements[0].y - 400);
+    const distOffset = Math.hypot(offsetPlacements[0].x - 400, offsetPlacements[0].y - 400);
+    expect(Math.abs(distOffset - distBase)).toBeGreaterThan(8);
+
+    const stretchedPlacements = computeTextOnPathPlacements(
+      { ...onShape!, pathStretch: true },
+      circle
+    );
+    const spanBase = Math.hypot(
+      basePlacements[basePlacements.length - 1].x - basePlacements[0].x,
+      basePlacements[basePlacements.length - 1].y - basePlacements[0].y
+    );
+    const spanStretched = Math.hypot(
+      stretchedPlacements[stretchedPlacements.length - 1].x - stretchedPlacements[0].x,
+      stretchedPlacements[stretchedPlacements.length - 1].y - stretchedPlacements[0].y
+    );
+    expect(spanStretched).not.toBeCloseTo(spanBase, 0);
+
+    updateLayers([onShape!.id], {
+      stroke: { color: '#da7756', width: 4, lineCap: 'round', lineJoin: 'round' },
+    });
+    const styledText = findLayerById(
+      useEditorStore.getState().scene.layers,
+      onShape!.id
+    ) as TextLayer;
+    expect(styledText.stroke?.width).toBe(4);
+
+    // Style copy/paste transfers text stroke
+    const targetText = createTextLayer({ x: 80, y: 80, content: 'Строка 1\nСтрока 2' });
+    copyLayerStyle(styledText.id);
+    pasteLayerStyle([targetText.id]);
+    const pasted = findLayerById(
+      useEditorStore.getState().scene.layers,
+      targetText.id
+    ) as TextLayer;
+    expect(pasted.stroke?.color).toBe('#da7756');
+    expect(pasted.stroke?.width).toBe(4);
+
+    const svg = await sceneToSvg(useEditorStore.getState().scene);
+    expect(svg).toContain('paint-order="stroke fill"');
+    expect(svg).toContain('stroke="rgb(218,119,86)"');
+    expect(svg).toContain('<textPath');
+
+    // Split curved text into individual rotated char layers and undo in 1 step
+    const charGroups = splitTextLayers([styledText.id], 'chars');
+    expect(charGroups).toHaveLength(1);
+    expect(charGroups[0].type).toBe('group');
+    expect(charGroups[0].children.length).toBe('AROUND CIRCLE'.replace(/\s+/g, '').length);
+    const firstChar = charGroups[0].children[0] as TextLayer;
+    expect(firstChar.pathId).toBeUndefined();
+    expect(firstChar.stroke?.width).toBe(4);
+
+    undoCommand();
+    expect(
+      findLayerById(useEditorStore.getState().scene.layers, styledText.id)?.type
+    ).toBe('text');
+
+    // Split multi-line text into lines
+    const lineGroups = splitTextLayers([targetText.id], 'lines');
+    expect(lineGroups).toHaveLength(1);
+    expect(lineGroups[0].children).toHaveLength(2);
+    expect((lineGroups[0].children[1] as TextLayer).content).toBe('Строка 2');
+
+    // Create standalone circle text preset when nothing is selected
+    deselectAllLayers();
+    const presetText = createCircleTextPreset();
+    expect(presetText.pathId).toBeTruthy();
+    expect(presetText.content).toBe('ТЕКСТ ПО КРУГУ');
+
+    // Sliced circle at (460, 380): text placements & outlines must stay at (460, 380), not drift to (0, 0)
+    const bigCircle = createShapeLayer({
+      preset: 'ellipse',
+      x: 460,
+      y: 380,
+      width: 240,
+      height: 240,
+      fill: '#da7756',
+      stroke: null,
+    });
+    const pieces = slicePathLayers([bigCircle.id], [
+      { x: 280, y: 380 },
+      { x: 640, y: 380 },
+    ]);
+    expect(pieces.length).toBe(2);
+    const topPiece = pieces[0].y < pieces[1].y ? pieces[0] : pieces[1];
+    const slicedText = createTextOnPathFromShape(topPiece.id, {
+      content: 'SLICED',
+      fontSize: 22,
+    })!;
+    expect(slicedText).not.toBeNull();
+    const slicedPlacements = computeTextOnPathPlacements(
+      slicedText,
+      topPiece,
+      undefined,
+      useEditorStore.getState().scene.layers
+    );
+    expect(slicedPlacements.length).toBeGreaterThanOrEqual(4);
+    for (const gp of slicedPlacements) {
+      expect(gp.x).toBeGreaterThan(280);
+      expect(gp.y).toBeGreaterThan(200);
+    }
+
+    // applyTextPathArc flips top/bottom without accumulating baseline offset
+    const bottomArc = applyTextPathArc(slicedText.id, 'bottom')!;
+    const firstBottomOffset = bottomArc.pathBaselineOffset!;
+    expect(firstBottomOffset).toBeLessThan(0);
+    const bottomArcAgain = applyTextPathArc(slicedText.id, 'bottom')!;
+    expect(bottomArcAgain.pathBaselineOffset).toBe(firstBottomOffset);
+
+    const outlinedSliced = await convertTextLayersToOutlines([slicedText.id]);
+    expect(outlinedSliced).toHaveLength(1);
+    expect(outlinedSliced[0].x).toBeGreaterThan(280);
+    expect(outlinedSliced[0].y).toBeGreaterThan(200);
+
+    // Anchor & caret projection for moving text along path and radial baseline offset
+    const anchorInfo = computeTextOnPathCaretAndAnchors(
+      bottomArc,
+      topPiece,
+      useEditorStore.getState().scene.layers,
+      3
+    );
+    expect(anchorInfo).not.toBeNull();
+    expect(anchorInfo!.curvePt.x).toBeGreaterThan(250);
+    expect(
+      Math.hypot(
+        anchorInfo!.caretTop.x - anchorInfo!.caretBottom.x,
+        anchorInfo!.caretTop.y - anchorInfo!.caretBottom.y
+      )
+    ).toBeGreaterThan(10);
+
+    const projected = projectPointToTextPathOffset(
+      bottomArc,
+      topPiece,
+      { x: 460 + 130, y: 380 },
+      useEditorStore.getState().scene.layers
+    );
+    expect(projected).not.toBeNull();
+    expect(projected!.pathOffset).toBeGreaterThanOrEqual(0);
+    expect(projected!.pathOffset).toBeLessThanOrEqual(100);
   });
 });

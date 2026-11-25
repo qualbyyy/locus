@@ -25,14 +25,27 @@ export interface BooleanResult {
 export function withHeadlessProject<T>(
   fn: (scope: paper.PaperScope) => T
 ): T {
+  const scopes = (
+    paper.PaperScope as unknown as {
+      _scopes?: Record<string, paper.PaperScope>;
+    }
+  )?._scopes;
+  const fallbackScope = scopes
+    ? Object.values(scopes).find((s) => Boolean(s.project))
+    : undefined;
   const scope = new paper.PaperScope();
   scope.settings.applyMatrix = false;
   scope.settings.insertItems = false;
-  const project = new scope.Project(undefined as unknown as HTMLCanvasElement);
+  new scope.Project(undefined as unknown as HTMLCanvasElement);
   try {
     return fn(scope);
   } finally {
-    project.remove();
+    scope.remove();
+    if (fallbackScope && fallbackScope.project) {
+      fallbackScope.activate();
+    } else {
+      paper.activate();
+    }
   }
 }
 

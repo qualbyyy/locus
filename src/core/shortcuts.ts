@@ -24,6 +24,7 @@ export type ShortcutActionId =
   | 'edit.pasteStyle'
   | 'edit.duplicate'
   | 'view.fitArtboard'
+  | 'view.zoomToSelection'
   | 'view.zoom100'
   | 'view.toggleGrid'
   | 'view.toggleRulers'
@@ -37,7 +38,8 @@ export type ShortcutActionId =
   | 'layer.backward'
   | 'layer.forward'
   | 'layer.group'
-  | 'layer.ungroup';
+  | 'layer.ungroup'
+  | 'layer.toggleLock';
 
 export interface ShortcutDefinition {
   id: ShortcutActionId;
@@ -116,7 +118,8 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     id: 'tool.shapeBuilder',
     label: 'Конструктор фигур (Shape Builder)',
     category: 'tools',
-    defaultCombo: 'Shift+KeyM',
+    defaultCombo: 'KeyM',
+    altCombos: ['Shift+KeyM'],
   },
   {
     id: 'tool.pencil',
@@ -196,6 +199,12 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     label: 'Вписать артборд в экран',
     category: 'view',
     defaultCombo: 'Ctrl+Digit0',
+  },
+  {
+    id: 'view.zoomToSelection',
+    label: 'Приблизить к выделению',
+    category: 'view',
+    defaultCombo: 'Ctrl+Digit2',
   },
   {
     id: 'view.zoom100',
@@ -284,6 +293,12 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     label: 'Разгруппировать',
     category: 'vector',
     defaultCombo: 'Ctrl+Shift+KeyG',
+  },
+  {
+    id: 'layer.toggleLock',
+    label: 'Заблокировать / разблокировать',
+    category: 'vector',
+    defaultCombo: 'Ctrl+KeyL',
   },
 ];
 

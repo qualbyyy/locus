@@ -89,7 +89,7 @@ const ALIGN_MODES: AlignMode[] = [
 
 const BOOLEAN_OPS: BooleanOp[] = ['unite', 'subtract', 'intersect', 'exclude'];
 
-const PRESETS: SmartShapePreset[] = ['ellipse', 'rect', 'polygon', 'star'];
+const PRESETS: SmartShapePreset[] = ['ellipse', 'rect', 'polygon', 'star', 'capsule'];
 
 export const TOOL_LABELS: Record<string, string> = {
   create_blob: 'Клякса',

@@ -11,31 +11,13 @@ import {
   multiplyMatrices,
   type Matrix2D,
 } from '../core/math';
-import type { BBox, Layer, LayerEffects, Scene } from '../core/types';
+import type { BBox, Layer, Scene } from '../core/types';
+import { getEffectsPadding } from '../engine/effects';
 
 function cloneLayer<T extends Layer>(layer: T): T {
   return typeof globalThis.structuredClone === 'function'
     ? globalThis.structuredClone(layer)
     : (JSON.parse(JSON.stringify(layer)) as T);
-}
-
-function getEffectsPadding(effects?: LayerEffects): number {
-  if (!effects) return 0;
-  let pad = 0;
-  if (effects.blur && effects.blur > 0) {
-    pad = Math.max(pad, Math.ceil(effects.blur * 2));
-  }
-  if (effects.dropShadow) {
-    const ds = effects.dropShadow;
-    pad = Math.max(
-      pad,
-      Math.ceil(ds.blur * 2 + Math.max(Math.abs(ds.offsetX), Math.abs(ds.offsetY)))
-    );
-  }
-  if (effects.outerGlow) {
-    pad = Math.max(pad, Math.ceil(effects.outerGlow.blur * 2));
-  }
-  return pad;
 }
 
 function collectLayerIdsInSubtree(layer: Layer, out: Set<string>): void {

@@ -7,6 +7,7 @@ import {
 } from '../core/layerTree';
 import {
   IDENTITY_MATRIX,
+  clamp,
   computeLayerBBoxWithMatrix,
   computeLayerLocalBBox,
   computeSubPathsBBox,
@@ -34,6 +35,7 @@ import type {
 import {
   colorWithOpacity,
   getEffectsPadding,
+  hasActiveColorAdjust,
   hasRasterEffects,
   resolveEffectivePathGeometry,
 } from '../engine/effects';
@@ -107,9 +109,35 @@ function buildPath(ctx: CanvasRenderingContext2D, subpaths: SubPath[]): void {
   }
 }
 
-function buildFilterString(effects?: LayerEffects): string {
+function buildColorAdjustFilter(effects?: LayerEffects): string {
+  const ca = effects?.colorAdjust;
+  if (!hasActiveColorAdjust(ca) || !ca) return '';
+  const parts: string[] = [];
+  if (Math.abs(ca.brightness) > 0.5) {
+    parts.push(`brightness(${Math.max(0, 1 + ca.brightness / 100).toFixed(3)})`);
+  }
+  if (Math.abs(ca.contrast) > 0.5) {
+    parts.push(`contrast(${Math.max(0, 1 + ca.contrast / 100).toFixed(3)})`);
+  }
+  if (Math.abs(ca.saturate) > 0.5) {
+    parts.push(`saturate(${Math.max(0, 1 + ca.saturate / 100).toFixed(3)})`);
+  }
+  if (Math.abs(ca.hue) > 0.5) {
+    parts.push(`hue-rotate(${ca.hue.toFixed(1)}deg)`);
+  }
+  return parts.join(' ');
+}
+
+function buildFilterString(
+  effects?: LayerEffects,
+  options: { includeColorAdjust?: boolean } = {}
+): string {
   if (!effects) return 'none';
   const parts: string[] = [];
+  if (options.includeColorAdjust !== false) {
+    const caStr = buildColorAdjustFilter(effects);
+    if (caStr) parts.push(caStr);
+  }
   if (effects.outerGlow && effects.outerGlow.blur > 0) {
     const glowColor = colorWithOpacity(effects.outerGlow.color, effects.outerGlow.opacity);
     parts.push(`drop-shadow(0px 0px ${effects.outerGlow.blur}px ${glowColor})`);
@@ -126,9 +154,122 @@ function buildFilterString(effects?: LayerEffects): string {
   return parts.length > 0 ? parts.join(' ') : 'none';
 }
 
-function applyEffectsToContext(ctx: CanvasRenderingContext2D, effects?: LayerEffects): void {
+function needsOffscreenEffectSurface(effects?: LayerEffects): boolean {
+  if (!effects) return false;
+  return Boolean(
+    effects.innerShadow ||
+      (effects.motionBlur && effects.motionBlur.amount > 0.1)
+  );
+}
+
+interface LayerEffectSurface {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  ox: number;
+  oy: number;
+  w: number;
+  h: number;
+  scale: number;
+}
+
+function createLayerEffectSurface(
+  localBox: BBox,
+  effects?: LayerEffects
+): LayerEffectSurface | null {
+  const innerPad = effects?.innerShadow
+    ? Math.ceil(
+        effects.innerShadow.blur * 2 +
+          Math.max(
+            Math.abs(effects.innerShadow.offsetX),
+            Math.abs(effects.innerShadow.offsetY)
+          )
+      ) + 8
+    : 0;
+  const pad = Math.max(getEffectsPadding(effects), innerPad, 8);
+  const ox = localBox.x - pad;
+  const oy = localBox.y - pad;
+  const w = Math.max(1, localBox.width + pad * 2);
+  const h = Math.max(1, localBox.height + pad * 2);
+  const scale = Math.min(1, 2048 / Math.max(w, h));
+  const canvas = createCanvas(w * scale, h * scale);
+  const surfCtx = canvas.getContext('2d');
+  if (!surfCtx) return null;
+  surfCtx.scale(scale, scale);
+  surfCtx.translate(-ox, -oy);
+  const caStr = buildColorAdjustFilter(effects);
+  if (caStr && 'filter' in surfCtx) {
+    surfCtx.filter = caStr;
+  }
+  return { canvas, ctx: surfCtx, ox, oy, w, h, scale };
+}
+
+function finishLayerEffectSurface(
+  targetCtx: CanvasRenderingContext2D,
+  surface: LayerEffectSurface,
+  effects?: LayerEffects
+): void {
+  let activeCanvas = surface.canvas;
+  const { scale } = surface;
+  const pw = activeCanvas.width;
+  const ph = activeCanvas.height;
+
+  if (effects?.innerShadow) {
+    const is = effects.innerShadow;
+    const invCanvas = createCanvas(pw, ph);
+    const invCtx = invCanvas.getContext('2d');
+    const shadowCanvas = createCanvas(pw, ph);
+    const shadowCtx = shadowCanvas.getContext('2d');
+    const activeCtx = activeCanvas.getContext('2d');
+    if (invCtx && shadowCtx && activeCtx) {
+      invCtx.fillStyle = colorWithOpacity(is.color, is.opacity);
+      invCtx.fillRect(0, 0, pw, ph);
+      invCtx.globalCompositeOperation = 'destination-out';
+      invCtx.drawImage(activeCanvas, 0, 0);
+
+      if (is.blur > 0.1 && 'filter' in shadowCtx) {
+        shadowCtx.filter = `blur(${(is.blur * scale).toFixed(2)}px)`;
+      }
+      shadowCtx.drawImage(invCanvas, is.offsetX * scale, is.offsetY * scale);
+
+      activeCtx.save();
+      activeCtx.setTransform(1, 0, 0, 1, 0, 0);
+      activeCtx.filter = 'none';
+      activeCtx.globalCompositeOperation = 'source-atop';
+      activeCtx.drawImage(shadowCanvas, 0, 0);
+      activeCtx.restore();
+    }
+  }
+
+  if (effects?.motionBlur && effects.motionBlur.amount > 0.1) {
+    const mb = effects.motionBlur;
+    let steps = clamp(Math.ceil(mb.amount / 2), 9, 25);
+    if (steps % 2 === 0) steps += 1;
+    const rad = degToRad(mb.angle);
+    const dx = Math.cos(rad) * mb.amount * scale;
+    const dy = Math.sin(rad) * mb.amount * scale;
+    const motionCanvas = createCanvas(pw, ph);
+    const motionCtx = motionCanvas.getContext('2d');
+    if (motionCtx) {
+      for (let i = 0; i < steps; i += 1) {
+        const t = steps === 1 ? 0 : i / (steps - 1) - 0.5;
+        motionCtx.globalAlpha = 1 / (i + 1);
+        motionCtx.drawImage(activeCanvas, dx * t, dy * t);
+      }
+      activeCanvas = motionCanvas;
+    }
+  }
+
+  applyEffectsToContext(targetCtx, effects, { includeColorAdjust: false });
+  targetCtx.drawImage(activeCanvas, surface.ox, surface.oy, surface.w, surface.h);
+}
+
+function applyEffectsToContext(
+  ctx: CanvasRenderingContext2D,
+  effects?: LayerEffects,
+  options: { includeColorAdjust?: boolean } = {}
+): void {
   if (!effects || !hasRasterEffects(effects)) return;
-  const filterStr = buildFilterString(effects);
+  const filterStr = buildFilterString(effects, options);
   if ('filter' in ctx && filterStr !== 'none') {
     ctx.filter = filterStr;
   } else if (effects.dropShadow) {
@@ -168,6 +309,29 @@ export function paintPathLayer(ctx: CanvasRenderingContext2D, layer: PathLayer):
   if (!hasFill && !hasStroke && extrudeFaces.length === 0) return;
 
   const localBox = computeSubPathsBBox(subpaths);
+  const drawGeometry = (targetCtx: CanvasRenderingContext2D) => {
+    for (const face of extrudeFaces) {
+      buildPath(targetCtx, face.subpaths);
+      targetCtx.fillStyle = face.fill;
+      targetCtx.fill('nonzero');
+    }
+
+    buildPath(targetCtx, subpaths);
+    if (hasFill) {
+      targetCtx.fillStyle = toCanvasPaint(targetCtx, layer.fill as Paint, localBox);
+      targetCtx.fill(layer.fillRule === 'evenodd' ? 'evenodd' : 'nonzero');
+    }
+    if (hasStroke) {
+      targetCtx.strokeStyle = toCanvasPaint(targetCtx, layer.stroke!.color, localBox);
+      targetCtx.lineWidth = layer.stroke!.width;
+      targetCtx.lineCap = layer.stroke!.lineCap ?? 'round';
+      targetCtx.lineJoin = layer.stroke!.lineJoin ?? 'round';
+      const dash = sanitizeDashArray(layer.stroke!.dashArray);
+      targetCtx.setLineDash(dash ?? []);
+      targetCtx.lineDashOffset = layer.stroke!.dashOffset ?? 0;
+      targetCtx.stroke();
+    }
+  };
 
   ctx.save();
   applyMatrix(ctx, getLayerMatrix(layer));
@@ -175,29 +339,29 @@ export function paintPathLayer(ctx: CanvasRenderingContext2D, layer: PathLayer):
   if (layer.blendMode && layer.blendMode !== 'normal') {
     ctx.globalCompositeOperation = toCanvasCompositeOp(layer.blendMode);
   }
+
+  if (needsOffscreenEffectSurface(layer.effects)) {
+    const strokePad = hasStroke ? layer.stroke!.width : 0;
+    const paddedBox: BBox =
+      strokePad > 0
+        ? {
+            x: localBox.x - strokePad,
+            y: localBox.y - strokePad,
+            width: localBox.width + strokePad * 2,
+            height: localBox.height + strokePad * 2,
+          }
+        : localBox;
+    const surface = createLayerEffectSurface(paddedBox, layer.effects);
+    if (surface) {
+      drawGeometry(surface.ctx);
+      finishLayerEffectSurface(ctx, surface, layer.effects);
+      ctx.restore();
+      return;
+    }
+  }
+
   applyEffectsToContext(ctx, layer.effects);
-
-  for (const face of extrudeFaces) {
-    buildPath(ctx, face.subpaths);
-    ctx.fillStyle = face.fill;
-    ctx.fill('nonzero');
-  }
-
-  buildPath(ctx, subpaths);
-  if (hasFill) {
-    ctx.fillStyle = toCanvasPaint(ctx, layer.fill as Paint, localBox);
-    ctx.fill(layer.fillRule === 'evenodd' ? 'evenodd' : 'nonzero');
-  }
-  if (hasStroke) {
-    ctx.strokeStyle = toCanvasPaint(ctx, layer.stroke!.color, localBox);
-    ctx.lineWidth = layer.stroke!.width;
-    ctx.lineCap = layer.stroke!.lineCap ?? 'round';
-    ctx.lineJoin = layer.stroke!.lineJoin ?? 'round';
-    const dash = sanitizeDashArray(layer.stroke!.dashArray);
-    ctx.setLineDash(dash ?? []);
-    ctx.lineDashOffset = layer.stroke!.dashOffset ?? 0;
-    ctx.stroke();
-  }
+  drawGeometry(ctx);
   ctx.restore();
 }
 
@@ -210,46 +374,85 @@ export function paintTextLayer(
   const localBox = hostPath
     ? computeTextOnPathLocalBBox(layer, hostPath, sceneLayers)
     : computeLayerLocalBBox(layer);
+  const hasStroke = Boolean(layer.stroke && layer.stroke.width > 0);
+  const drawText = (targetCtx: CanvasRenderingContext2D) => {
+    targetCtx.fillStyle = toCanvasPaint(targetCtx, layer.fill, localBox);
+    targetCtx.textBaseline = 'alphabetic';
+    targetCtx.font = `${layer.fontWeight} ${layer.fontSize}px "${layer.fontFamily}", sans-serif`;
+
+    if (hasStroke && layer.stroke) {
+      targetCtx.strokeStyle = toCanvasPaint(targetCtx, layer.stroke.color, localBox);
+      targetCtx.lineWidth = layer.stroke.width;
+      targetCtx.lineCap = layer.stroke.lineCap ?? 'round';
+      targetCtx.lineJoin = layer.stroke.lineJoin ?? 'round';
+      targetCtx.miterLimit = 2;
+      targetCtx.setLineDash(sanitizeDashArray(layer.stroke.dashArray) ?? []);
+      targetCtx.lineDashOffset = layer.stroke.dashOffset ?? 0;
+    }
+
+    if (hostPath) {
+      const placements = computeTextOnPathPlacements(
+        layer,
+        hostPath,
+        (ch) => Math.max(layer.fontSize * 0.25, targetCtx.measureText(ch).width),
+        sceneLayers
+      );
+      targetCtx.textAlign = 'center';
+      const renderPass = (mode: 'stroke' | 'fill') => {
+        for (const p of placements) {
+          targetCtx.save();
+          targetCtx.translate(p.x, p.y);
+          targetCtx.rotate(degToRad(p.angleDeg));
+          if (mode === 'stroke') {
+            targetCtx.strokeText(p.char, 0, 0);
+          } else {
+            targetCtx.fillText(p.char, 0, 0);
+          }
+          targetCtx.restore();
+        }
+      };
+      if (hasStroke) renderPass('stroke');
+      renderPass('fill');
+      return;
+    }
+
+    targetCtx.textAlign = layer.align;
+    const lines = (layer.content || '').split('\n');
+    const renderFreePass = (mode: 'stroke' | 'fill') => {
+      lines.forEach((line, i) => {
+        const y = layer.fontSize * 0.85 + i * layer.fontSize * layer.lineHeight;
+        if (layer.letterSpacing && Math.abs(layer.letterSpacing) > 1e-4) {
+          drawTrackedText(targetCtx, line, 0, y, layer.letterSpacing, layer.align, mode);
+        } else if (mode === 'stroke') {
+          targetCtx.strokeText(line, 0, y);
+        } else {
+          targetCtx.fillText(line, 0, y);
+        }
+      });
+    };
+    if (hasStroke) renderFreePass('stroke');
+    renderFreePass('fill');
+  };
+
   ctx.save();
   applyMatrix(ctx, getLayerMatrix(layer));
   ctx.globalAlpha = ctx.globalAlpha * layer.opacity;
   if (layer.blendMode && layer.blendMode !== 'normal') {
     ctx.globalCompositeOperation = toCanvasCompositeOp(layer.blendMode);
   }
-  applyEffectsToContext(ctx, layer.effects);
-  ctx.fillStyle = toCanvasPaint(ctx, layer.fill, localBox);
-  ctx.textBaseline = 'alphabetic';
-  ctx.font = `${layer.fontWeight} ${layer.fontSize}px "${layer.fontFamily}", sans-serif`;
 
-  if (hostPath) {
-    const placements = computeTextOnPathPlacements(
-      layer,
-      hostPath,
-      (ch) => Math.max(layer.fontSize * 0.25, ctx.measureText(ch).width),
-      sceneLayers
-    );
-    ctx.textAlign = 'center';
-    for (const p of placements) {
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(degToRad(p.angleDeg));
-      ctx.fillText(p.char, 0, 0);
+  if (needsOffscreenEffectSurface(layer.effects)) {
+    const surface = createLayerEffectSurface(localBox, layer.effects);
+    if (surface) {
+      drawText(surface.ctx);
+      finishLayerEffectSurface(ctx, surface, layer.effects);
       ctx.restore();
+      return;
     }
-    ctx.restore();
-    return;
   }
 
-  ctx.textAlign = layer.align;
-  const lines = (layer.content || '').split('\n');
-  lines.forEach((line, i) => {
-    const y = layer.fontSize * 0.85 + i * layer.fontSize * layer.lineHeight;
-    if (layer.letterSpacing && Math.abs(layer.letterSpacing) > 1e-4) {
-      drawTrackedText(ctx, line, 0, y, layer.letterSpacing, layer.align);
-    } else {
-      ctx.fillText(line, 0, y);
-    }
-  });
+  applyEffectsToContext(ctx, layer.effects);
+  drawText(ctx);
   ctx.restore();
 }
 
@@ -260,14 +463,20 @@ function drawTrackedText(
   x: number,
   y: number,
   tracking: number,
-  align: 'left' | 'center' | 'right'
+  align: 'left' | 'center' | 'right',
+  mode: 'fill' | 'stroke' = 'fill'
 ): void {
-  const widths = Array.from(text).map((ch) => ctx.measureText(ch).width);
-  const total = widths.reduce((a, b) => a + b, 0) + Math.max(0, text.length - 1) * tracking;
+  const chars = Array.from(text);
+  const widths = chars.map((ch) => ctx.measureText(ch).width);
+  const total = widths.reduce((a, b) => a + b, 0) + Math.max(0, chars.length - 1) * tracking;
   let cursor = align === 'center' ? x - total / 2 : align === 'right' ? x - total : x;
   ctx.textAlign = 'left';
-  Array.from(text).forEach((ch, i) => {
-    ctx.fillText(ch, cursor, y);
+  chars.forEach((ch, i) => {
+    if (mode === 'stroke') {
+      ctx.strokeText(ch, cursor, y);
+    } else {
+      ctx.fillText(ch, cursor, y);
+    }
     cursor += widths[i] + tracking;
   });
 }
@@ -283,6 +492,15 @@ export async function paintImageLayer(
   ctx.globalAlpha = ctx.globalAlpha * layer.opacity;
   if (layer.blendMode && layer.blendMode !== 'normal') {
     ctx.globalCompositeOperation = toCanvasCompositeOp(layer.blendMode);
+  }
+  if (needsOffscreenEffectSurface(layer.effects)) {
+    const surface = createLayerEffectSurface(computeLayerLocalBBox(layer), layer.effects);
+    if (surface) {
+      surface.ctx.drawImage(img, -layer.width / 2, -layer.height / 2, layer.width, layer.height);
+      finishLayerEffectSurface(ctx, surface, layer.effects);
+      ctx.restore();
+      return;
+    }
   }
   applyEffectsToContext(ctx, layer.effects);
   ctx.drawImage(img, -layer.width / 2, -layer.height / 2, layer.width, layer.height);
@@ -364,6 +582,15 @@ export async function paintGroupLayer(
   ctx.globalAlpha = ctx.globalAlpha * group.opacity;
   if (group.blendMode && group.blendMode !== 'normal') {
     ctx.globalCompositeOperation = toCanvasCompositeOp(group.blendMode);
+  }
+  if (needsOffscreenEffectSurface(group.effects)) {
+    const surface = createLayerEffectSurface(computeLayerLocalBBox(group), group.effects);
+    if (surface) {
+      await paintLayerList(surface.ctx, group.children, paintLayer, sceneLayers ?? group.children);
+      finishLayerEffectSurface(ctx, surface, group.effects);
+      ctx.restore();
+      return;
+    }
   }
   applyEffectsToContext(ctx, group.effects);
   await paintLayerList(ctx, group.children, paintLayer, sceneLayers ?? group.children);
@@ -549,12 +776,10 @@ export async function rasterizeSceneToBytes(
   };
 }
 
-function paintGroupSync(ctx: CanvasRenderingContext2D, group: GroupLayer): void {
-  if (!group.visible || group.children.length === 0) return;
-  ctx.save();
-  applyMatrix(ctx, getLayerMatrix(group));
-  ctx.globalAlpha = ctx.globalAlpha * group.opacity;
-  applyEffectsToContext(ctx, group.effects);
+function paintGroupChildrenSync(
+  ctx: CanvasRenderingContext2D,
+  group: GroupLayer
+): void {
   const byId = new Map(group.children.map((l) => [l.id, l] as const));
   const maskIds = new Set<string>();
   for (const l of group.children) {
@@ -590,6 +815,15 @@ function paintGroupSync(ctx: CanvasRenderingContext2D, group: GroupLayer): void 
         ctx.save();
         applyMatrix(ctx, getLayerMatrix(child));
         ctx.globalAlpha = ctx.globalAlpha * child.opacity;
+        if (needsOffscreenEffectSurface(child.effects)) {
+          const surface = createLayerEffectSurface(computeLayerLocalBBox(child), child.effects);
+          if (surface) {
+            surface.ctx.drawImage(img, -child.width / 2, -child.height / 2, child.width, child.height);
+            finishLayerEffectSurface(ctx, surface, child.effects);
+            ctx.restore();
+            continue;
+          }
+        }
         applyEffectsToContext(ctx, child.effects);
         ctx.drawImage(img, -child.width / 2, -child.height / 2, child.width, child.height);
         ctx.restore();
@@ -597,6 +831,24 @@ function paintGroupSync(ctx: CanvasRenderingContext2D, group: GroupLayer): void 
     }
   }
   closeClip();
+}
+
+function paintGroupSync(ctx: CanvasRenderingContext2D, group: GroupLayer): void {
+  if (!group.visible || group.children.length === 0) return;
+  ctx.save();
+  applyMatrix(ctx, getLayerMatrix(group));
+  ctx.globalAlpha = ctx.globalAlpha * group.opacity;
+  if (needsOffscreenEffectSurface(group.effects)) {
+    const surface = createLayerEffectSurface(computeLayerLocalBBox(group), group.effects);
+    if (surface) {
+      paintGroupChildrenSync(surface.ctx, group);
+      finishLayerEffectSurface(ctx, surface, group.effects);
+      ctx.restore();
+      return;
+    }
+  }
+  applyEffectsToContext(ctx, group.effects);
+  paintGroupChildrenSync(ctx, group);
   ctx.restore();
 }
 
@@ -660,6 +912,20 @@ export function rasterizeLayerLocalWithEffects(
     if (!img) return null;
     ctx.save();
     ctx.translate(localLayer.x, localLayer.y);
+    if (needsOffscreenEffectSurface(localLayer.effects)) {
+      const surface = createLayerEffectSurface(computeLayerLocalBBox(localLayer), localLayer.effects);
+      if (surface) {
+        surface.ctx.drawImage(img, -localLayer.width / 2, -localLayer.height / 2, localLayer.width, localLayer.height);
+        finishLayerEffectSurface(ctx, surface, localLayer.effects);
+        ctx.restore();
+        return {
+          canvas,
+          centerX: originX + w / 2,
+          centerY: originY + h / 2,
+          scale,
+        };
+      }
+    }
     applyEffectsToContext(ctx, localLayer.effects);
     ctx.drawImage(img, -localLayer.width / 2, -localLayer.height / 2, localLayer.width, localLayer.height);
     ctx.restore();

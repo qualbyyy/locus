@@ -43,6 +43,7 @@ import type {
   SubPath,
 } from '../types';
 import {
+  clearTextPathProps,
   commitScene,
   createLayerId,
   findSharedClipMaskId,
@@ -684,8 +685,11 @@ export function expandLayerAppearance(layerIds: string[]): PathLayer[] {
         const remainingEffects = layer.effects
           ? {
               ...(layer.effects.blur !== undefined ? { blur: layer.effects.blur } : {}),
+              ...(layer.effects.motionBlur ? { motionBlur: layer.effects.motionBlur } : {}),
               ...(layer.effects.dropShadow ? { dropShadow: layer.effects.dropShadow } : {}),
+              ...(layer.effects.innerShadow ? { innerShadow: layer.effects.innerShadow } : {}),
               ...(layer.effects.outerGlow ? { outerGlow: layer.effects.outerGlow } : {}),
+              ...(layer.effects.colorAdjust ? { colorAdjust: layer.effects.colorAdjust } : {}),
             }
           : undefined;
         const cleanEffects =
@@ -837,11 +841,7 @@ export function cutPathAtPoint(
         nextNode = copy;
       }
       if (nextNode.type === 'text' && nextNode.pathId && replacedIds.has(nextNode.pathId)) {
-        const copy = { ...nextNode };
-        delete copy.pathId;
-        delete copy.pathOffset;
-        delete copy.pathFlip;
-        nextNode = copy;
+        nextNode = clearTextPathProps(nextNode);
       }
       return nextNode;
     });
@@ -911,11 +911,7 @@ export function slicePathLayers(
         nextNode = copy;
       }
       if (nextNode.type === 'text' && nextNode.pathId && slicedIds.has(nextNode.pathId)) {
-        const copy = { ...nextNode };
-        delete copy.pathId;
-        delete copy.pathOffset;
-        delete copy.pathFlip;
-        nextNode = copy;
+        nextNode = clearTextPathProps(nextNode);
       }
       return nextNode;
     });

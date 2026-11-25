@@ -81,7 +81,7 @@ export function InspectorAppearance({
           ) : (
             <button
               type="button"
-              onClick={() => onUpdateLayers([layer.id], { fill: '#da7756' })}
+              onClick={() => onUpdateLayers([layer.id], { fill: '#1c1b1a' })}
               className="text-[11px] text-paper-accent hover:underline"
             >
               Добавить

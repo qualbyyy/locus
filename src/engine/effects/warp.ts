@@ -369,6 +369,62 @@ function applyRoundCorners(subpaths: SubPath[], radius: number): SubPath[] {
   });
 }
 
+function applyPuckerBloat(subpaths: SubPath[], amount: number): SubPath[] {
+  if (Math.abs(amount) <= 1e-4) return subpaths;
+  const t = clamp(amount, -100, 100) / 100;
+  const bbox = computeSubPathsBBox(subpaths);
+  const cx = bbox.x + bbox.width / 2;
+  const cy = bbox.y + bbox.height / 2;
+
+  const anchorScale = t >= 0 ? 1 - 0.45 * t : 1 + 0.55 * -t;
+  const handleScale = t >= 0 ? 1 + 1.15 * t : 1 - 0.85 * -t;
+  const scalePt = (pt: Point2D, s: number): Point2D => ({
+    x: cx + (pt.x - cx) * s,
+    y: cy + (pt.y - cy) * s,
+  });
+
+  return subpaths.map((sp) => {
+    const anchors = sp.anchors;
+    const n = anchors.length;
+    if (n < 2) {
+      return { closed: sp.closed, anchors: anchors.map(cloneAnchor) };
+    }
+    const out: AnchorPoint[] = anchors.map((a) => {
+      const p = scalePt(a, anchorScale);
+      return {
+        x: p.x,
+        y: p.y,
+        handleIn: { x: 0, y: 0 },
+        handleOut: { x: 0, y: 0 },
+        smooth: a.smooth,
+      };
+    });
+
+    const segCount = sp.closed ? n : n - 1;
+    for (let i = 0; i < segCount; i += 1) {
+      const a = anchors[i];
+      const nextIdx = (i + 1) % n;
+      const b = anchors[nextIdx];
+      const hasHandles =
+        Math.hypot(a.handleOut.x, a.handleOut.y) > 1e-3 ||
+        Math.hypot(b.handleIn.x, b.handleIn.y) > 1e-3;
+      const baseP1: Point2D = hasHandles
+        ? { x: a.x + a.handleOut.x, y: a.y + a.handleOut.y }
+        : { x: a.x + (b.x - a.x) / 3, y: a.y + (b.y - a.y) / 3 };
+      const baseP2: Point2D = hasHandles
+        ? { x: b.x + b.handleIn.x, y: b.y + b.handleIn.y }
+        : { x: b.x + (a.x - b.x) / 3, y: b.y + (a.y - b.y) / 3 };
+
+      const p1 = scalePt(baseP1, handleScale);
+      const p2 = scalePt(baseP2, handleScale);
+      out[i].handleOut = { x: p1.x - out[i].x, y: p1.y - out[i].y };
+      out[nextIdx].handleIn = { x: p2.x - out[nextIdx].x, y: p2.y - out[nextIdx].y };
+    }
+
+    return { closed: sp.closed, anchors: out };
+  });
+}
+
 export function applyDistortToSubPaths(
   subpaths: SubPath[],
   distort: DistortEffect
@@ -378,6 +434,9 @@ export function applyDistortToSubPaths(
   }
   if (distort.kind === 'roughen') {
     return applyRoughen(subpaths, distort.size, distort.detail, distort.seed);
+  }
+  if (distort.kind === 'puckerBloat') {
+    return applyPuckerBloat(subpaths, distort.amount);
   }
   return applyRoundCorners(subpaths, distort.radius);
 }

@@ -18,8 +18,15 @@ import {
   flattenLayers,
   getLayerWorldMatrix,
   getParentGroupId,
+  getParentWorldMatrix,
 } from '../core/layerTree';
-import { applyMatrixToPoint, decomposeMatrix } from '../core/math';
+import {
+  applyMatrixToPoint,
+  computeLayerBBoxWithMatrix,
+  decomposeMatrix,
+  getLayerMatrix,
+  multiplyMatrices,
+} from '../core/math';
 import { getPrimaryColor } from '../core/paint';
 import { useSettingsStore } from '../core/settings';
 import { useCanvasBackdropStore } from '../core/canvasBackdrop';
@@ -55,6 +62,7 @@ import type {
 export interface PaperCanvasHandle {
   fitArtboard: () => void;
   focusArtboard: (artboardId: string) => void;
+  zoomToSelection: () => void;
   resetZoom100: () => void;
   zoomIn: () => void;
   zoomOut: () => void;
@@ -92,6 +100,7 @@ interface EditingTextState {
   layerId: string;
   draft: string;
   selectAll: boolean;
+  caretIndex: number;
 }
 
 const MIN_ZOOM = 0.05;
@@ -272,6 +281,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
           layerId: layer.id,
           draft: layer.content,
           selectAll,
+          caretIndex: layer.content.length,
         };
         editingTextRef.current = nextState;
         setEditingText(nextState);
@@ -304,6 +314,8 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
           shapeBuilder: overlayExtrasRef.current.shapeBuilder,
           freehandDraft: overlayExtrasRef.current.freehandDraft,
           hoveredMaskId: overlayExtrasRef.current.hoveredMaskId,
+          hoveredTextPathId: overlayExtrasRef.current.hoveredTextPathId,
+          editingTextCaret: overlayExtrasRef.current.editingTextCaret,
           accentColor: settings.accentColor,
           grid: {
             show: settings.showGrid,
@@ -346,30 +358,32 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       }
     }, []);
 
-    const focusArtboard = useCallback(
-      (artboardId: string) => {
-        const rig = rigRef.current;
-        if (!rig) return;
-
+    const fitBoxInView = useCallback(
+      (
+        rig: PaperRig,
+        box: { x: number; y: number; width: number; height: number }
+      ) => {
         const { scope } = rig;
         const vw = scope.view.viewSize.width;
         const vh = scope.view.viewSize.height;
         if (vw <= 0 || vh <= 0) return;
 
-        const ab = getActiveArtboard(sceneRef.current, artboardId);
         const padding = 48;
         const availW = Math.max(40, vw - padding * 2);
         const availH = Math.max(40, vh - padding * 2);
         const zoom = clamp(
-          Math.min(availW / ab.width, availH / ab.height),
+          Math.min(
+            availW / Math.max(1, box.width),
+            availH / Math.max(1, box.height)
+          ),
           MIN_ZOOM,
           4
         );
 
         scope.view.zoom = zoom;
         scope.view.center = new scope.Point(
-          ab.x + ab.width / 2,
-          ab.y + ab.height / 2
+          box.x + box.width / 2,
+          box.y + box.height / 2
         );
         updateArtboardBorderWidth(rig);
         redrawOverlayFromRefs(rig);
@@ -382,9 +396,81 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       [redrawOverlayFromRefs, updateArtboardBorderWidth]
     );
 
+    const focusArtboard = useCallback(
+      (artboardId: string) => {
+        const rig = rigRef.current;
+        if (!rig) return;
+        const ab = getActiveArtboard(sceneRef.current, artboardId);
+        fitBoxInView(rig, ab);
+      },
+      [fitBoxInView]
+    );
+
     const fitArtboard = useCallback(() => {
       focusArtboard(activeArtboardIdRef.current);
     }, [focusArtboard]);
+
+    const zoomToSelection = useCallback(() => {
+      const rig = rigRef.current;
+      if (!rig) return;
+      const ids = selectedIdsRef.current;
+      if (ids.length === 0) return;
+      const layers = sceneRef.current.layers;
+
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+
+      for (const id of ids) {
+        const layer = findLayerById(layers, id);
+        if (!layer) continue;
+        const parentM = getParentWorldMatrix(layers, layer.id);
+        let box = computeLayerBBoxWithMatrix(layer, parentM);
+        if (layer.type === 'text' && layer.pathId) {
+          const host = resolveHostPathLayer(layers, layer.pathId);
+          if (host) {
+            const localBox = computeTextOnPathLocalBBox(layer, host, layers);
+            const worldM = multiplyMatrices(parentM, getLayerMatrix(layer));
+            const corners = [
+              applyMatrixToPoint(worldM, { x: localBox.x, y: localBox.y }),
+              applyMatrixToPoint(worldM, {
+                x: localBox.x + localBox.width,
+                y: localBox.y,
+              }),
+              applyMatrixToPoint(worldM, {
+                x: localBox.x + localBox.width,
+                y: localBox.y + localBox.height,
+              }),
+              applyMatrixToPoint(worldM, {
+                x: localBox.x,
+                y: localBox.y + localBox.height,
+              }),
+            ];
+            const xs = corners.map((c) => c.x);
+            const ys = corners.map((c) => c.y);
+            box = {
+              x: Math.min(...xs),
+              y: Math.min(...ys),
+              width: Math.max(...xs) - Math.min(...xs),
+              height: Math.max(...ys) - Math.min(...ys),
+            };
+          }
+        }
+        if (box.x < minX) minX = box.x;
+        if (box.y < minY) minY = box.y;
+        if (box.x + box.width > maxX) maxX = box.x + box.width;
+        if (box.y + box.height > maxY) maxY = box.y + box.height;
+      }
+
+      if (minX === Infinity) return;
+      fitBoxInView(rig, {
+        x: minX,
+        y: minY,
+        width: Math.max(1, maxX - minX),
+        height: Math.max(1, maxY - minY),
+      });
+    }, [fitBoxInView]);
 
     const resetZoom100 = useCallback(() => {
       const rig = rigRef.current;
@@ -449,6 +535,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       () => ({
         fitArtboard,
         focusArtboard,
+        zoomToSelection,
         resetZoom100,
         zoomIn,
         zoomOut,
@@ -459,6 +546,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
         finishActiveTool,
         fitArtboard,
         focusArtboard,
+        zoomToSelection,
         resetZoom100,
         startTextEditing,
         zoomIn,
@@ -790,6 +878,12 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
         if (!rig) return;
         rig.itemMap = syncSceneToPaper(rig.scope, rig.sceneLayer, sceneRef.current, {
           editingTextLayerId: editingTextRef.current?.layerId ?? null,
+          editingTextDraft: editingTextRef.current
+            ? {
+                layerId: editingTextRef.current.layerId,
+                content: editingTextRef.current.draft,
+              }
+            : null,
           outlineMode: outlineModeRef.current,
           editingGroupId: editingGroupIdRef.current,
         });
@@ -833,8 +927,18 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       const rig = rigRef.current;
       if (!rig) return;
       drawArtboard(rig, scene, activeArtboardIdRef.current);
+      overlayExtrasRef.current.editingTextCaret = editingText
+        ? {
+            layerId: editingText.layerId,
+            content: editingText.draft,
+            caretIndex: editingText.caretIndex,
+          }
+        : null;
       rig.itemMap = syncSceneToPaper(rig.scope, rig.sceneLayer, scene, {
         editingTextLayerId: editingText?.layerId ?? null,
+        editingTextDraft: editingText
+          ? { layerId: editingText.layerId, content: editingText.draft }
+          : null,
         outlineMode,
         editingGroupId,
       });
@@ -844,6 +948,8 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     }, [
       drawArtboard,
       editingGroupId,
+      editingText?.caretIndex,
+      editingText?.draft,
       editingText?.layerId,
       outlineMode,
       redrawOverlayFromRefs,
@@ -989,21 +1095,41 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
             : 0;
       const originX = -offsetX;
 
+      const isPathText = Boolean(hostPath);
+      const syncCaretFromInput = (el: HTMLTextAreaElement) => {
+        const nextIdx = el.selectionStart ?? el.value.length;
+        setEditingText((prev) =>
+          prev && prev.caretIndex !== nextIdx
+            ? { ...prev, caretIndex: nextIdx, selectAll: false }
+            : prev
+        );
+      };
+
       textEditorOverlay = (
         <textarea
           ref={textareaRef}
           value={editingText.draft}
           onChange={(e) => {
             const nextDraft = e.target.value;
+            const nextCaret = e.target.selectionStart ?? nextDraft.length;
             setEditingText((prev) =>
-              prev ? { ...prev, draft: nextDraft, selectAll: false } : prev
+              prev
+                ? {
+                    ...prev,
+                    draft: nextDraft,
+                    selectAll: false,
+                    caretIndex: nextCaret,
+                  }
+                : prev
             );
           }}
+          onKeyUp={(e) => syncCaretFromInput(e.currentTarget)}
+          onSelect={(e) => syncCaretFromInput(e.currentTarget)}
           onBlur={commitTextEditing}
           onKeyDown={(e) => {
             if (
               e.key === 'Escape' ||
-              (e.key === 'Enter' && (e.ctrlKey || e.metaKey))
+              (e.key === 'Enter' && (e.ctrlKey || e.metaKey || (isPathText && !e.shiftKey)))
             ) {
               e.preventDefault();
               e.stopPropagation();
@@ -1011,23 +1137,34 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
             }
           }}
           spellCheck={false}
-          style={{
-            left: `${viewPt.x + offsetX}px`,
-            top: `${viewPt.y}px`,
-            width: `${boxWidthPx}px`,
-            height: `${boxHeightPx}px`,
-            fontFamily: `"${editingLayer.fontFamily}", sans-serif`,
-            fontWeight: editingLayer.fontWeight,
-            fontSize: `${editingLayer.fontSize * zoom}px`,
-            lineHeight: String(editingLayer.lineHeight),
-            letterSpacing: `${(editingLayer.letterSpacing ?? 0) * zoom}px`,
-            textAlign: editingLayer.align,
-            color: getPrimaryColor(editingLayer.fill, '#1c1b1a'),
-            transformOrigin: `${originX}px 0px`,
-            transform: `rotate(${worldTransform.rotation}deg) scale(${worldTransform.scaleX}, ${worldTransform.scaleY})`,
-            outline: '1px dashed var(--color-paper-accent)',
-            outlineOffset: '2px',
-          }}
+          style={
+            isPathText
+              ? {
+                  left: `${viewPt.x}px`,
+                  top: `${viewPt.y}px`,
+                  width: '2px',
+                  height: '20px',
+                  opacity: 0,
+                  pointerEvents: 'none',
+                }
+              : {
+                  left: `${viewPt.x + offsetX}px`,
+                  top: `${viewPt.y}px`,
+                  width: `${boxWidthPx}px`,
+                  height: `${boxHeightPx}px`,
+                  fontFamily: `"${editingLayer.fontFamily}", sans-serif`,
+                  fontWeight: editingLayer.fontWeight,
+                  fontSize: `${editingLayer.fontSize * zoom}px`,
+                  lineHeight: String(editingLayer.lineHeight),
+                  letterSpacing: `${(editingLayer.letterSpacing ?? 0) * zoom}px`,
+                  textAlign: editingLayer.align,
+                  color: getPrimaryColor(editingLayer.fill, '#1c1b1a'),
+                  transformOrigin: `${originX}px 0px`,
+                  transform: `rotate(${worldTransform.rotation}deg) scale(${worldTransform.scaleX}, ${worldTransform.scaleY})`,
+                  outline: '1px dashed var(--color-paper-accent)',
+                  outlineOffset: '2px',
+                }
+          }
           className="absolute z-20 m-0 resize-none overflow-hidden whitespace-pre border-0 bg-transparent p-0"
         />
       );

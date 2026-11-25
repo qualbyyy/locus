@@ -1,3 +1,5 @@
+import { act, createElement } from 'react';
+import { createRoot } from 'react-dom/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   APP_INFO,
@@ -15,6 +17,9 @@ import {
   isObjectContextAction,
   runTextContextAction,
 } from '../src/core/contextMenu';
+import { DEFAULT_SMART_SHAPE_OPTIONS, useEditorStore } from '../src/core/store';
+import { hexToHsv, hsvToHex, hsvToRgb, rgbToHsv } from '../src/core/themes';
+import { Toolbar } from '../src/ui/Toolbar';
 
 describe('UI features: context menu and canvas zoom', () => {
   beforeEach(() => {
@@ -197,5 +202,129 @@ describe('UI features: context menu and canvas zoom', () => {
     await runTextContextAction('cut', input);
     expect(input.value).toBe('');
     expect(execCommand).toHaveBeenCalledWith('cut');
+  });
+
+  it('converts RGB/HEX to HSV and back accurately for color wheel', () => {
+    expect(rgbToHsv(255, 0, 0)).toEqual({ h: 0, s: 1, v: 1 });
+    expect(rgbToHsv(0, 255, 0)).toEqual({ h: 120, s: 1, v: 1 });
+    expect(rgbToHsv(0, 0, 255)).toEqual({ h: 240, s: 1, v: 1 });
+    expect(hsvToRgb(120, 1, 1)).toEqual({ r: 0, g: 255, b: 0 });
+    expect(hsvToHex(0, 0, 0)).toBe('#000000');
+    expect(hsvToHex(0, 0, 1)).toBe('#ffffff');
+
+    const hsv = hexToHsv('#da7756');
+    expect(hsv).not.toBeNull();
+    expect(hsvToHex(hsv!.h, hsv!.s, hsv!.v)).toBe('#da7756');
+  });
+
+  it('opens tool flyouts via contextmenu/hold and extended drawer via "..." button', () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    document.body.innerHTML = '';
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    const onSelectTool = vi.fn();
+    const onSelectShapePreset = vi.fn();
+    const onSelectTextMode = vi.fn();
+    const onCreateCircleText = vi.fn();
+    const onSelectKnifeMode = vi.fn();
+
+    act(() => {
+      root.render(
+        createElement(Toolbar, {
+          activeTool: 'select',
+          showGrid: false,
+          snapEnabled: true,
+          smartShapePreset: 'blob',
+          textToolMode: 'point',
+          knifeToolMode: 'knife',
+          onSelectTool,
+          onSelectShapePreset,
+          onSelectTextMode,
+          onCreateCircleText,
+          onSelectKnifeMode,
+          onPlaceImage: vi.fn(),
+          onToggleGrid: vi.fn(),
+          onToggleSnap: vi.fn(),
+          onFitArtboard: vi.fn(),
+        })
+      );
+    });
+
+    // Default smart shape preset is ellipse (circle), default fill is black (#1c1b1a), and blob menu ends with Capsule after Star without Blob
+    expect(DEFAULT_SMART_SHAPE_OPTIONS.preset).toBe('ellipse');
+    expect(useEditorStore.getState().defaultFill).toBe('#1c1b1a');
+
+    // Right-click on Smart Shape opens flyout and picks Ellipse
+    const blobBtn = container.querySelector('[data-tour="tool.blob"]') as HTMLButtonElement;
+    expect(blobBtn).not.toBeNull();
+    act(() => {
+      blobBtn.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    });
+    const popover = document.body.querySelector('[data-toolbar-popover="true"]');
+    expect(popover).not.toBeNull();
+    const flyoutLabels = Array.from(popover!.querySelectorAll('button')).map((b) =>
+      b.textContent?.replace(/B$/, '').trim()
+    );
+    expect(flyoutLabels).toEqual([
+      'Круг / Эллипс',
+      'Прямоугольник',
+      'Многоугольник',
+      'Звезда',
+      'Капсула',
+    ]);
+    const ellipseItem = Array.from(popover!.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Круг / Эллипс')
+    );
+    expect(ellipseItem).toBeDefined();
+    act(() => {
+      ellipseItem!.click();
+    });
+    expect(onSelectShapePreset).toHaveBeenCalledWith('ellipse');
+    expect(onSelectTool).toHaveBeenCalledWith('blob');
+    expect(document.body.querySelector('[data-toolbar-popover="true"]')).toBeNull();
+
+    // Hold on Text tool (>= 280ms) opens text mode flyout
+    vi.useFakeTimers();
+    const textBtn = container.querySelector('[data-tour="tool.text"]') as HTMLButtonElement;
+    act(() => {
+      textBtn.dispatchEvent(
+        new MouseEvent('pointerdown', { button: 0, bubbles: true, cancelable: true })
+      );
+      vi.advanceTimersByTime(320);
+    });
+    vi.useRealTimers();
+    const textPopover = document.body.querySelector('[data-toolbar-popover="true"]');
+    expect(textPopover?.textContent).toContain('Текст по контуру (вокруг фигуры)');
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(document.body.querySelector('[data-toolbar-popover="true"]')).toBeNull();
+
+    // Clicking "..." button opens extended tools drawer and allows invoking circle text
+    const moreBtn = container.querySelector('[data-tour="toolbar.more"]') as HTMLButtonElement;
+    expect(moreBtn).not.toBeNull();
+    act(() => {
+      moreBtn.click();
+    });
+    const drawer = document.body.querySelector('[data-toolbar-popover="true"]');
+    expect(drawer).not.toBeNull();
+    expect(drawer!.textContent).toContain('Фигуры (B)');
+    expect(drawer!.textContent).toContain('Текст и кривые (T)');
+    expect(drawer!.textContent).toContain('Резка и рисование');
+
+    const circlePresetBtn = Array.from(drawer!.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Создать текст по кругу')
+    );
+    expect(circlePresetBtn).toBeDefined();
+    act(() => {
+      circlePresetBtn!.click();
+    });
+    expect(onCreateCircleText).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      root.unmount();
+    });
   });
 });

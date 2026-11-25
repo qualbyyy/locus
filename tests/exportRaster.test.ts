@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   createShapeLayer,
+  createTextLayer,
   resetDocument,
   updateLayerEffects,
 } from '../src/core/commands';
@@ -69,5 +70,71 @@ describe('raster export helpers and SVG effect filters', () => {
     // Extrude produces multiple <path> nodes inside the layer group
     const pathMatches = svg.match(/<path /g);
     expect(pathMatches && pathMatches.length).toBeGreaterThan(2);
+  });
+
+  it('exports motionBlur, innerShadow, colorAdjust and 150px blur filters to SVG', async () => {
+    const shape = createShapeLayer({
+      preset: 'rect',
+      x: 300,
+      y: 300,
+      width: 120,
+      height: 90,
+      fill: '#da7756',
+    });
+    updateLayerEffects([shape.id], {
+      blur: 150,
+      motionBlur: { amount: 24, angle: 0 },
+      innerShadow: {
+        color: '#000000',
+        opacity: 0.5,
+        offsetX: 2,
+        offsetY: 4,
+        blur: 8,
+      },
+      colorAdjust: {
+        brightness: 20,
+        contrast: 10,
+        saturate: 30,
+        hue: 45,
+      },
+    });
+
+    const svg = await sceneToSvg(useEditorStore.getState().scene);
+    expect(svg).toContain('width="500%"');
+    expect(svg).toContain('<feComponentTransfer');
+    expect(svg).toContain('type="saturate"');
+    expect(svg).toContain('type="hueRotate"');
+    expect(svg).toContain('operator="out" in="SourceAlpha"');
+    expect(svg).toContain('stdDeviation="150"');
+  });
+
+  it('exports text stroke with paint-order and offset textPath to SVG', async () => {
+    const circle = createShapeLayer({
+      preset: 'ellipse',
+      x: 540,
+      y: 540,
+      width: 300,
+      height: 300,
+      fill: null,
+      stroke: { color: '#1c1b1a', width: 2 },
+    });
+    createTextLayer({
+      x: 0,
+      y: 0,
+      content: 'КРУГОВЫЕ БУКВЫ',
+      fontSize: 32,
+      align: 'center',
+      fill: '#1c1b1a',
+      stroke: { color: '#ffffff', width: 4, lineCap: 'round', lineJoin: 'round' },
+      pathId: circle.id,
+      pathOffset: 50,
+      pathBaselineOffset: 14,
+    });
+
+    const svg = await sceneToSvg(useEditorStore.getState().scene);
+    expect(svg).toContain('paint-order="stroke fill"');
+    expect(svg).toContain('stroke="rgb(255,255,255)"');
+    expect(svg).toContain('stroke-width="4"');
+    expect(svg).toContain('<textPath');
   });
 });

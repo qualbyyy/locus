@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronRight } from 'lucide-react';
-import type { TextCaseMode } from '../core/commands';
+import type { TextCaseMode, TextSplitMode } from '../core/commands';
 import type { ExportKind } from '../core/documentFile';
 import type { WarpStyle } from '../core/types';
 import type { BooleanOp } from '../engine/booleans';
@@ -14,6 +14,9 @@ export interface MenuBarState {
   hasImageSelection: boolean;
   hasGroupSelection: boolean;
   canAttachTextToPath: boolean;
+  canDetachTextFromPath: boolean;
+  canSplitTextChars: boolean;
+  canSplitTextLines: boolean;
   hasEffects: boolean;
   canUndo: boolean;
   canRedo: boolean;
@@ -52,6 +55,7 @@ export interface MenuBarActions {
   onDelete: () => void;
   onGroup: () => void;
   onUngroup: () => void;
+  onToggleLock: () => void;
   onUploadFont: () => void;
   onOpenSettings: () => void;
   onOpenTutorial: () => void;
@@ -69,6 +73,9 @@ export interface MenuBarActions {
   onTraceImage: () => void;
   onConvertToOutlines: () => void;
   onAttachTextToPath: () => void;
+  onDetachTextFromPath: () => void;
+  onCreateCircleText: () => void;
+  onSplitText: (mode: TextSplitMode) => void;
   onTransformTextCase: (mode: TextCaseMode) => void;
   onSelectAll: () => void;
   onDeselect: () => void;
@@ -79,6 +86,7 @@ export interface MenuBarActions {
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFitArtboard: () => void;
+  onZoomToSelection: () => void;
   onResetZoom100: () => void;
   onToggleGrid: () => void;
   onToggleRulers: () => void;
@@ -127,20 +135,30 @@ const WARP_MENU_ITEMS: Array<{ style: WarpStyle; label: string }> = [
 function MenuDropdown({
   items,
   onSelectDone,
+  className = 'animate-rise absolute left-0 top-full z-50 mt-1 min-w-56 rounded-md border border-paper-border bg-paper-panel py-1 text-[12px] shadow-xl',
 }: {
   items: MenuItem[];
   onSelectDone: () => void;
+  className?: string;
 }) {
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+
   return (
-    <div className="animate-rise absolute left-0 top-full z-50 mt-1 min-w-56 rounded-md border border-paper-border bg-paper-panel py-1 text-[12px] shadow-xl">
+    <div className={className}>
       {items.map((item, idx) => {
         if (item.type === 'sep') {
           return <div key={`sep-${idx}`} className="my-1 h-px bg-paper-border" />;
         }
 
         const hasSub = Boolean(item.submenu && item.submenu.length > 0);
+        const subOpen = hasSub && !item.disabled && hoveredIdx === idx;
         return (
-          <div key={item.label} className="group relative">
+          <div
+            key={item.label}
+            className="relative"
+            onMouseEnter={() => setHoveredIdx(idx)}
+            onMouseLeave={() => setHoveredIdx((cur) => (cur === idx ? null : cur))}
+          >
             <button
               type="button"
               disabled={item.disabled}
@@ -170,34 +188,12 @@ function MenuDropdown({
               )}
             </button>
 
-            {hasSub && item.submenu && !item.disabled && (
-              <div className="animate-fade-in absolute left-full top-0 z-50 ml-0.5 hidden min-w-52 rounded-md border border-paper-border bg-paper-panel py-1 shadow-xl group-hover:block">
-                {item.submenu.map((sub, sIdx) => {
-                  if (sub.type === 'sep') {
-                    return <div key={`ssep-${sIdx}`} className="my-1 h-px bg-paper-border" />;
-                  }
-                  return (
-                    <button
-                      key={sub.label}
-                      type="button"
-                      disabled={sub.disabled}
-                      onClick={() => {
-                        if (sub.disabled) return;
-                        sub.onClick?.();
-                        onSelectDone();
-                      }}
-                      className="flex w-full items-center justify-between gap-4 px-3 py-1.5 text-left text-paper-ink hover:bg-paper-hover disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
-                    >
-                      <span className="whitespace-nowrap">{sub.label}</span>
-                      {sub.shortcut && (
-                        <span className="font-display text-[10px] text-paper-muted">
-                          {sub.shortcut}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
+            {subOpen && item.submenu && (
+              <MenuDropdown
+                items={item.submenu}
+                onSelectDone={onSelectDone}
+                className="animate-fade-in absolute left-full top-0 z-50 ml-0.5 min-w-52 rounded-md border border-paper-border bg-paper-panel py-1 text-[12px] shadow-xl"
+              />
             )}
           </div>
         );
@@ -330,6 +326,7 @@ export function MenuBar({
           { type: 'sep' },
           { label: 'Сгруппировать', shortcut: 'Ctrl+G', disabled: !state.hasSelection, onClick: actions.onGroup },
           { label: 'Разгруппировать', shortcut: 'Ctrl+Shift+G', disabled: !state.hasGroupSelection, onClick: actions.onUngroup },
+          { label: 'Заблокировать / разблокировать', shortcut: 'Ctrl+L', disabled: !state.hasSelection, onClick: actions.onToggleLock },
           { type: 'sep' },
           {
             label: 'Обработка контуров',
@@ -355,7 +352,20 @@ export function MenuBar({
         id: 'text',
         label: 'Текст',
         items: [
-          { label: 'Пустить текст по контуру', disabled: !state.canAttachTextToPath, onClick: actions.onAttachTextToPath },
+          { label: 'Создать текст по кругу', onClick: actions.onCreateCircleText },
+          {
+            label: 'Пустить текст по контуру',
+            disabled: !state.canAttachTextToPath && !state.hasPathSelection,
+            onClick: actions.onAttachTextToPath,
+          },
+          {
+            label: 'Открепить текст от контура',
+            disabled: !state.canDetachTextFromPath,
+            onClick: actions.onDetachTextFromPath,
+          },
+          { type: 'sep' },
+          { label: 'Разбить на буквы', disabled: !state.canSplitTextChars, onClick: () => actions.onSplitText('chars') },
+          { label: 'Разбить на строки', disabled: !state.canSplitTextLines, onClick: () => actions.onSplitText('lines') },
           { label: 'Преобразовать в кривые', disabled: !state.hasTextSelection, onClick: actions.onConvertToOutlines },
           { type: 'sep' },
           {
@@ -395,21 +405,36 @@ export function MenuBar({
         label: 'Эффекты',
         items: [
           {
-            label: 'Деформация (Warp)',
-            submenu: WARP_MENU_ITEMS.map((w) => ({
-              label: w.label,
-              onClick: () => actions.onOpenEffect({ kind: 'warp', initialWarpStyle: w.style }),
-            })),
+            label: 'Размытие',
+            submenu: [
+              { label: 'Размытие по Гауссу…', onClick: () => actions.onOpenEffect({ kind: 'blur' }) },
+              { label: 'Размытие в движении (Motion)…', onClick: () => actions.onOpenEffect({ kind: 'motionBlur' }) },
+            ],
           },
           {
-            label: 'Искажение контура',
+            label: 'Свет и тень',
             submenu: [
+              { label: 'Падающая тень (Drop Shadow)…', onClick: () => actions.onOpenEffect({ kind: 'dropShadow' }) },
+              { label: 'Внутренняя тень (Inner Shadow)…', onClick: () => actions.onOpenEffect({ kind: 'innerShadow' }) },
+              { label: 'Внешнее свечение (Outer Glow)…', onClick: () => actions.onOpenEffect({ kind: 'outerGlow' }) },
+            ],
+          },
+          {
+            label: 'Деформация и форма',
+            submenu: [
+              {
+                label: 'Деформация (Warp)',
+                submenu: WARP_MENU_ITEMS.map((w) => ({
+                  label: w.label,
+                  onClick: () => actions.onOpenEffect({ kind: 'warp', initialWarpStyle: w.style }),
+                })),
+              },
               { label: 'Зигзаг (Zig Zag)…', onClick: () => actions.onOpenEffect({ kind: 'zigzag' }) },
               { label: 'Загрубление (Roughen)…', onClick: () => actions.onOpenEffect({ kind: 'roughen' }) },
               { label: 'Скругление углов…', onClick: () => actions.onOpenEffect({ kind: 'roundCorners' }) },
+              { label: 'Втягивание и раздувание…', onClick: () => actions.onOpenEffect({ kind: 'puckerBloat' }) },
             ],
           },
-          { type: 'sep' },
           {
             label: '3D и объём',
             submenu: [
@@ -417,18 +442,10 @@ export function MenuBar({
               { label: '3D Выдавливание (Extrude)…', onClick: () => actions.onOpenEffect({ kind: '3d-extrude' }) },
             ],
           },
-          { type: 'sep' },
           {
-            label: 'Размытие (Blur)',
+            label: 'Цвет и фото',
             submenu: [
-              { label: 'Размытие по Гауссу…', onClick: () => actions.onOpenEffect({ kind: 'blur' }) },
-            ],
-          },
-          {
-            label: 'Стилизация',
-            submenu: [
-              { label: 'Падающая тень (Drop Shadow)…', onClick: () => actions.onOpenEffect({ kind: 'dropShadow' }) },
-              { label: 'Внешнее свечение (Outer Glow)…', onClick: () => actions.onOpenEffect({ kind: 'outerGlow' }) },
+              { label: 'Цветокоррекция…', onClick: () => actions.onOpenEffect({ kind: 'colorAdjust' }) },
             ],
           },
           { type: 'sep' },
@@ -442,6 +459,7 @@ export function MenuBar({
           { label: 'Увеличить', shortcut: 'Ctrl+=', onClick: actions.onZoomIn },
           { label: 'Уменьшить', shortcut: 'Ctrl+-', onClick: actions.onZoomOut },
           { label: 'Вписать артборд', shortcut: 'Ctrl+0', onClick: actions.onFitArtboard },
+          { label: 'Приблизить к выделению', shortcut: 'Ctrl+2', disabled: !state.hasSelection, onClick: actions.onZoomToSelection },
           { label: 'Реальный размер (100%)', shortcut: 'Ctrl+1', onClick: actions.onResetZoom100 },
           { type: 'sep' },
           { label: 'Линейки', shortcut: 'Ctrl+R', checked: state.showRulers, onClick: actions.onToggleRulers },

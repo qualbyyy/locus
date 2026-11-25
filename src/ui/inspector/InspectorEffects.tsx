@@ -4,17 +4,19 @@ import { convertTextLayersToOutlines } from '../../core/commands';
 import { mapLayerTree } from '../../core/layerTree';
 import { useEditorStore } from '../../core/store';
 import type {
+  ColorAdjustEffect,
   DistortEffect,
   DropShadowEffect,
   Effect3D,
   Layer,
   LayerEffects,
+  MotionBlurEffect,
   OuterGlowEffect,
   Scene,
   WarpEffect,
   WarpStyle,
 } from '../../core/types';
-import { hasVectorEffects } from '../../engine/effects';
+import { hasActiveColorAdjust, hasVectorEffects } from '../../engine/effects';
 import { HexColorRow } from '../InspectorControls';
 import { Checkbox, Select, Slider } from '../controls';
 
@@ -23,19 +25,28 @@ export type EffectTarget =
   | { kind: 'zigzag' }
   | { kind: 'roughen' }
   | { kind: 'roundCorners' }
+  | { kind: 'puckerBloat' }
   | { kind: '3d-rotate' }
   | { kind: '3d-extrude' }
   | { kind: 'blur' }
+  | { kind: 'motionBlur' }
   | { kind: 'dropShadow' }
-  | { kind: 'outerGlow' };
+  | { kind: 'innerShadow' }
+  | { kind: 'outerGlow' }
+  | { kind: 'colorAdjust' };
 
 export type EffectSectionId =
   | 'warp'
   | 'distort'
   | 'effect3d'
   | 'blur'
+  | 'motionBlur'
   | 'dropShadow'
-  | 'outerGlow';
+  | 'innerShadow'
+  | 'outerGlow'
+  | 'colorAdjust';
+
+const BLUR_PRESETS = [8, 24, 60, 120];
 
 export const DEFAULT_EFFECT_PATCH: Record<EffectTarget['kind'], Partial<LayerEffects>> = {
   warp: {
@@ -49,6 +60,9 @@ export const DEFAULT_EFFECT_PATCH: Record<EffectTarget['kind'], Partial<LayerEff
   },
   roundCorners: {
     distort: { kind: 'roundCorners', radius: 16 },
+  },
+  puckerBloat: {
+    distort: { kind: 'puckerBloat', amount: 35 },
   },
   '3d-rotate': {
     effect3d: {
@@ -73,6 +87,7 @@ export const DEFAULT_EFFECT_PATCH: Record<EffectTarget['kind'], Partial<LayerEff
     },
   },
   blur: { blur: 8 },
+  motionBlur: { motionBlur: { amount: 18, angle: 0 } },
   dropShadow: {
     dropShadow: {
       color: '#000000',
@@ -82,11 +97,28 @@ export const DEFAULT_EFFECT_PATCH: Record<EffectTarget['kind'], Partial<LayerEff
       blur: 12,
     },
   },
+  innerShadow: {
+    innerShadow: {
+      color: '#000000',
+      opacity: 0.45,
+      offsetX: 0,
+      offsetY: 4,
+      blur: 10,
+    },
+  },
   outerGlow: {
     outerGlow: {
       color: '#da7756',
       opacity: 0.65,
       blur: 14,
+    },
+  },
+  colorAdjust: {
+    colorAdjust: {
+      brightness: 0,
+      contrast: 15,
+      saturate: 20,
+      hue: 0,
     },
   },
 };
@@ -98,16 +130,23 @@ export function effectKindToSection(kind: EffectTarget['kind']): EffectSectionId
     case 'zigzag':
     case 'roughen':
     case 'roundCorners':
+    case 'puckerBloat':
       return 'distort';
     case '3d-rotate':
     case '3d-extrude':
       return 'effect3d';
     case 'blur':
       return 'blur';
+    case 'motionBlur':
+      return 'motionBlur';
     case 'dropShadow':
       return 'dropShadow';
+    case 'innerShadow':
+      return 'innerShadow';
     case 'outerGlow':
       return 'outerGlow';
+    case 'colorAdjust':
+      return 'colorAdjust';
   }
 }
 
@@ -123,24 +162,63 @@ const WARP_STYLES: Array<{ value: WarpStyle; label: string }> = [
   { value: 'rise', label: 'Подъём' },
 ];
 
-const ADD_MENU_ITEMS: Array<{
+type AddMenuItem = {
   kind: EffectTarget['kind'];
   label: string;
   vectorOnly?: boolean;
+};
+
+const ADD_MENU_CATEGORIES: Array<{
+  title: string;
+  items: AddMenuItem[];
 }> = [
-  { kind: 'dropShadow', label: 'Падающая тень' },
-  { kind: 'blur', label: 'Размытие по Гауссу' },
-  { kind: 'outerGlow', label: 'Внешнее свечение' },
-  { kind: 'warp', label: 'Деформация (Warp)', vectorOnly: true },
-  { kind: 'zigzag', label: 'Зигзаг (Zig Zag)', vectorOnly: true },
-  { kind: 'roughen', label: 'Загрубление (Roughen)', vectorOnly: true },
-  { kind: 'roundCorners', label: 'Скругление углов', vectorOnly: true },
-  { kind: '3d-rotate', label: '3D Поворот', vectorOnly: true },
-  { kind: '3d-extrude', label: '3D Выдавливание', vectorOnly: true },
+  {
+    title: 'Размытие',
+    items: [
+      { kind: 'blur', label: 'Размытие по Гауссу' },
+      { kind: 'motionBlur', label: 'Размытие в движении (Motion)' },
+    ],
+  },
+  {
+    title: 'Свет и тень',
+    items: [
+      { kind: 'dropShadow', label: 'Падающая тень' },
+      { kind: 'innerShadow', label: 'Внутренняя тень' },
+      { kind: 'outerGlow', label: 'Внешнее свечение' },
+    ],
+  },
+  {
+    title: 'Деформация и форма',
+    items: [
+      { kind: 'warp', label: 'Деформация (Warp)', vectorOnly: true },
+      { kind: 'zigzag', label: 'Зигзаг (Zig Zag)', vectorOnly: true },
+      { kind: 'roughen', label: 'Загрубление (Roughen)', vectorOnly: true },
+      { kind: 'roundCorners', label: 'Скругление углов', vectorOnly: true },
+      { kind: 'puckerBloat', label: 'Втягивание и раздувание', vectorOnly: true },
+    ],
+  },
+  {
+    title: '3D и объём',
+    items: [
+      { kind: '3d-rotate', label: '3D Поворот', vectorOnly: true },
+      { kind: '3d-extrude', label: '3D Выдавливание', vectorOnly: true },
+    ],
+  },
+  {
+    title: 'Цвет и фото',
+    items: [{ kind: 'colorAdjust', label: 'Цветокоррекция' }],
+  },
 ];
 
 function isVectorEffectKind(kind: EffectTarget['kind']): boolean {
-  return kind !== 'blur' && kind !== 'dropShadow' && kind !== 'outerGlow';
+  return (
+    kind !== 'blur' &&
+    kind !== 'motionBlur' &&
+    kind !== 'dropShadow' &&
+    kind !== 'innerShadow' &&
+    kind !== 'outerGlow' &&
+    kind !== 'colorAdjust'
+  );
 }
 
 function LiveSliderRow({
@@ -241,6 +319,72 @@ function EffectCard({
   );
 }
 
+function ShadowEffectFields({
+  shadow,
+  onCommit,
+  onBeginDrag,
+  onLiveChange,
+  onEndDrag,
+}: {
+  shadow: DropShadowEffect;
+  onCommit: (next: DropShadowEffect) => void;
+  onBeginDrag: () => void;
+  onLiveChange: (next: DropShadowEffect) => void;
+  onEndDrag: () => void;
+}) {
+  return (
+    <>
+      <div className="flex flex-col gap-1">
+        <span className="text-[11px] text-paper-muted">Цвет тени</span>
+        <HexColorRow
+          value={shadow.color}
+          onChange={(color) => onCommit({ ...shadow, color })}
+        />
+      </div>
+      <LiveSliderRow
+        label="Непрозрачность"
+        value={Math.round(shadow.opacity * 100)}
+        min={0}
+        max={100}
+        unit="%"
+        onChangeStart={onBeginDrag}
+        onChange={(v) => onLiveChange({ ...shadow, opacity: v / 100 })}
+        onChangeEnd={onEndDrag}
+      />
+      <LiveSliderRow
+        label="Смещение X"
+        value={shadow.offsetX}
+        min={-60}
+        max={60}
+        unit=" px"
+        onChangeStart={onBeginDrag}
+        onChange={(offsetX) => onLiveChange({ ...shadow, offsetX })}
+        onChangeEnd={onEndDrag}
+      />
+      <LiveSliderRow
+        label="Смещение Y"
+        value={shadow.offsetY}
+        min={-60}
+        max={60}
+        unit=" px"
+        onChangeStart={onBeginDrag}
+        onChange={(offsetY) => onLiveChange({ ...shadow, offsetY })}
+        onChangeEnd={onEndDrag}
+      />
+      <LiveSliderRow
+        label="Размытие"
+        value={shadow.blur}
+        min={0}
+        max={50}
+        unit=" px"
+        onChangeStart={onBeginDrag}
+        onChange={(blur) => onLiveChange({ ...shadow, blur })}
+        onChangeEnd={onEndDrag}
+      />
+    </>
+  );
+}
+
 export interface InspectorEffectsProps {
   layers: Layer[];
   focusedEffect: EffectTarget | null;
@@ -290,15 +434,17 @@ export function InspectorEffects({
     };
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        e.preventDefault();
         e.stopPropagation();
+        e.stopImmediatePropagation();
         setMenuOpen(false);
       }
     };
     window.addEventListener('mousedown', onPointerDown);
-    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, true);
     return () => {
       window.removeEventListener('mousedown', onPointerDown);
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onKeyDown, true);
     };
   }, [menuOpen]);
 
@@ -328,6 +474,10 @@ export function InspectorEffects({
         patch = effects?.distort?.kind === 'roundCorners'
           ? { distort: effects.distort }
           : DEFAULT_EFFECT_PATCH.roundCorners;
+      } else if (target.kind === 'puckerBloat') {
+        patch = effects?.distort?.kind === 'puckerBloat'
+          ? { distort: effects.distort }
+          : DEFAULT_EFFECT_PATCH.puckerBloat;
       } else if (target.kind === '3d-rotate' || target.kind === '3d-extrude') {
         const def = DEFAULT_EFFECT_PATCH[target.kind].effect3d as Effect3D;
         patch = {
@@ -337,10 +487,22 @@ export function InspectorEffects({
         };
       } else if (target.kind === 'blur') {
         patch = effects?.blur !== undefined ? { blur: effects.blur } : DEFAULT_EFFECT_PATCH.blur;
+      } else if (target.kind === 'motionBlur') {
+        patch = effects?.motionBlur
+          ? { motionBlur: effects.motionBlur }
+          : DEFAULT_EFFECT_PATCH.motionBlur;
       } else if (target.kind === 'dropShadow') {
         patch = effects?.dropShadow
           ? { dropShadow: effects.dropShadow }
           : DEFAULT_EFFECT_PATCH.dropShadow;
+      } else if (target.kind === 'innerShadow') {
+        patch = effects?.innerShadow
+          ? { innerShadow: effects.innerShadow }
+          : DEFAULT_EFFECT_PATCH.innerShadow;
+      } else if (target.kind === 'colorAdjust') {
+        patch = effects?.colorAdjust
+          ? { colorAdjust: effects.colorAdjust }
+          : DEFAULT_EFFECT_PATCH.colorAdjust;
       } else {
         patch = effects?.outerGlow
           ? { outerGlow: effects.outerGlow }
@@ -414,17 +576,32 @@ export function InspectorEffects({
     setExpanded((prev) => ({ ...prev, [sec]: !prev[sec] }));
   };
 
-  const availableAddItems = ADD_MENU_ITEMS.filter((item) => {
+  const isItemAvailable = (item: AddMenuItem): boolean => {
     if (item.vectorOnly && !hasPath) return false;
     if (item.kind === 'warp') return !effects?.warp;
-    if (item.kind === 'zigzag' || item.kind === 'roughen' || item.kind === 'roundCorners') {
+    if (
+      item.kind === 'zigzag' ||
+      item.kind === 'roughen' ||
+      item.kind === 'roundCorners' ||
+      item.kind === 'puckerBloat'
+    ) {
       return !effects?.distort;
     }
     if (item.kind === '3d-rotate' || item.kind === '3d-extrude') return !effects?.effect3d;
     if (item.kind === 'blur') return !(effects?.blur !== undefined && effects.blur > 0);
+    if (item.kind === 'motionBlur') return !effects?.motionBlur;
     if (item.kind === 'dropShadow') return !effects?.dropShadow;
+    if (item.kind === 'innerShadow') return !effects?.innerShadow;
+    if (item.kind === 'colorAdjust') return !effects?.colorAdjust;
     return !effects?.outerGlow;
-  });
+  };
+
+  const availableCategories = ADD_MENU_CATEGORIES.map((cat) => ({
+    title: cat.title,
+    items: cat.items.filter(isItemAvailable),
+  })).filter((cat) => cat.items.length > 0);
+
+  const hasAvailableItems = availableCategories.length > 0;
 
   const hasAny = Boolean(
     effects &&
@@ -432,16 +609,22 @@ export function InspectorEffects({
         effects.distort ||
         effects.effect3d ||
         (effects.blur !== undefined && effects.blur > 0) ||
+        effects.motionBlur ||
         effects.dropShadow ||
-        effects.outerGlow)
+        effects.innerShadow ||
+        effects.outerGlow ||
+        effects.colorAdjust)
   );
 
   const warp: WarpEffect | undefined = effects?.warp;
   const distort: DistortEffect | undefined = effects?.distort;
   const effect3d: Effect3D | undefined = effects?.effect3d;
   const blurVal = effects?.blur !== undefined && effects.blur > 0 ? effects.blur : null;
+  const motionBlur: MotionBlurEffect | undefined = effects?.motionBlur;
   const dropShadow: DropShadowEffect | undefined = effects?.dropShadow;
+  const innerShadow: DropShadowEffect | undefined = effects?.innerShadow;
   const outerGlow: OuterGlowEffect | undefined = effects?.outerGlow;
+  const colorAdjust: ColorAdjustEffect | undefined = effects?.colorAdjust;
 
   return (
     <div
@@ -463,29 +646,39 @@ export function InspectorEffects({
           <div ref={menuRef} className="relative">
             <button
               type="button"
-              disabled={availableAddItems.length === 0}
+              disabled={!hasAvailableItems}
               onClick={() => setMenuOpen((prev) => !prev)}
               className="flex h-5 items-center gap-0.5 rounded border border-paper-border bg-paper-bg px-1.5 text-[11px] text-paper-ink hover:bg-paper-hover disabled:opacity-40"
             >
               <Plus className="h-3 w-3 text-paper-accent" strokeWidth={1.75} />
               <span>Добавить</span>
             </button>
-            {menuOpen && availableAddItems.length > 0 && (
-              <div className="absolute right-0 top-full z-30 mt-1 w-48 overflow-hidden rounded border border-paper-border bg-paper-panel py-1 shadow-lg">
-                {availableAddItems.map((item) => (
-                  <button
-                    key={item.kind}
-                    type="button"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      applyEffectTarget(
-                        item.kind === 'warp' ? { kind: 'warp' } : { kind: item.kind }
-                      );
-                    }}
-                    className="flex w-full items-center px-2.5 py-1.5 text-left text-[11px] text-paper-ink hover:bg-paper-hover"
+            {menuOpen && hasAvailableItems && (
+              <div className="absolute right-0 top-full z-30 mt-1 max-h-72 w-56 overflow-y-auto rounded border border-paper-border bg-paper-panel py-1 shadow-lg">
+                {availableCategories.map((category, idx) => (
+                  <div
+                    key={category.title}
+                    className={idx > 0 ? 'mt-1 border-t border-paper-border/60 pt-1' : ''}
                   >
-                    {item.label}
-                  </button>
+                    <div className="px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-paper-muted">
+                      {category.title}
+                    </div>
+                    {category.items.map((item) => (
+                      <button
+                        key={item.kind}
+                        type="button"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          applyEffectTarget(
+                            item.kind === 'warp' ? { kind: 'warp' } : { kind: item.kind }
+                          );
+                        }}
+                        className="flex w-full items-center px-2.5 py-1 text-left text-[11px] text-paper-ink hover:bg-paper-hover"
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
                 ))}
               </div>
             )}
@@ -556,12 +749,16 @@ export function InspectorEffects({
                   ? 'Зигзаг (Zig Zag)'
                   : distort.kind === 'roughen'
                     ? 'Загрубление'
-                    : 'Скругление углов'
+                    : distort.kind === 'puckerBloat'
+                      ? 'Втягивание и раздувание'
+                      : 'Скругление углов'
               }
               badge={
                 distort.kind === 'roundCorners'
                   ? `${distort.radius} px`
-                  : `${distort.size} px`
+                  : distort.kind === 'puckerBloat'
+                    ? `${distort.amount}%`
+                    : `${distort.size} px`
               }
               expanded={Boolean(expanded.distort)}
               onToggle={() => toggleSection('distort')}
@@ -639,6 +836,20 @@ export function InspectorEffects({
                   onChangeStart={beginLiveDrag}
                   onChange={(radius) =>
                     applyLivePatch({ distort: { kind: 'roundCorners', radius } })
+                  }
+                  onChangeEnd={commitLiveDrag}
+                />
+              )}
+              {distort.kind === 'puckerBloat' && (
+                <LiveSliderRow
+                  label="Степень"
+                  value={distort.amount}
+                  min={-100}
+                  max={100}
+                  unit="%"
+                  onChangeStart={beginLiveDrag}
+                  onChange={(amount) =>
+                    applyLivePatch({ distort: { kind: 'puckerBloat', amount } })
                   }
                   onChangeEnd={commitLiveDrag}
                 />
@@ -735,11 +946,62 @@ export function InspectorEffects({
                 label="Радиус"
                 value={blurVal}
                 min={0.5}
-                max={60}
+                max={150}
                 step={0.5}
                 unit=" px"
                 onChangeStart={beginLiveDrag}
                 onChange={(blur) => applyLivePatch({ blur })}
+                onChangeEnd={commitLiveDrag}
+              />
+              <div className="grid grid-cols-4 gap-1">
+                {BLUR_PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => onUpdateEffects(layerIds, { blur: preset })}
+                    className={`h-6 rounded border font-display text-[10px] transition-colors ${
+                      Math.abs(blurVal - preset) < 0.25
+                        ? 'border-paper-accent bg-paper-accent/15 text-paper-ink'
+                        : 'border-paper-border bg-paper-panel text-paper-muted hover:bg-paper-hover hover:text-paper-ink'
+                    }`}
+                  >
+                    {preset} px
+                  </button>
+                ))}
+              </div>
+            </EffectCard>
+          )}
+
+          {motionBlur && (
+            <EffectCard
+              title="Размытие в движении"
+              badge={`${motionBlur.amount} px`}
+              expanded={Boolean(expanded.motionBlur)}
+              onToggle={() => toggleSection('motionBlur')}
+              onRemove={() => onUpdateEffects(layerIds, { motionBlur: undefined })}
+            >
+              <LiveSliderRow
+                label="Сила"
+                value={motionBlur.amount}
+                min={1}
+                max={100}
+                unit=" px"
+                onChangeStart={beginLiveDrag}
+                onChange={(amount) =>
+                  applyLivePatch({ motionBlur: { ...motionBlur, amount } })
+                }
+                onChangeEnd={commitLiveDrag}
+              />
+              <LiveSliderRow
+                label="Угол"
+                value={motionBlur.angle}
+                min={0}
+                max={360}
+                unit="°"
+                onChangeStart={beginLiveDrag}
+                onChange={(angle) =>
+                  applyLivePatch({ motionBlur: { ...motionBlur, angle } })
+                }
                 onChangeEnd={commitLiveDrag}
               />
             </EffectCard>
@@ -753,62 +1015,30 @@ export function InspectorEffects({
               onToggle={() => toggleSection('dropShadow')}
               onRemove={() => onUpdateEffects(layerIds, { dropShadow: undefined })}
             >
-              <div className="flex flex-col gap-1">
-                <span className="text-[11px] text-paper-muted">Цвет тени</span>
-                <HexColorRow
-                  value={dropShadow.color}
-                  onChange={(color) =>
-                    onUpdateEffects(layerIds, {
-                      dropShadow: { ...dropShadow, color },
-                    })
-                  }
-                />
-              </div>
-              <LiveSliderRow
-                label="Непрозрачность"
-                value={Math.round(dropShadow.opacity * 100)}
-                min={0}
-                max={100}
-                unit="%"
-                onChangeStart={beginLiveDrag}
-                onChange={(v) =>
-                  applyLivePatch({ dropShadow: { ...dropShadow, opacity: v / 100 } })
-                }
-                onChangeEnd={commitLiveDrag}
+              <ShadowEffectFields
+                shadow={dropShadow}
+                onCommit={(next) => onUpdateEffects(layerIds, { dropShadow: next })}
+                onBeginDrag={beginLiveDrag}
+                onLiveChange={(next) => applyLivePatch({ dropShadow: next })}
+                onEndDrag={commitLiveDrag}
               />
-              <LiveSliderRow
-                label="Смещение X"
-                value={dropShadow.offsetX}
-                min={-60}
-                max={60}
-                unit=" px"
-                onChangeStart={beginLiveDrag}
-                onChange={(offsetX) =>
-                  applyLivePatch({ dropShadow: { ...dropShadow, offsetX } })
-                }
-                onChangeEnd={commitLiveDrag}
-              />
-              <LiveSliderRow
-                label="Смещение Y"
-                value={dropShadow.offsetY}
-                min={-60}
-                max={60}
-                unit=" px"
-                onChangeStart={beginLiveDrag}
-                onChange={(offsetY) =>
-                  applyLivePatch({ dropShadow: { ...dropShadow, offsetY } })
-                }
-                onChangeEnd={commitLiveDrag}
-              />
-              <LiveSliderRow
-                label="Размытие"
-                value={dropShadow.blur}
-                min={0}
-                max={50}
-                unit=" px"
-                onChangeStart={beginLiveDrag}
-                onChange={(blur) => applyLivePatch({ dropShadow: { ...dropShadow, blur } })}
-                onChangeEnd={commitLiveDrag}
+            </EffectCard>
+          )}
+
+          {innerShadow && (
+            <EffectCard
+              title="Внутренняя тень"
+              badge={`${innerShadow.blur} px`}
+              expanded={Boolean(expanded.innerShadow)}
+              onToggle={() => toggleSection('innerShadow')}
+              onRemove={() => onUpdateEffects(layerIds, { innerShadow: undefined })}
+            >
+              <ShadowEffectFields
+                shadow={innerShadow}
+                onCommit={(next) => onUpdateEffects(layerIds, { innerShadow: next })}
+                onBeginDrag={beginLiveDrag}
+                onLiveChange={(next) => applyLivePatch({ innerShadow: next })}
+                onEndDrag={commitLiveDrag}
               />
             </EffectCard>
           )}
@@ -852,6 +1082,65 @@ export function InspectorEffects({
                 unit=" px"
                 onChangeStart={beginLiveDrag}
                 onChange={(blur) => applyLivePatch({ outerGlow: { ...outerGlow, blur } })}
+                onChangeEnd={commitLiveDrag}
+              />
+            </EffectCard>
+          )}
+
+          {colorAdjust && (
+            <EffectCard
+              title="Цветокоррекция"
+              badge={hasActiveColorAdjust(colorAdjust) ? 'Активно' : '0'}
+              expanded={Boolean(expanded.colorAdjust)}
+              onToggle={() => toggleSection('colorAdjust')}
+              onRemove={() => onUpdateEffects(layerIds, { colorAdjust: undefined })}
+            >
+              <LiveSliderRow
+                label="Яркость"
+                value={colorAdjust.brightness}
+                min={-100}
+                max={100}
+                unit="%"
+                onChangeStart={beginLiveDrag}
+                onChange={(brightness) =>
+                  applyLivePatch({ colorAdjust: { ...colorAdjust, brightness } })
+                }
+                onChangeEnd={commitLiveDrag}
+              />
+              <LiveSliderRow
+                label="Контраст"
+                value={colorAdjust.contrast}
+                min={-100}
+                max={100}
+                unit="%"
+                onChangeStart={beginLiveDrag}
+                onChange={(contrast) =>
+                  applyLivePatch({ colorAdjust: { ...colorAdjust, contrast } })
+                }
+                onChangeEnd={commitLiveDrag}
+              />
+              <LiveSliderRow
+                label="Насыщенность"
+                value={colorAdjust.saturate}
+                min={-100}
+                max={100}
+                unit="%"
+                onChangeStart={beginLiveDrag}
+                onChange={(saturate) =>
+                  applyLivePatch({ colorAdjust: { ...colorAdjust, saturate } })
+                }
+                onChangeEnd={commitLiveDrag}
+              />
+              <LiveSliderRow
+                label="Оттенок"
+                value={colorAdjust.hue}
+                min={-180}
+                max={180}
+                unit="°"
+                onChangeStart={beginLiveDrag}
+                onChange={(hue) =>
+                  applyLivePatch({ colorAdjust: { ...colorAdjust, hue } })
+                }
                 onChangeEnd={commitLiveDrag}
               />
             </EffectCard>

@@ -1,7 +1,7 @@
 import { getSceneArtboards } from '../artboards';
 import { flattenLayers, mapLayerTree } from '../layerTree';
 import { useEditorStore } from '../store';
-import type { Layer, Scene, StrokeStyle } from '../types';
+import type { Layer, Scene, StrokeStyle, TextLayer } from '../types';
 
 let fallbackCounter = 0;
 
@@ -137,6 +137,25 @@ function replaceInSiblingList(
   return { next: layers, replaced: false };
 }
 
+export function clearTextPathProps(layer: TextLayer): TextLayer {
+  if (
+    layer.pathId === undefined &&
+    layer.pathOffset === undefined &&
+    layer.pathFlip === undefined &&
+    layer.pathBaselineOffset === undefined &&
+    layer.pathStretch === undefined
+  ) {
+    return layer;
+  }
+  const copy = { ...layer };
+  delete copy.pathId;
+  delete copy.pathOffset;
+  delete copy.pathFlip;
+  delete copy.pathBaselineOffset;
+  delete copy.pathStretch;
+  return copy;
+}
+
 /** Заменяет набор слоёв на месте самого верхнего из них, очищая ссылки на удалённые маски. */
 export function replaceLayersAtHighestIndex(
   targetIds: Set<string>,
@@ -162,11 +181,7 @@ export function replaceLayersAtHighestIndex(
         nextLayer.pathId &&
         targetIds.has(nextLayer.pathId)
       ) {
-        const copy = { ...nextLayer };
-        delete copy.pathId;
-        delete copy.pathOffset;
-        delete copy.pathFlip;
-        nextLayer = copy;
+        nextLayer = clearTextPathProps(nextLayer);
       }
       return nextLayer;
     });

@@ -26,6 +26,12 @@ export interface OverlayExtras {
   shapeBuilder?: ShapeBuilderOverlay | null;
   freehandDraft?: FreehandDraftOverlay | null;
   hoveredMaskId?: string | null;
+  hoveredTextPathId?: string | null;
+  editingTextCaret?: {
+    layerId: string;
+    content: string;
+    caretIndex: number;
+  } | null;
   guides?: SmartGuideLine[] | null;
   draggingGuide?: {
     id?: string;

@@ -19,6 +19,8 @@ export interface EditorState {
   activeTool: ToolType;
   activeGradientTarget: 'fill' | 'stroke';
   smartShapeOptions: SmartShapeOptions;
+  textToolMode: 'point' | 'path';
+  knifeToolMode: 'knife' | 'scissors';
   pencilSmoothness: number;
   defaultFill: Paint | null;
   defaultStroke: StrokeStyle | null;
@@ -32,6 +34,8 @@ export interface EditorState {
   setActiveTool: (tool: ToolType) => void;
   setActiveGradientTarget: (target: 'fill' | 'stroke') => void;
   setSmartShapeOptions: (patch: Partial<SmartShapeOptions>) => void;
+  setTextToolMode: (mode: 'point' | 'path') => void;
+  setKnifeToolMode: (mode: 'knife' | 'scissors') => void;
   setPencilSmoothness: (smoothness: number) => void;
   setDefaultFill: (fill: Paint | null) => void;
   setDefaultStroke: (stroke: StrokeStyle | null) => void;
@@ -40,7 +44,7 @@ export interface EditorState {
 }
 
 export const DEFAULT_SMART_SHAPE_OPTIONS: SmartShapeOptions = {
-  preset: 'blob',
+  preset: 'ellipse',
   points: 6,
   wobble: 0.35,
   cornerRadius: 24,
@@ -64,8 +68,10 @@ export const useEditorStore = create<EditorState>()(
       activeTool: 'select',
       activeGradientTarget: 'fill',
       smartShapeOptions: { ...DEFAULT_SMART_SHAPE_OPTIONS },
+      textToolMode: 'point',
+      knifeToolMode: 'knife',
       pencilSmoothness: 2.5,
-      defaultFill: '#da7756',
+      defaultFill: '#1c1b1a',
       defaultStroke: null,
       zoomPercent: 100,
       isDirty: false,
@@ -97,6 +103,10 @@ export const useEditorStore = create<EditorState>()(
         set((state) => ({
           smartShapeOptions: { ...state.smartShapeOptions, ...patch },
         })),
+
+      setTextToolMode: (textToolMode) => set({ textToolMode }),
+
+      setKnifeToolMode: (knifeToolMode) => set({ knifeToolMode }),
 
       setPencilSmoothness: (smoothness) =>
         set({

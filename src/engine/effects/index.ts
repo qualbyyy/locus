@@ -1,6 +1,6 @@
 import { clamp } from '../../core/math';
 import { getPrimaryColor } from '../../core/paint';
-import type { LayerEffects, PathLayer, SubPath } from '../../core/types';
+import type { ColorAdjustEffect, LayerEffects, PathLayer, SubPath } from '../../core/types';
 import { parseColorToRgba } from '../../export/pathData';
 import { apply3DEffect, type ExtrudeFace } from './effects3d';
 import { applyDistortToSubPaths, applyWarpToSubPaths } from './warp';
@@ -14,12 +14,25 @@ export function hasVectorEffects(effects?: LayerEffects): boolean {
   return Boolean(effects.warp || effects.distort || effects.effect3d);
 }
 
+export function hasActiveColorAdjust(ca?: ColorAdjustEffect): boolean {
+  if (!ca) return false;
+  return (
+    Math.abs(ca.brightness) > 0.5 ||
+    Math.abs(ca.contrast) > 0.5 ||
+    Math.abs(ca.saturate) > 0.5 ||
+    Math.abs(ca.hue) > 0.5
+  );
+}
+
 export function hasRasterEffects(effects?: LayerEffects): boolean {
   if (!effects) return false;
   return Boolean(
     (effects.blur && effects.blur > 0.1) ||
+      (effects.motionBlur && effects.motionBlur.amount > 0.1) ||
       effects.dropShadow ||
-      effects.outerGlow
+      effects.innerShadow ||
+      effects.outerGlow ||
+      hasActiveColorAdjust(effects.colorAdjust)
   );
 }
 
@@ -64,11 +77,12 @@ export function colorWithOpacity(color: string, opacity: number): string {
 export function getEffectsPadding(effects?: LayerEffects): number {
   if (!effects) return 0;
   const blurPad = (effects.blur ?? 0) * 3;
+  const motionPad = effects.motionBlur ? effects.motionBlur.amount * 1.5 : 0;
   const shadowPad = effects.dropShadow
     ? effects.dropShadow.blur * 3 +
       Math.max(Math.abs(effects.dropShadow.offsetX), Math.abs(effects.dropShadow.offsetY))
     : 0;
   const glowPad = effects.outerGlow ? effects.outerGlow.blur * 3 : 0;
-  const pad = Math.ceil(Math.max(blurPad, shadowPad, glowPad));
+  const pad = Math.ceil(Math.max(blurPad, motionPad, shadowPad, glowPad));
   return pad > 0 ? pad + 8 : 0;
 }

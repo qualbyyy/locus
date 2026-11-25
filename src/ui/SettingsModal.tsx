@@ -378,6 +378,7 @@ export function SettingsModal({
   const resetSettings = useSettingsStore((s) => s.resetSettings);
 
   const [activeTab, setActiveTab] = useState<SettingsTabId>('appearance');
+  const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const [recordingAction, setRecordingAction] = useState<ShortcutActionId | null>(
     null
   );
@@ -420,7 +421,15 @@ export function SettingsModal({
     if (initialTab) setActiveTab(initialTab);
     setCustomFontInput(settings.customFontFamily);
     void useCustomFontStore.getState().load();
+    if (contentScrollRef.current) {
+      contentScrollRef.current.scrollTop = 0;
+    }
   }, [isOpen, initialTab]);
+
+  useEffect(() => {
+    if (!isOpen || !contentScrollRef.current) return;
+    contentScrollRef.current.scrollTop = 0;
+  }, [activeTab, isOpen]);
 
   useEffect(() => {
     if (!isOpen || !recordingAction) return;
@@ -472,12 +481,13 @@ export function SettingsModal({
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();
+        event.stopImmediatePropagation();
         onClose();
       }
     };
 
-    window.addEventListener('keydown', handleCloseKeyDown);
-    return () => window.removeEventListener('keydown', handleCloseKeyDown);
+    window.addEventListener('keydown', handleCloseKeyDown, true);
+    return () => window.removeEventListener('keydown', handleCloseKeyDown, true);
   }, [isOpen, onClose, recordingAction]);
 
   const handleOpenLink = async (url: string) => {
@@ -617,9 +627,9 @@ export function SettingsModal({
         e.preventDefault();
         handleApplyAndClose();
       }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-paper-ink/30 p-4"
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-paper-ink/30 p-4 sm:items-center"
     >
-      <div className="animate-rise flex h-[540px] w-full max-w-3xl flex-col overflow-hidden rounded border border-paper-border bg-paper-panel">
+      <div className="animate-rise my-auto flex h-[min(540px,calc(100vh-2rem))] w-full max-w-3xl flex-col overflow-hidden rounded border border-paper-border bg-paper-panel">
         <div className="flex h-11 shrink-0 items-center justify-between border-b border-paper-border px-4">
           <span className="text-[14px] font-semibold text-paper-ink">
             Настройки Locus
@@ -668,7 +678,7 @@ export function SettingsModal({
             </span>
           </nav>
 
-          <div className="flex-1 overflow-y-auto p-4">
+          <div ref={contentScrollRef} className="min-h-0 flex-1 overflow-y-auto p-4">
             {activeTab === 'appearance' && (
               <div className="flex flex-col gap-4">
                 <div className="flex flex-col gap-2">
@@ -1017,7 +1027,7 @@ export function SettingsModal({
 
                 <ToggleRow
                   label="Привязка к сетке"
-                  hint="Удерживайте Alt при перетаскивании, чтобы временно отключить"
+                  hint="Удерживайте Ctrl при перетаскивании, чтобы временно отключить"
                   checked={settings.snapToGrid}
                   onChange={(snapToGrid) => updateSettings({ snapToGrid })}
                 />

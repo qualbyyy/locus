@@ -28,14 +28,17 @@ import {
   addLayer,
   addLayers,
   alignLayers,
+  applyTextPathArc,
   attachTextToPath,
   booleanLayers,
   clearGuides,
   combineCompoundPathLayers,
   convertTextLayersToOutlines,
+  createCircleTextPreset,
   createClipMaskFromSelection,
   createImageLayer,
   createLayerId,
+  createTextOnPathFromShape,
   deleteAnchor,
   deleteArtboard,
   deleteLayers,
@@ -64,8 +67,10 @@ import {
   simplifyPathLayers,
   smoothLayers,
   splitCompoundPathLayers,
+  splitTextLayers,
   traceImageLayer,
   transformTextCase,
+  type TextSplitMode,
   undoCommand,
   ungroupLayers,
   updateArtboard,
@@ -93,7 +98,7 @@ import { openLocusFromBytes } from './export/projectFile';
 import { parseSvgToLayers } from './export/importSvg';
 import { matchShortcut } from './core/shortcuts';
 import { useCanRedo, useCanUndo, useEditorStore } from './core/store';
-import type { Artboard, ImageLayer, Scene } from './core/types';
+import type { Artboard, ImageLayer, Scene, TextLayer } from './core/types';
 import type { BooleanOp } from './engine/booleans';
 import type { ImageTraceOptions } from './engine/imageTrace';
 import { isCanvasZoomWheel } from './engine/zoom';
@@ -104,6 +109,7 @@ import {
   pickOpenFile,
   readFileBytes,
   subscribeFileDrop,
+  takeLaunchFile,
 } from './platform/io';
 import { ContextMenu } from './ui/ContextMenu';
 import { AiTaskIndicator } from './ui/AiTaskIndicator';
@@ -161,6 +167,8 @@ export function App() {
   const selectedNode = useEditorStore((s) => s.selectedNode);
   const activeTool = useEditorStore((s) => s.activeTool);
   const smartShapeOptions = useEditorStore((s) => s.smartShapeOptions);
+  const textToolMode = useEditorStore((s) => s.textToolMode);
+  const knifeToolMode = useEditorStore((s) => s.knifeToolMode);
   const pencilSmoothness = useEditorStore((s) => s.pencilSmoothness);
   const zoomPercent = useEditorStore((s) => s.zoomPercent);
   const isDirty = useEditorStore((s) => s.isDirty);
@@ -172,6 +180,8 @@ export function App() {
   const setSelectedNode = useEditorStore((s) => s.setSelectedNode);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
   const setSmartShapeOptions = useEditorStore((s) => s.setSmartShapeOptions);
+  const setTextToolMode = useEditorStore((s) => s.setTextToolMode);
+  const setKnifeToolMode = useEditorStore((s) => s.setKnifeToolMode);
   const setPencilSmoothness = useEditorStore((s) => s.setPencilSmoothness);
   const setZoomPercent = useEditorStore((s) => s.setZoomPercent);
   const setActiveArtboardId = useEditorStore((s) => s.setActiveArtboardId);
@@ -807,6 +817,31 @@ export function App() {
     let disposed = false;
     let unlisten: (() => void) | undefined;
 
+    void (async () => {
+      const file = await takeLaunchFile();
+      if (disposed || !file) return;
+      try {
+        if (/\.locus$/i.test(file.name)) {
+          const loaded = await openLocusFromBytes(file.bytes);
+          setIsStartModalOpen(false);
+          requestAnimationFrame(() => {
+            canvasRef.current?.fitArtboard();
+          });
+          showNotice(`Проект «${file.name || loaded.name}» открыт`);
+        } else if (/\.svg$/i.test(file.name)) {
+          await insertSvgFiles([{ name: file.name, bytes: file.bytes }]);
+        } else if (/\.(png|jpe?g|webp)$/i.test(file.name)) {
+          await insertDroppedImages([{ name: file.name, bytes: file.bytes }]);
+        }
+      } catch (err) {
+        showNotice(
+          err instanceof Error
+            ? err.message
+            : `Не удалось открыть «${file.name}»`
+        );
+      }
+    })();
+
     void subscribeFileDrop(
       (paths) => {
         if (disposed) return;
@@ -1050,6 +1085,12 @@ export function App() {
         return;
       }
 
+      if (action === 'view.zoomToSelection') {
+        event.preventDefault();
+        canvasRef.current?.zoomToSelection();
+        return;
+      }
+
       if (action === 'view.zoom100') {
         event.preventDefault();
         canvasRef.current?.resetZoom100();
@@ -1195,6 +1236,9 @@ export function App() {
             return;
           case 'layer.ungroup':
             handleUngroupLayers(st.selectedIds);
+            return;
+          case 'layer.toggleLock':
+            handleToggleLock();
             return;
         }
       }
@@ -1561,6 +1605,63 @@ export function App() {
     [showNotice]
   );
 
+  const handleCreateTextOnPathFromShape = useCallback(
+    (pathLayerId: string) => {
+      const created = createTextOnPathFromShape(pathLayerId);
+      if (!created) {
+        showNotice('Выберите разблокированный векторный контур');
+        return;
+      }
+      showNotice('Текст создан по контуру');
+      requestAnimationFrame(() => {
+        canvasRef.current?.startTextEditing(created.id, true);
+      });
+    },
+    [showNotice]
+  );
+
+  const handleCreateCircleText = useCallback(() => {
+    const created = createCircleTextPreset();
+    setActiveTool('select');
+    showNotice('Создан текст по кругу');
+    requestAnimationFrame(() => {
+      canvasRef.current?.startTextEditing(created.id, true);
+    });
+  }, [setActiveTool, showNotice]);
+
+  const handleSplitText = useCallback(
+    (ids: string[], mode: TextSplitMode) => {
+      const created = splitTextLayers(ids, mode);
+      if (created.length === 0) {
+        showNotice(
+          mode === 'lines'
+            ? 'Нужен многострочный свободный текст'
+            : 'Нужен текстовый слой минимум с двумя символами'
+        );
+        return;
+      }
+      showNotice(
+        mode === 'lines'
+          ? 'Текст разбит на отдельные строки'
+          : 'Текст разбит на отдельные буквы'
+      );
+    },
+    [showNotice]
+  );
+
+  const handleToggleLock = useCallback(() => {
+    const st = useEditorStore.getState();
+    if (st.selectedIds.length === 0) return;
+    const idSet = new Set(st.selectedIds);
+    const selected = flattenLayers(st.scene.layers).filter((l) => idSet.has(l.id));
+    if (selected.length === 0) return;
+    const shouldLock = selected.some((l) => !l.locked);
+    updateLayers(
+      selected.map((l) => l.id),
+      { locked: shouldLock }
+    );
+  }, []);
+
   const snapEnabled =
     settings.snapToGrid ||
     settings.snapToObjects ||
@@ -1572,6 +1673,9 @@ export function App() {
     const selected = flattenLayers(scene.layers).filter((l) => idSet.has(l.id));
     const hasPairText = selected.some((l) => l.type === 'text' && !l.locked);
     const hasPairPath = selected.some((l) => l.type === 'path' && !l.locked);
+    const selectedTexts = selected.filter(
+      (l): l is TextLayer => l.type === 'text' && !l.locked
+    );
     return {
       hasSelection: selected.length > 0,
       hasMultiSelection: selected.length >= 2,
@@ -1580,6 +1684,15 @@ export function App() {
       hasImageSelection: selected.some((l) => l.type === 'image' && !l.locked),
       hasGroupSelection: selected.some((l) => l.type === 'group'),
       canAttachTextToPath: selected.length === 2 && hasPairText && hasPairPath,
+      canDetachTextFromPath: selectedTexts.some((l) => Boolean(l.pathId)),
+      canSplitTextChars: selectedTexts.some(
+        (l) => Array.from(l.content || '').filter((c) => c.trim().length > 0).length >= 2
+      ),
+      canSplitTextLines: selectedTexts.some(
+        (l) =>
+          !l.pathId &&
+          (l.content || '').split('\n').filter((line) => line.trim().length > 0).length >= 2
+      ),
       hasEffects: selected.some((l) => hasAnyEffects(l.effects)),
       canUndo,
       canRedo,
@@ -1654,6 +1767,7 @@ export function App() {
       onDelete: () => deleteLayers(useEditorStore.getState().selectedIds),
       onGroup: () => handleGroupLayers(useEditorStore.getState().selectedIds),
       onUngroup: () => handleUngroupLayers(useEditorStore.getState().selectedIds),
+      onToggleLock: handleToggleLock,
       onUploadFont: () => void handleUploadFont(),
       onOpenSettings: () => openSettingsTab(null),
       onOpenTutorial: openTutorial,
@@ -1694,8 +1808,22 @@ export function App() {
         const sel = flattenLayers(st.scene.layers).filter((l) => idSet.has(l.id) && !l.locked);
         const txt = sel.find((l) => l.type === 'text');
         const pth = sel.find((l) => l.type === 'path');
-        if (txt && pth) handleAttachTextToPath(txt.id, pth.id);
+        if (txt && pth) {
+          handleAttachTextToPath(txt.id, pth.id);
+        } else if (pth) {
+          handleCreateTextOnPathFromShape(pth.id);
+        }
       },
+      onDetachTextFromPath: () => {
+        const st = useEditorStore.getState();
+        const idSet = new Set(st.selectedIds);
+        const txt = flattenLayers(st.scene.layers).find(
+          (l) => idSet.has(l.id) && l.type === 'text' && !l.locked && l.pathId
+        );
+        if (txt) handleDetachTextFromPath(txt.id);
+      },
+      onCreateCircleText: handleCreateCircleText,
+      onSplitText: (mode) => handleSplitText(useEditorStore.getState().selectedIds, mode),
       onTransformTextCase: (mode) => transformTextCase(useEditorStore.getState().selectedIds, mode),
       onSelectAll: selectAllLayers,
       onDeselect: deselectAllLayers,
@@ -1709,6 +1837,7 @@ export function App() {
       onZoomIn: () => canvasRef.current?.zoomIn(),
       onZoomOut: () => canvasRef.current?.zoomOut(),
       onFitArtboard: handleFitArtboard,
+      onZoomToSelection: () => canvasRef.current?.zoomToSelection(),
       onResetZoom100: () => canvasRef.current?.resetZoom100(),
       onToggleGrid: handleToggleGrid,
       onToggleRulers: handleToggleRulers,
@@ -1729,6 +1858,9 @@ export function App() {
       handleClearGuides,
       handleConvertToOutlines,
       handleCopySvg,
+      handleCreateCircleText,
+      handleCreateTextOnPathFromShape,
+      handleDetachTextFromPath,
       handleExpandAppearance,
       handleExportDocument,
       handleExportSelectionRaster,
@@ -1742,8 +1874,10 @@ export function App() {
       handleQuickExportPng,
       handleRunPreflight,
       handleSaveProject,
+      handleSplitText,
       handleToggleGrid,
       handleToggleGuides,
+      handleToggleLock,
       handleToggleRulers,
       handleToggleSnap,
       handleToggleSnapToGuides,
@@ -2020,7 +2154,14 @@ export function App() {
             activeTool={activeTool}
             showGrid={settings.showGrid}
             snapEnabled={snapEnabled}
+            smartShapePreset={smartShapeOptions.preset}
+            textToolMode={textToolMode}
+            knifeToolMode={knifeToolMode}
             onSelectTool={setActiveTool}
+            onSelectShapePreset={(preset) => setSmartShapeOptions({ preset })}
+            onSelectTextMode={setTextToolMode}
+            onCreateCircleText={handleCreateCircleText}
+            onSelectKnifeMode={setKnifeToolMode}
             onPlaceImage={() => void handlePlaceImage()}
             onToggleGrid={handleToggleGrid}
             onToggleSnap={handleToggleSnap}
@@ -2129,8 +2270,11 @@ export function App() {
                 }
                 onTransformTextCase={transformTextCase}
                 onConvertToOutlines={(ids) => void handleConvertToOutlines(ids)}
+                onSplitText={handleSplitText}
                 onAttachTextToPath={handleAttachTextToPath}
                 onDetachTextFromPath={handleDetachTextFromPath}
+                onApplyTextPathArc={(layerId, arc) => applyTextPathArc(layerId, arc)}
+                onCreateTextOnPath={handleCreateTextOnPathFromShape}
                 onSplitCompound={handleSplitCompound}
                 onCombineCompound={handleCombineCompound}
                 onOffsetLayers={handleOffsetLayers}

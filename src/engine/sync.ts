@@ -1,11 +1,14 @@
 import { getAsset, getAssetImageElement } from '../core/assets';
 import { findLayerPath } from '../core/layerTree';
 import {
+  IDENTITY_MATRIX,
+  applyMatrixToPoint,
   clamp,
   computeLayerLocalBBox,
   computeSubPathsBBox,
   getLayerMatrix,
   type LayerTransform,
+  type Matrix2D,
 } from '../core/math';
 import {
   normalizeGradientStops,
@@ -26,6 +29,7 @@ import type {
 import { rasterizeLayerLocalWithEffects } from '../export/rasterize';
 import {
   colorWithOpacity,
+  hasActiveColorAdjust,
   hasRasterEffects,
   resolveEffectivePathGeometry,
 } from './effects';
@@ -101,7 +105,8 @@ export function buildPaperPathFromSubPaths(
 export function toPaperColor(
   scope: paper.PaperScope,
   paint: Paint | null | undefined,
-  box: BBox
+  box: BBox,
+  matrix: Matrix2D = IDENTITY_MATRIX
 ): paper.Color | null {
   if (!paint) return null;
   if (typeof paint === 'string') {
@@ -115,13 +120,15 @@ export function toPaperColor(
     return new scope.GradientStop(c, s.offset);
   });
   const { origin, destination } = resolveGradientEndpoints(paint, box);
+  const worldOrigin = applyMatrixToPoint(matrix, origin);
+  const worldDestination = applyMatrixToPoint(matrix, destination);
   const gradient = new scope.Gradient();
   gradient.stops = stops;
   gradient.radial = paint.kind === 'radial';
   return new scope.Color(
     gradient,
-    new scope.Point(origin.x, origin.y),
-    new scope.Point(destination.x, destination.y)
+    new scope.Point(worldOrigin.x, worldOrigin.y),
+    new scope.Point(worldDestination.x, worldDestination.y)
   );
 }
 
@@ -129,18 +136,24 @@ export function applyPathStyleToPaperItem(
   scope: paper.PaperScope,
   item: paper.Item,
   layer: PathLayer,
-  box?: BBox
+  box?: BBox,
+  itemMatrix?: Matrix2D
 ): void {
-  const target =
-    item instanceof scope.Group && item.children.length > 0
-      ? item.children[item.children.length - 1]
-      : item;
+  const isExtrudeGroup = item instanceof scope.Group && item.children.length > 0;
+  const target = isExtrudeGroup ? item.children[item.children.length - 1] : item;
   const resolvedBox =
     box ?? computeSubPathsBBox(resolveEffectivePathGeometry(layer).subpaths);
+  const effectiveMatrix =
+    itemMatrix ?? (isExtrudeGroup ? IDENTITY_MATRIX : getLayerMatrix(layer));
 
-  target.fillColor = toPaperColor(scope, layer.fill, resolvedBox);
+  target.fillColor = toPaperColor(scope, layer.fill, resolvedBox, effectiveMatrix);
   if (layer.stroke && layer.stroke.width > 0) {
-    target.strokeColor = toPaperColor(scope, layer.stroke.color, resolvedBox);
+    target.strokeColor = toPaperColor(
+      scope,
+      layer.stroke.color,
+      resolvedBox,
+      effectiveMatrix
+    );
     target.strokeWidth = layer.stroke.width;
     target.strokeCap = layer.stroke.lineCap ?? 'round';
     target.strokeJoin = layer.stroke.lineJoin ?? 'round';
@@ -189,7 +202,13 @@ function buildPathLayerItem(
   }
 
   const localBox = computeSubPathsBBox(subpaths);
-  applyPathStyleToPaperItem(scope, frontItem, layer, localBox);
+  applyPathStyleToPaperItem(
+    scope,
+    frontItem,
+    layer,
+    localBox,
+    extrudeFaces.length > 0 ? IDENTITY_MATRIX : getLayerMatrix(layer)
+  );
 
   let item: paper.Item = frontItem;
   if (extrudeFaces.length > 0) {
@@ -213,7 +232,75 @@ function buildPathLayerItem(
   return item;
 }
 
-function buildTextLayerItem(
+function appendTextPointPair(
+  scope: paper.PaperScope,
+  group: paper.Group,
+  layer: TextLayer,
+  content: string,
+  opts: {
+    point: paper.Point;
+    justification: TextLayer['align'];
+    localBox: BBox;
+    matrix?: paper.Matrix;
+    tracking?: number;
+  }
+): void {
+  const createItem = (): paper.PointText => {
+    const item = new scope.PointText({
+      content,
+      point: opts.point,
+      fontFamily: layer.fontFamily,
+      fontWeight: layer.fontWeight === 700 ? 'bold' : 'normal',
+      fontSize: layer.fontSize,
+      justification: opts.justification,
+      applyMatrix: false,
+    });
+    if (opts.tracking && Math.abs(opts.tracking) > 1e-4) {
+      item.tracking = opts.tracking;
+    }
+    if (opts.matrix) {
+      item.pivot = new scope.Point(0, 0);
+      item.matrix = opts.matrix;
+    }
+    return item;
+  };
+
+  const toItemMatrix = (item: paper.PointText): Matrix2D => {
+    const m = item.matrix;
+    return { a: m.a, b: m.b, c: m.c, d: m.d, tx: m.tx, ty: m.ty };
+  };
+
+  if (layer.stroke && layer.stroke.width > 0) {
+    const strokeItem = createItem();
+    strokeItem.fillColor = null;
+    strokeItem.strokeColor = toPaperColor(
+      scope,
+      layer.stroke.color,
+      opts.localBox,
+      toItemMatrix(strokeItem)
+    );
+    strokeItem.strokeWidth = layer.stroke.width;
+    strokeItem.strokeCap = layer.stroke.lineCap ?? 'round';
+    strokeItem.strokeJoin = layer.stroke.lineJoin ?? 'round';
+    strokeItem.dashArray = sanitizeDashArray(layer.stroke.dashArray) ?? [];
+    strokeItem.dashOffset = layer.stroke.dashOffset ?? 0;
+    strokeItem.data = { textPass: 'stroke' };
+    group.addChild(strokeItem);
+  }
+
+  const fillItem = createItem();
+  fillItem.fillColor = toPaperColor(
+    scope,
+    layer.fill,
+    opts.localBox,
+    toItemMatrix(fillItem)
+  );
+  fillItem.strokeColor = null;
+  fillItem.data = { textPass: 'fill' };
+  group.addChild(fillItem);
+}
+
+export function buildTextLayerItem(
   scope: paper.PaperScope,
   layer: TextLayer,
   isEditing: boolean,
@@ -224,29 +311,42 @@ function buildTextLayerItem(
 
   if (hostPath) {
     const localBox = computeTextOnPathLocalBBox(layer, hostPath, sceneLayers);
-    const fillColor = toPaperColor(scope, layer.fill, localBox);
     const placements = computeTextOnPathPlacements(
       layer,
       hostPath,
       undefined,
       sceneLayers
     );
+    scope.activate();
+
+    const hasStroke = Boolean(layer.stroke && layer.stroke.width > 0);
+    const strokePass: paper.PointText[] = [];
+    const fillPass: paper.PointText[] = [];
 
     for (const p of placements) {
-      const charItem = new scope.PointText({
-        content: p.char,
+      const m = new scope.Matrix().translate(p.x, p.y).rotate(p.angleDeg, new scope.Point(0, 0));
+      const tempGroup = new scope.Group({ applyMatrix: false });
+      appendTextPointPair(scope, tempGroup, layer, p.char, {
         point: new scope.Point(0, 0),
-        fontFamily: layer.fontFamily,
-        fontWeight: layer.fontWeight === 700 ? 'bold' : 'normal',
-        fontSize: layer.fontSize,
-        fillColor,
         justification: 'center',
-        applyMatrix: false,
+        localBox,
+        matrix: m,
       });
-      charItem.position = new scope.Point(p.x, p.y);
-      charItem.rotation = p.angleDeg;
-      group.addChild(charItem);
+      for (const child of tempGroup.removeChildren()) {
+        if (child instanceof scope.PointText) {
+          if (hasStroke && child.data?.textPass === 'stroke') {
+            strokePass.push(child);
+          } else {
+            fillPass.push(child);
+          }
+        }
+      }
+      tempGroup.remove();
     }
+
+    // Отрисовываем все обводки до заливок (paint-order: stroke fill), чтобы буквы не перекрывались соседней обводкой.
+    for (const item of strokePass) group.addChild(item);
+    for (const item of fillPass) group.addChild(item);
 
     group.opacity = clamp(layer.opacity, 0, 1);
     group.blendMode = layer.blendMode ?? 'normal';
@@ -259,26 +359,36 @@ function buildTextLayerItem(
   const lines = (layer.content || '').split('\n');
   const step = layer.fontSize * layer.lineHeight;
   const localBox = computeLayerLocalBBox(layer);
-  const fillColor = toPaperColor(scope, layer.fill, localBox);
+  const tracking =
+    Math.abs(layer.letterSpacing ?? 0) > 1e-4
+      ? ((layer.letterSpacing ?? 0) / Math.max(1, layer.fontSize)) * 1000
+      : 0;
 
+  const strokePass: paper.PointText[] = [];
+  const fillPass: paper.PointText[] = [];
   lines.forEach((line, index) => {
     const baselineY = layer.fontSize * 0.85 + index * step;
-    const textItem = new scope.PointText({
-      content: line,
+    const tempGroup = new scope.Group({ applyMatrix: false });
+    appendTextPointPair(scope, tempGroup, layer, line, {
       point: new scope.Point(0, baselineY),
-      fontFamily: layer.fontFamily,
-      fontWeight: layer.fontWeight === 700 ? 'bold' : 'normal',
-      fontSize: layer.fontSize,
-      fillColor,
       justification: layer.align,
-      applyMatrix: false,
+      localBox,
+      tracking,
     });
-    if (Math.abs(layer.letterSpacing ?? 0) > 1e-4) {
-      textItem.tracking =
-        ((layer.letterSpacing ?? 0) / Math.max(1, layer.fontSize)) * 1000;
+    for (const child of tempGroup.removeChildren()) {
+      if (child instanceof scope.PointText) {
+        if (child.data?.textPass === 'stroke') {
+          strokePass.push(child);
+        } else {
+          fillPass.push(child);
+        }
+      }
     }
-    group.addChild(textItem);
+    tempGroup.remove();
   });
+
+  for (const item of strokePass) group.addChild(item);
+  for (const item of fillPass) group.addChild(item);
 
   group.opacity = clamp(layer.opacity, 0, 1);
   group.blendMode = layer.blendMode ?? 'normal';
@@ -368,6 +478,9 @@ function wrapWithRasterEffects(
 
   const needsRasterize =
     (eff.blur !== undefined && eff.blur > 0.1) ||
+    Boolean(eff.motionBlur && eff.motionBlur.amount > 0.1) ||
+    Boolean(eff.innerShadow) ||
+    hasActiveColorAdjust(eff.colorAdjust) ||
     Boolean(eff.dropShadow && eff.outerGlow);
 
   if (needsRasterize) {
@@ -421,15 +534,18 @@ function wrapWithRasterEffects(
   return item;
 }
 
+export interface SyncSceneOptions {
+  editingTextLayerId?: string | null;
+  editingTextDraft?: { layerId: string; content: string } | null;
+  outlineMode?: boolean;
+  editingGroupId?: string | null;
+}
+
 function buildGroupLayerItem(
   scope: paper.PaperScope,
   layer: GroupLayer,
   itemMap: Map<string, paper.Item>,
-  options: {
-    editingTextLayerId?: string | null;
-    outlineMode?: boolean;
-    editingGroupId?: string | null;
-  },
+  options: SyncSceneOptions,
   insideActiveGroup: boolean,
   editingAncestorIds: Set<string>,
   dimmed: boolean,
@@ -461,11 +577,7 @@ function buildPaperItemForLayer(
   layer: Layer,
   maskIds: Set<string>,
   itemMap: Map<string, paper.Item>,
-  options: {
-    editingTextLayerId?: string | null;
-    outlineMode?: boolean;
-    editingGroupId?: string | null;
-  },
+  options: SyncSceneOptions,
   insideActiveGroup: boolean,
   editingAncestorIds: Set<string>,
   sceneLayers: Layer[]
@@ -500,8 +612,14 @@ function buildPaperItemForLayer(
         ? built
         : wrapWithRasterEffects(scope, layer, built, false);
   } else if (layer.type === 'text') {
-    const isEditing = editingTextLayerId === layer.id;
-    const built = buildTextLayerItem(scope, layer, isEditing, sceneLayers);
+    const isLivePathEditing =
+      Boolean(layer.pathId) &&
+      options.editingTextDraft?.layerId === layer.id;
+    const renderLayer = isLivePathEditing
+      ? { ...layer, content: options.editingTextDraft!.content }
+      : layer;
+    const isEditing = !isLivePathEditing && editingTextLayerId === layer.id;
+    const built = buildTextLayerItem(scope, renderLayer, isEditing, sceneLayers);
     if (outlineMode) {
       for (const child of built.children) {
         if (child instanceof scope.PointText) {
@@ -550,11 +668,7 @@ function syncLayerListToContainer(
   container: paper.Layer | paper.Group,
   layers: Layer[],
   itemMap: Map<string, paper.Item>,
-  options: {
-    editingTextLayerId?: string | null;
-    outlineMode?: boolean;
-    editingGroupId?: string | null;
-  },
+  options: SyncSceneOptions,
   insideActiveGroup: boolean,
   editingAncestorIds: Set<string>,
   sceneLayers: Layer[]
@@ -620,11 +734,7 @@ export function syncSceneToPaper(
   scope: paper.PaperScope,
   sceneLayer: paper.Layer,
   scene: Scene,
-  options?: {
-    editingTextLayerId?: string | null;
-    outlineMode?: boolean;
-    editingGroupId?: string | null;
-  }
+  options?: SyncSceneOptions
 ): Map<string, paper.Item> {
   scope.activate();
   sceneLayer.activate();

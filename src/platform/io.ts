@@ -280,6 +280,28 @@ export async function removeAppConfigFile(relPath: string): Promise<void> {
   MEMORY_CONFIG_FALLBACK.delete(relPath);
 }
 
+export async function takeLaunchFile(): Promise<OpenedFile | null> {
+  if (!isTauri()) {
+    return null;
+  }
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const payload = await invoke<{
+      name: string;
+      path: string;
+      bytes: number[];
+    } | null>('take_launch_file');
+    if (!payload) return null;
+    return {
+      name: payload.name,
+      path: payload.path,
+      bytes: new Uint8Array(payload.bytes),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function subscribeFileDrop(
   onDrop: (paths: string[]) => void,
   onHoverChange?: (hovering: boolean) => void

@@ -22,6 +22,7 @@ export type TutorialTargetId =
   | 'tool.knife'
   | 'tool.text'
   | 'tool.eyedropper'
+  | 'toolbar.more'
   | 'toolbar.fit'
   | 'toolbar.grid'
   | 'toolbar.snap'
@@ -77,6 +78,7 @@ export const TUTORIAL_TARGETS: Record<
     selector: '[data-tour="tool.eyedropper"]',
     panel: 'toolbar',
   },
+  'toolbar.more': { selector: '[data-tour="toolbar.more"]', panel: 'toolbar' },
   'toolbar.fit': { selector: '[data-tour="toolbar.fit"]', panel: 'toolbar' },
   'toolbar.grid': { selector: '[data-tour="toolbar.grid"]', panel: 'toolbar' },
   'toolbar.snap': { selector: '[data-tour="toolbar.snap"]', panel: 'toolbar' },

@@ -9,7 +9,13 @@ export type ToolType =
   | 'pencil'
   | 'knife';
 
-export type SmartShapePreset = 'blob' | 'ellipse' | 'rect' | 'polygon' | 'star';
+export type SmartShapePreset =
+  | 'ellipse'
+  | 'rect'
+  | 'polygon'
+  | 'star'
+  | 'capsule'
+  | 'blob';
 
 export interface SmartShapeOptions {
   preset: SmartShapePreset;
@@ -101,7 +107,8 @@ export interface WarpEffect {
 export type DistortEffect =
   | { kind: 'zigzag'; size: number; ridges: number; smooth: boolean }
   | { kind: 'roughen'; size: number; detail: number; seed: number }
-  | { kind: 'roundCorners'; radius: number };
+  | { kind: 'roundCorners'; radius: number }
+  | { kind: 'puckerBloat'; amount: number }; // -100..100%
 
 export interface Effect3D {
   kind: 'rotate' | 'extrude';
@@ -127,13 +134,28 @@ export interface OuterGlowEffect {
   blur: number;
 }
 
+export interface MotionBlurEffect {
+  amount: number; // 1..100 px
+  angle: number;  // 0..360 deg
+}
+
+export interface ColorAdjustEffect {
+  brightness: number; // -100..100
+  contrast: number;   // -100..100
+  saturate: number;   // -100..100
+  hue: number;        // -180..180 deg
+}
+
 export interface LayerEffects {
   warp?: WarpEffect;
   distort?: DistortEffect;
   effect3d?: Effect3D;
-  blur?: number; // px, 0..60
+  blur?: number; // px, 0..150
+  motionBlur?: MotionBlurEffect;
   dropShadow?: DropShadowEffect;
+  innerShadow?: DropShadowEffect;
   outerGlow?: OuterGlowEffect;
+  colorAdjust?: ColorAdjustEffect;
 }
 
 export interface BaseLayer {
@@ -181,10 +203,13 @@ export interface TextLayer extends BaseLayer {
   lineHeight: number;     // По умолчанию 1.2
   letterSpacing?: number; // px, по умолчанию 0
   fill: Paint;
+  stroke?: StrokeStyle | null;
   align: 'left' | 'center' | 'right';
   pathId?: string;
-  pathOffset?: number;    // 0..100%
+  pathOffset?: number;         // 0..100%
   pathFlip?: boolean;
+  pathBaselineOffset?: number; // px, -200..200 (+ наружу/над контуром, - внутрь)
+  pathStretch?: boolean;       // Равномерно распределить по длине контура
 }
 
 export interface ImageLayer extends BaseLayer {

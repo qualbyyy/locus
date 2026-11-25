@@ -3,7 +3,12 @@ import {
   toggleAnchorSmooth,
   updatePathSubpaths,
 } from '../../core/commands';
-import { findLayerById, getLayerWorldMatrix } from '../../core/layerTree';
+import {
+  findLayerById,
+  flattenLayers,
+  getLayerWorldMatrix,
+  mapLayerTree,
+} from '../../core/layerTree';
 import {
   applyMatrixToPoint,
   applyMatrixToVector,
@@ -12,8 +17,10 @@ import {
   snapVector45,
   type Matrix2D,
 } from '../../core/math';
+import { isGradientPaint } from '../../core/paint';
 import { useEditorStore } from '../../core/store';
-import type { PathLayer, Point2D, SubPath } from '../../core/types';
+import type { PathLayer, Point2D, SubPath, TextLayer } from '../../core/types';
+import { applyPathStyleToPaperItem, buildTextLayerItem } from '../sync';
 import { findTopLayerAtPoint } from './selectTool';
 import type { CanvasToolController, ToolContext, ToolPointerEvent } from './types';
 
@@ -92,10 +99,10 @@ function getActiveEditablePathLayer(): PathLayer | null {
 
 function applyDraftSubpathsToPaperItem(
   ctx: ToolContext,
-  layerId: string,
+  layer: PathLayer,
   subpaths: SubPath[]
 ): void {
-  const item = ctx.getItemMap().get(layerId);
+  const item = ctx.getItemMap().get(layer.id);
   if (!item) return;
 
   const updateSinglePath = (path: paper.Path, sp: SubPath | undefined) => {
@@ -119,6 +126,32 @@ function applyDraftSubpathsToPaperItem(
     });
   } else if (item.className === 'Path') {
     updateSinglePath(item as paper.Path, subpaths[0]);
+  }
+
+  if (isGradientPaint(layer.fill) || isGradientPaint(layer.stroke?.color)) {
+    applyPathStyleToPaperItem(ctx.scope, item, { ...layer, subpaths });
+  }
+
+  const sceneLayers = useEditorStore.getState().scene.layers;
+  const attachedTexts = flattenLayers(sceneLayers).filter(
+    (l): l is TextLayer => l.type === 'text' && l.pathId === layer.id && l.visible
+  );
+  if (attachedTexts.length > 0) {
+    const effectiveLayers = mapLayerTree(sceneLayers, (n) =>
+      n.id === layer.id && n.type === 'path' ? { ...n, subpaths } : n
+    );
+    const itemMap = ctx.getItemMap();
+    for (const txt of attachedTexts) {
+      const txtItem = itemMap.get(txt.id);
+      if (!txtItem || txtItem.children.some((c) => c instanceof ctx.scope.Raster)) {
+        continue;
+      }
+      const rebuilt = buildTextLayerItem(ctx.scope, txt, false, effectiveLayers);
+      ctx.scope.activate();
+      txtItem.removeChildren();
+      txtItem.addChildren(rebuilt.removeChildren());
+      rebuilt.remove();
+    }
   }
 }
 
@@ -328,7 +361,7 @@ export function createNodeTool(): CanvasToolController {
         }
       }
 
-      applyDraftSubpathsToPaperItem(ctx, drag.layer.id, drag.draftSubpaths);
+      applyDraftSubpathsToPaperItem(ctx, drag.layer, drag.draftSubpaths);
       const draftOverrides = new Map([[drag.layer.id, { subpaths: drag.draftSubpaths }]]);
       ctx.redrawOverlay({ draftOverrides });
       ctx.scope.view.update();

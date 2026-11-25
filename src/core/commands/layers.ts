@@ -38,6 +38,7 @@ import type {
 } from '../types';
 import {
   DEFAULT_RESTORE_STROKE,
+  clearTextPathProps,
   commitScene,
   createLayerId,
   findSharedClipMaskId,
@@ -56,11 +57,12 @@ export type AlignMode =
   | 'artboard_center';
 
 const PRESET_LABELS: Record<SmartShapePreset, string> = {
-  blob: 'Клякса',
-  ellipse: 'Эллипс',
+  ellipse: 'Круг / Эллипс',
   rect: 'Прямоугольник',
   polygon: 'Многоугольник',
   star: 'Звезда',
+  capsule: 'Капсула',
+  blob: 'Клякса',
 };
 
 export function addLayer(
@@ -370,11 +372,7 @@ export function deleteLayers(layerIds: string[]): Scene {
         nextLayer.pathId &&
         deletedAllIds.has(nextLayer.pathId)
       ) {
-        const copy = { ...nextLayer };
-        delete copy.pathId;
-        delete copy.pathOffset;
-        delete copy.pathFlip;
-        nextLayer = copy;
+        nextLayer = clearTextPathProps(nextLayer);
       }
       return nextLayer;
     });
@@ -1278,7 +1276,9 @@ export function selectSimilarLayers(criterion: 'fill' | 'stroke' | 'type'): numb
       ? refLayer.fill ?? null
       : null;
   const refStroke =
-    refLayer.type === 'path' ? refLayer.stroke?.color ?? null : null;
+    refLayer.type === 'path' || refLayer.type === 'text'
+      ? refLayer.stroke?.color ?? null
+      : null;
 
   const matched = getScopeLayers(scene.layers, editingGroupId)
     .filter((l) => {
@@ -1288,7 +1288,7 @@ export function selectSimilarLayers(criterion: 'fill' | 'stroke' | 'type'): numb
         if (l.type !== 'path' && l.type !== 'text') return false;
         return paintEquals(l.fill ?? null, refFill);
       }
-      if (l.type !== 'path') return false;
+      if (l.type !== 'path' && l.type !== 'text') return false;
       return paintEquals(l.stroke?.color ?? null, refStroke);
     })
     .map((l) => l.id);

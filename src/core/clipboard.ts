@@ -174,7 +174,7 @@ export function copyLayerStyle(layerId?: string): CopiedLayerStyle | null {
   } else if (layer.type === 'text') {
     copiedStyle = {
       fill: clonePaint(layer.fill),
-      stroke: null,
+      stroke: cloneStroke(layer.stroke ?? null),
       opacity: layer.opacity,
       blendMode: layer.blendMode,
       effects: layer.effects ? cloneEffects(layer.effects) : undefined,
@@ -239,6 +239,7 @@ export function pasteLayerStyle(layerIds?: string[]): number {
           ...layer,
           ...common,
           ...(style.fill !== null ? { fill: clonePaint(style.fill) } : {}),
+          stroke: cloneStroke(style.stroke),
         };
       }
       return {

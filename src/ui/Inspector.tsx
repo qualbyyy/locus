@@ -20,7 +20,7 @@ import {
   Wand2,
 } from 'lucide-react';
 import { getActiveArtboard, getSceneArtboards } from '../core/artboards';
-import type { AlignMode, TextCaseMode } from '../core/commands';
+import type { AlignMode, TextCaseMode, TextSplitMode } from '../core/commands';
 import type { ExportKind } from '../core/documentFile';
 import { findLayerById, flattenLayers, getParentGroupId, getScopeLayers } from '../core/layerTree';
 import { clamp } from '../core/math';
@@ -107,8 +107,11 @@ interface InspectorProps {
   onEditTextOnCanvas: (layerId: string) => void;
   onTransformTextCase: (layerIds: string[], mode: TextCaseMode) => void;
   onConvertToOutlines: (layerIds: string[]) => void;
+  onSplitText?: (layerIds: string[], mode: TextSplitMode) => void;
   onAttachTextToPath: (textLayerId: string, pathLayerId: string) => void;
   onDetachTextFromPath: (textLayerId: string) => void;
+  onApplyTextPathArc?: (textLayerId: string, arc: 'top' | 'bottom') => void;
+  onCreateTextOnPath?: (pathLayerId: string) => void;
   onSplitCompound: (layerIds: string[]) => void;
   onCombineCompound: (layerIds: string[]) => void;
   onOffsetLayers: (layerIds: string[], distance: number, copyBehind: boolean) => void;
@@ -123,11 +126,11 @@ interface InspectorProps {
 }
 
 const SHAPE_PRESETS: Array<{ id: SmartShapePreset; label: string }> = [
-  { id: 'blob', label: 'Клякса' },
-  { id: 'ellipse', label: 'Овал' },
+  { id: 'ellipse', label: 'Круг' },
   { id: 'rect', label: 'Прям.' },
   { id: 'polygon', label: 'Полигон' },
   { id: 'star', label: 'Звезда' },
+  { id: 'capsule', label: 'Капсула' },
 ];
 
 function ArtboardPresetSelect({
@@ -308,8 +311,11 @@ export function Inspector({
   onEditTextOnCanvas,
   onTransformTextCase,
   onConvertToOutlines,
+  onSplitText,
   onAttachTextToPath,
   onDetachTextFromPath,
+  onApplyTextPathArc,
+  onCreateTextOnPath,
   onSplitCompound,
   onCombineCompound,
   onOffsetLayers,
@@ -352,7 +358,11 @@ export function Inspector({
   }
   const availablePaths = allFlatLayers
     .filter((l): l is PathLayer => l.type === 'path' && !l.locked)
-    .map((l) => ({ id: l.id, name: l.name }));
+    .map((l) => ({
+      id: l.id,
+      name: l.name,
+      closed: l.subpaths.some((sp) => sp.closed),
+    }));
 
   const pairText =
     selectedLayers.length === 2
@@ -771,6 +781,7 @@ export function Inspector({
                 onOffsetLayers={onOffsetLayers}
                 onOutlineStroke={onOutlineStroke}
                 onSplitCompound={onSplitCompound}
+                onCreateTextOnPath={onCreateTextOnPath}
               />
             </>
           )}
@@ -784,8 +795,10 @@ export function Inspector({
               onEditTextOnCanvas={onEditTextOnCanvas}
               onTransformTextCase={onTransformTextCase}
               onConvertToOutlines={onConvertToOutlines}
+              onSplitText={onSplitText}
               onAttachTextToPath={onAttachTextToPath}
               onDetachTextFromPath={onDetachTextFromPath}
+              onApplyTextPathArc={onApplyTextPathArc}
               onUploadFont={onUploadFont}
             />
           )}

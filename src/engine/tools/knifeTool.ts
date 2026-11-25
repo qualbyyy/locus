@@ -38,6 +38,7 @@ export function createKnifeTool(): CanvasToolController {
 
     onMouseDrag(event: ToolPointerEvent, ctx: ToolContext) {
       if (!isCutting) return;
+      if (useEditorStore.getState().knifeToolMode === 'scissors') return;
       if (event.shiftKey) {
         points = [event.startPoint, event.point];
       } else {
@@ -67,15 +68,16 @@ export function createKnifeTool(): CanvasToolController {
       }
 
       const state = useEditorStore.getState();
+      const isScissorsMode = state.knifeToolMode === 'scissors';
       const scopeLayers = getScopeLayers(state.scene.layers, state.editingGroupId);
       const invScope = invertMatrix(
         getScopeWorldMatrix(state.scene.layers, state.editingGroupId)
       );
 
-      if (dragLength < 4 / zoom) {
+      if (isScissorsMode || dragLength < 4 / zoom) {
         // Scissors click: cut or open nearest contour at point
         const scopePt = applyMatrixToPoint(invScope, event.point);
-        const tol = 10 / zoom;
+        const tol = (isScissorsMode ? 14 : 10) / zoom;
         const hitLayer = findTopLayerAtPoint(
           ctx,
           event.point,
@@ -83,6 +85,10 @@ export function createKnifeTool(): CanvasToolController {
         );
         if (hitLayer && hitLayer.type === 'path') {
           if (cutPathAtPoint(hitLayer.id, scopePt, tol).length > 0) {
+            return;
+          }
+          // Clicking deep inside a filled top shape should not punch through to shapes behind it.
+          if (hitLayer.fill !== null) {
             return;
           }
         }

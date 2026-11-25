@@ -31,4 +31,16 @@ describe('tutorial shortcuts', () => {
     expect(definition?.editable).toBe(false);
     expect(definition?.category).toBe('view');
   });
+
+  it('binds M (with Shift+M fallback) to shapeBuilder, Ctrl+2 to zoomToSelection, and Ctrl+L to toggleLock', () => {
+    expect(getEffectiveShortcut('tool.shapeBuilder')).toBe('KeyM');
+    expect(matchShortcut({ code: 'KeyM', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false })).toBe('tool.shapeBuilder');
+    expect(matchShortcut({ code: 'KeyM', ctrlKey: false, metaKey: false, altKey: false, shiftKey: true })).toBe('tool.shapeBuilder');
+
+    expect(getEffectiveShortcut('view.zoomToSelection')).toBe('Ctrl+Digit2');
+    expect(matchShortcut({ code: 'Digit2', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false })).toBe('view.zoomToSelection');
+
+    expect(getEffectiveShortcut('layer.toggleLock')).toBe('Ctrl+KeyL');
+    expect(matchShortcut({ code: 'KeyL', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false })).toBe('layer.toggleLock');
+  });
 });

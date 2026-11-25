@@ -178,4 +178,17 @@ describe('engine/geometry', () => {
     const smooth = smoothSubPaths(star, 1);
     expect(roundPathCorners(smooth, 8)).toEqual(smooth);
   });
+
+  it('generates capsule preset with full semicircular endcaps', () => {
+    const capsule = generateSmartShape(200, 80, {
+      ...BASE_OPTIONS,
+      preset: 'capsule',
+    });
+    expect(capsule).toHaveLength(1);
+    expect(capsule[0].closed).toBe(true);
+    const box = computeSubPathsBBox(capsule);
+    expect(box.width).toBeCloseTo(200, 2);
+    expect(box.height).toBeCloseTo(80, 2);
+    assertCenteredAndFinite(capsule);
+  });
 });

@@ -451,6 +451,11 @@ export function randomizeAnchors(
   return centerSubPathsAtOrigin(perturbed).subpaths;
 }
 
+export function createCapsuleSubPaths(width: number, height: number): SubPath[] {
+  const r = Math.min(Math.abs(width), Math.abs(height)) / 2;
+  return createRectSubPaths(width, height, r);
+}
+
 export function generateSmartShape(
   width: number,
   height: number,
@@ -458,8 +463,6 @@ export function generateSmartShape(
   seed?: number
 ): SubPath[] {
   switch (options.preset) {
-    case 'ellipse':
-      return createEllipseSubPaths(width, height);
     case 'rect':
       return createRectSubPaths(width, height, options.cornerRadius);
     case 'polygon':
@@ -471,8 +474,9 @@ export function generateSmartShape(
         options.points,
         options.innerRadiusRatio
       );
+    case 'capsule':
+      return createCapsuleSubPaths(width, height);
     case 'blob':
-    default:
       return createBlobSubPaths(
         width,
         height,
@@ -480,5 +484,8 @@ export function generateSmartShape(
         options.wobble,
         seed
       );
+    case 'ellipse':
+    default:
+      return createEllipseSubPaths(width, height);
   }
 }
