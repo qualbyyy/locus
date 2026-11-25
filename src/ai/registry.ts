@@ -30,10 +30,17 @@ import {
   updatePathSubpaths,
   type AlignMode,
 } from '../core/commands';
+import { getProjectFonts } from '../core/fonts';
+import { recolorSceneWithPalette } from './palette';
+import { runPreflightCheck } from './preflight';
+import { findLayerById, flattenLayers } from '../core/layerTree';
 import { computeLayerWorldBBox } from '../core/math';
+import { BLEND_MODE_OPTIONS, isBlendMode, sanitizeDashArray } from '../core/paint';
 import { useEditorStore } from '../core/store';
 import type {
+  BlendMode,
   BuiltinFontFamily,
+  FontFamily,
   Layer,
   PathLayer,
   SmartShapeOptions,
@@ -52,6 +59,21 @@ const FONT_FAMILIES: BuiltinFontFamily[] = [
   'JetBrains Mono',
   'Unbounded',
 ];
+
+function getAllowedFontFamilies(): string[] {
+  const custom = getProjectFonts().map((f) => f.family);
+  return Array.from(new Set([...FONT_FAMILIES, ...custom]));
+}
+
+function readFontFamily(raw: unknown, what: string): FontFamily {
+  const str = readStringValue(raw, what, 200);
+  const allowed = getAllowedFontFamilies();
+  const match = allowed.find((f) => f.toLowerCase() === str.toLowerCase());
+  if (!match) {
+    fail(`${what}: неизвестный шрифт «${str}». Доступные: ${allowed.join(', ')}`);
+  }
+  return match;
+}
 
 const ALIGN_MODES: AlignMode[] = [
   'left',
@@ -99,6 +121,8 @@ export const TOOL_LABELS: Record<string, string> = {
   repeat_layer: 'Повтор',
   round_corners: 'Скругление углов',
   place_in_bounds: 'Вписать в прямоугольник',
+  recolor_palette: 'Перекраска по палитре',
+  preflight_check: 'Проверка макета',
 };
 
 class ToolError extends Error {}
@@ -298,11 +322,28 @@ function optionalStroke(
           return obj.lineJoin as 'miter' | 'round' | 'bevel';
         })();
 
+  let dashArray: number[] | undefined;
+  if (obj.dashArray !== undefined && obj.dashArray !== null) {
+    if (!Array.isArray(obj.dashArray)) {
+      fail(`${key}.dashArray: ожидается массив чисел > 0`);
+    }
+    const nums = obj.dashArray.map((n, idx) =>
+      readNumberValue(n, `${key}.dashArray[${idx}]`, 0.1, 2000)
+    );
+    dashArray = sanitizeDashArray(nums);
+  }
+  const dashOffset =
+    obj.dashOffset !== undefined && obj.dashOffset !== null
+      ? readNumberValue(obj.dashOffset, `${key}.dashOffset`, -2000, 2000)
+      : undefined;
+
   return {
     color,
     width,
     ...(lineCap ? { lineCap } : {}),
     ...(lineJoin ? { lineJoin } : {}),
+    ...(dashArray ? { dashArray } : {}),
+    ...(dashOffset !== undefined ? { dashOffset } : {}),
   };
 }
 
@@ -322,10 +363,11 @@ function readIds(raw: unknown, what: string): string[] {
 function resolveLayerIds(raw: unknown, what = 'layerIds'): string[] {
   const requested = readIds(raw, what);
   const scene = useEditorStore.getState().scene;
-  const existing = new Set(scene.layers.map((layer) => layer.id));
+  const allLayers = flattenLayers(scene.layers);
+  const existing = new Set(allLayers.map((layer) => layer.id));
   const valid = requested.filter((id) => existing.has(id));
   if (valid.length === 0) {
-    const available = scene.layers
+    const available = allLayers
       .slice(0, 12)
       .map((layer) => `${layer.id} («${layer.name}»)`)
       .join(', ');
@@ -431,7 +473,10 @@ function createText(args: Record<string, unknown>): Record<string, unknown> {
     y: requiredNumber(args, 'y', -100000, 100000),
     content: requiredString(args, 'content', 5000),
     fontSize: optionalNumber(args, 'fontSize', 6, 1000, 48),
-    fontFamily: optionalEnum(args, 'fontFamily', FONT_FAMILIES),
+    fontFamily:
+      args.fontFamily !== undefined && args.fontFamily !== null
+        ? readFontFamily(args.fontFamily, 'fontFamily')
+        : undefined,
     fontWeight: optionalFontWeight(args, 'fontWeight'),
     lineHeight: optionalNumber(args, 'lineHeight', 0.6, 4, 1.2),
     letterSpacing: optionalNumber(args, 'letterSpacing', -20, 200, 0),
@@ -509,7 +554,8 @@ function createLine(args: Record<string, unknown>): Record<string, unknown> {
   }
   const fill = optionalColor(args, 'fill') ?? null;
   const sameTypeCount =
-    useEditorStore.getState().scene.layers.filter((l) => l.type === 'path').length + 1;
+    flattenLayers(useEditorStore.getState().scene.layers).filter((l) => l.type === 'path').length +
+    1;
 
   const layer: PathLayer = {
     id: createLayerId('path'),
@@ -544,12 +590,13 @@ interface LayerPatch {
   scaleX?: number;
   scaleY?: number;
   opacity?: number;
+  blendMode?: BlendMode;
   fill?: string | null;
   stroke?: StrokeStyle | null;
   fillRule?: 'nonzero' | 'evenodd';
   content?: string;
   fontSize?: number;
-  fontFamily?: BuiltinFontFamily;
+  fontFamily?: FontFamily;
   fontWeight?: 400 | 700;
   lineHeight?: number;
   letterSpacing?: number;
@@ -583,6 +630,14 @@ function parseLayerPatch(raw: unknown): LayerPatch {
   if (obj.opacity !== undefined) {
     patch.opacity = readNumberValue(obj.opacity, 'patch.opacity', 0, 1);
   }
+  if (obj.blendMode !== undefined) {
+    if (!isBlendMode(obj.blendMode)) {
+      fail(
+        `patch.blendMode: допустимые значения — ${BLEND_MODE_OPTIONS.map((o) => o.value).join(', ')}`
+      );
+    }
+    patch.blendMode = obj.blendMode;
+  }
   if (obj.fill !== undefined) {
     if (obj.fill === null || obj.fill === 'none' || obj.fill === 'transparent') {
       patch.fill = null;
@@ -604,7 +659,7 @@ function parseLayerPatch(raw: unknown): LayerPatch {
     patch.fontSize = readNumberValue(obj.fontSize, 'patch.fontSize', 6, 1000);
   }
   if (obj.fontFamily !== undefined) {
-    patch.fontFamily = requiredEnum(obj, 'fontFamily', FONT_FAMILIES);
+    patch.fontFamily = readFontFamily(obj.fontFamily, 'patch.fontFamily');
   }
   if (obj.fontWeight !== undefined) {
     patch.fontWeight = readFontWeight(obj.fontWeight, 'patch.fontWeight');
@@ -634,6 +689,7 @@ function applyLayerPatch(layer: Layer, patch: LayerPatch): Layer {
     if (patch.scaleX !== undefined) next.scaleX = patch.scaleX;
     if (patch.scaleY !== undefined) next.scaleY = patch.scaleY;
     if (patch.opacity !== undefined) next.opacity = patch.opacity;
+    if (patch.blendMode !== undefined) next.blendMode = patch.blendMode;
     if (patch.fill !== undefined) next.fill = patch.fill;
     if (patch.stroke !== undefined) next.stroke = patch.stroke;
     if (patch.fillRule !== undefined) next.fillRule = patch.fillRule;
@@ -651,6 +707,7 @@ function applyLayerPatch(layer: Layer, patch: LayerPatch): Layer {
     if (patch.scaleX !== undefined) next.scaleX = patch.scaleX;
     if (patch.scaleY !== undefined) next.scaleY = patch.scaleY;
     if (patch.opacity !== undefined) next.opacity = patch.opacity;
+    if (patch.blendMode !== undefined) next.blendMode = patch.blendMode;
     if (patch.fill !== undefined && patch.fill !== null) next.fill = patch.fill;
     if (patch.content !== undefined) next.content = patch.content;
     if (patch.fontSize !== undefined) next.fontSize = patch.fontSize;
@@ -672,6 +729,7 @@ function applyLayerPatch(layer: Layer, patch: LayerPatch): Layer {
   if (patch.scaleX !== undefined) next.scaleX = patch.scaleX;
   if (patch.scaleY !== undefined) next.scaleY = patch.scaleY;
   if (patch.opacity !== undefined) next.opacity = patch.opacity;
+  if (patch.blendMode !== undefined) next.blendMode = patch.blendMode;
   return next;
 }
 
@@ -679,9 +737,9 @@ function updateLayersTool(args: Record<string, unknown>): Record<string, unknown
   const ids = resolveLayerIds(args.layerIds);
   const patch = parseLayerPatch(args.patch);
   updateLayers(ids, (layer) => applyLayerPatch(layer, patch));
-  const names = useEditorStore
-    .getState()
-    .scene.layers.filter((layer) => ids.includes(layer.id))
+  const idSet = new Set(ids);
+  const names = flattenLayers(useEditorStore.getState().scene.layers)
+    .filter((layer) => idSet.has(layer.id))
     .map((layer) => layer.name);
   return {
     summary: `Изменено слоёв: ${ids.length}${names.length ? ` (${names.join(', ')})` : ''}`,
@@ -692,8 +750,9 @@ function updateLayersTool(args: Record<string, unknown>): Record<string, unknown
 function deleteLayersTool(args: Record<string, unknown>): Record<string, unknown> {
   const ids = resolveLayerIds(args.layerIds);
   const scene = useEditorStore.getState().scene;
-  const names = scene.layers
-    .filter((layer) => ids.includes(layer.id))
+  const idSet = new Set(ids);
+  const names = flattenLayers(scene.layers)
+    .filter((layer) => idSet.has(layer.id))
     .map((layer) => layer.name);
   deleteLayers(ids);
   return {
@@ -730,7 +789,7 @@ function reorderLayersTool(args: Record<string, unknown>): Record<string, unknow
       ? Math.round(requiredNumber(args, 'index', 0, 10000))
       : undefined;
   const scene = useEditorStore.getState().scene;
-  const target = scene.layers.find((layer) => layer.id === layerId);
+  const target = findLayerById(scene.layers, layerId);
   if (!target) {
     fail(`Слой «${layerId}» не найден`);
   }
@@ -754,9 +813,7 @@ function setClipMaskTool(args: Record<string, unknown>): Record<string, unknown>
     return { summary: `Маска снята со слоёв: ${targets.length}`, targetLayerIds: targets };
   }
 
-  const mask = useEditorStore
-    .getState()
-    .scene.layers.find((layer) => layer.id === maskLayerId);
+  const mask = findLayerById(useEditorStore.getState().scene.layers, maskLayerId);
   if (!mask || mask.type !== 'path') {
     fail(`Маска «${maskLayerId}» не найдена или не является векторным контуром`);
   }
@@ -778,9 +835,7 @@ function randomizeAnchorsTool(args: Record<string, unknown>): Record<string, unk
   const scene = useEditorStore.getState().scene;
   let changed = 0;
   for (const id of ids) {
-    const layer = useEditorStore
-      .getState()
-      .scene.layers.find((item) => item.id === id);
+    const layer = findLayerById(useEditorStore.getState().scene.layers, id);
     if (!layer || layer.type !== 'path' || layer.locked) continue;
     const next = randomizeAnchors(layer.subpaths, intensity, seed);
     if (updatePathSubpaths(id, next)) changed += 1;
@@ -790,7 +845,7 @@ function randomizeAnchorsTool(args: Record<string, unknown>): Record<string, unk
   }
   return {
     summary: `Искажены узлы слоёв: ${changed} (intensity ${intensity.toFixed(1)}${seed !== undefined ? `, seed ${seed}` : ''})`,
-    layerIds: ids.filter((id) => scene.layers.some((layer) => layer.id === id)),
+    layerIds: ids.filter((id) => Boolean(findLayerById(scene.layers, id))),
     changed,
   };
 }
@@ -813,12 +868,13 @@ function applyPaletteTool(args: Record<string, unknown>): Record<string, unknown
   const colors = rawColors.map((raw, index) => normalizeHexColor(raw, `colors[${index}]`));
   const includeBackground = optionalBoolean(args, 'includeBackground', false);
   const scene = useEditorStore.getState().scene;
+  const flatLayers = flattenLayers(scene.layers);
   const requested =
     args.layerIds === undefined || args.layerIds === null
-      ? scene.layers.filter((layer) => layer.type === 'path' || layer.type === 'text')
+      ? flatLayers.filter((layer) => layer.type === 'path' || layer.type === 'text')
       : (() => {
           const ids = readIds(args.layerIds, 'layerIds');
-          return scene.layers.filter(
+          return flatLayers.filter(
             (layer) =>
               ids.includes(layer.id) &&
               (layer.type === 'path' || layer.type === 'text')
@@ -946,14 +1002,12 @@ function simplifyPathTool(args: Record<string, unknown>): Record<string, unknown
 
 function countAnchors(ids: string[]): number {
   const idSet = new Set(ids);
-  return useEditorStore
-    .getState()
-    .scene.layers.reduce((total, layer) => {
-      if (!idSet.has(layer.id) || layer.type !== 'path') return total;
-      return (
-        total + layer.subpaths.reduce((sum, subpath) => sum + subpath.anchors.length, 0)
-      );
-    }, 0);
+  return flattenLayers(useEditorStore.getState().scene.layers).reduce((total, layer) => {
+    if (!idSet.has(layer.id) || layer.type !== 'path') return total;
+    return (
+      total + layer.subpaths.reduce((sum, subpath) => sum + subpath.anchors.length, 0)
+    );
+  }, 0);
 }
 
 function setArtboardTool(args: Record<string, unknown>): Record<string, unknown> {
@@ -993,20 +1047,17 @@ function textCaseTool(args: Record<string, unknown>): Record<string, unknown> {
   const ids = selectedOrGivenLayerIds(args);
   const mode = requiredEnum(args, 'mode', ['upper', 'lower', 'title'] as const);
   const before = new Map(
-    useEditorStore
-      .getState()
-      .scene.layers.filter((layer) => ids.includes(layer.id) && layer.type === 'text')
+    flattenLayers(useEditorStore.getState().scene.layers)
+      .filter((layer) => ids.includes(layer.id) && layer.type === 'text')
       .map((layer) => [layer.id, layer.type === 'text' ? layer.content : ''])
   );
   if (before.size === 0) fail('text_case: среди слоёв нет текста');
   transformTextCase(ids, mode);
-  const changed = useEditorStore
-    .getState()
-    .scene.layers.filter((layer) => {
-      if (layer.type !== 'text') return false;
-      const previous = before.get(layer.id);
-      return previous !== undefined && previous !== layer.content;
-    }).length;
+  const changed = flattenLayers(useEditorStore.getState().scene.layers).filter((layer) => {
+    if (layer.type !== 'text') return false;
+    const previous = before.get(layer.id);
+    return previous !== undefined && previous !== layer.content;
+  }).length;
   return {
     summary: `Регистр изменён: ${changed} текстовых слоёв (${mode})`,
     changed,
@@ -1017,9 +1068,9 @@ function rotateLayersTool(args: Record<string, unknown>): Record<string, unknown
   const ids = selectedOrGivenLayerIds(args);
   const angle = requiredNumber(args, 'angle', -3600, 3600);
   if (Math.abs(angle) < 1e-4) fail('angle: угол не может быть нулевым');
-  const locked = useEditorStore
-    .getState()
-    .scene.layers.filter((layer) => ids.includes(layer.id) && layer.locked).length;
+  const locked = flattenLayers(useEditorStore.getState().scene.layers).filter(
+    (layer) => ids.includes(layer.id) && layer.locked
+  ).length;
   if (locked === ids.length) fail('Все указанные слои заблокированы');
   rotateLayersBy(ids, angle);
   return {
@@ -1058,7 +1109,7 @@ function selectLayersTool(args: Record<string, unknown>): Record<string, unknown
   }
 
   const state = useEditorStore.getState();
-  const names = state.scene.layers
+  const names = flattenLayers(state.scene.layers)
     .filter((layer) => state.selectedIds.includes(layer.id))
     .map((layer) => layer.name);
   return {
@@ -1084,7 +1135,7 @@ function getLayerGeometryTool(args: Record<string, unknown>): Record<string, unk
   const round = (value: number) => Math.round(value * 10) / 10;
   const MAX_ANCHORS = 200;
   const idSet = new Set(ids);
-  const layers = state.scene.layers
+  const layers = flattenLayers(state.scene.layers)
     .filter((layer) => idSet.has(layer.id))
     .map((layer) => {
       const box = computeLayerWorldBBox(layer);
@@ -1150,6 +1201,14 @@ function getLayerGeometryTool(args: Record<string, unknown>): Record<string, unk
         };
       }
 
+      if (layer.type === 'group') {
+        return {
+          ...base,
+          childIds: layer.children.map((child) => child.id),
+          childrenCount: layer.children.length,
+        };
+      }
+
       return { ...base, width: layer.width, height: layer.height, assetId: layer.assetId };
     });
 
@@ -1193,9 +1252,9 @@ function repeatLayerTool(args: Record<string, unknown>): Record<string, unknown>
 function roundCornersTool(args: Record<string, unknown>): Record<string, unknown> {
   const ids = selectedOrGivenLayerIds(args);
   const radius = requiredNumber(args, 'radius', 0.5, 2000);
-  const paths = useEditorStore
-    .getState()
-    .scene.layers.filter((layer) => ids.includes(layer.id) && layer.type === 'path').length;
+  const paths = flattenLayers(useEditorStore.getState().scene.layers).filter(
+    (layer) => ids.includes(layer.id) && layer.type === 'path'
+  ).length;
   if (paths === 0) fail('round_corners: среди слоёв нет векторов');
   roundCornersLayers(ids, radius);
   return {
@@ -1213,15 +1272,58 @@ function placeInBoundsTool(args: Record<string, unknown>): Record<string, unknow
     height: requiredNumber(args, 'height', 1, 100000),
   };
   const mode = optionalEnum(args, 'mode', ['fit', 'fill'] as const) ?? 'fit';
-  const locked = useEditorStore
-    .getState()
-    .scene.layers.filter((layer) => ids.includes(layer.id) && layer.locked).length;
+  const locked = flattenLayers(useEditorStore.getState().scene.layers).filter(
+    (layer) => ids.includes(layer.id) && layer.locked
+  ).length;
   if (locked === ids.length) fail('Все указанные слои заблокированы');
   placeLayersInBounds(ids, box, mode);
   return {
     summary: `Вписано в прямоугольник ${box.width}×${box.height}: ${ids.length - locked} сл. (${mode})`,
     layerIds: ids,
     box,
+  };
+}
+
+function recolorPaletteTool(args: Record<string, unknown>): Record<string, unknown> {
+  const rawPalette = args.palette;
+  if (!Array.isArray(rawPalette) || rawPalette.length === 0) {
+    fail('recolor_palette: нужен непустой массив palette из hex-цветов');
+  }
+  const palette = rawPalette.map((item, idx) =>
+    readStringValue(item, `palette[${idx}]`, 32)
+  );
+  const layerIds = Array.isArray(args.layerIds)
+    ? args.layerIds.map((id, idx) => readStringValue(id, `layerIds[${idx}]`, 128))
+    : undefined;
+  const includeBackground =
+    args.includeBackground === undefined
+      ? undefined
+      : Boolean(args.includeBackground);
+  const preserveContrast = optionalBoolean(args, 'preserveContrast', true);
+
+  const res = recolorSceneWithPalette(palette, {
+    layerIds,
+    includeBackground,
+    preserveContrast,
+  });
+  return {
+    summary: `Перекрашено по палитре (${res.palette.slice(0, 4).join(', ')}): ${res.updatedLayers} сл.${res.updatedBackground && res.backgroundColor ? `, фон ${res.backgroundColor}` : ''}`,
+    ...res,
+  };
+}
+
+function preflightCheckTool(args: Record<string, unknown>): Record<string, unknown> {
+  const artboardId = optionalString(args, 'artboardId', 128);
+  const state = useEditorStore.getState();
+  const report = runPreflightCheck(
+    state.scene,
+    artboardId ?? state.activeArtboardId
+  );
+  return {
+    summary: report.summary,
+    dpi: report.dpi,
+    issueCount: report.issues.length,
+    issues: report.issues,
   };
 }
 
@@ -1257,6 +1359,8 @@ const TOOL_HANDLERS: Record<string, ToolHandler> = {
   repeat_layer: repeatLayerTool,
   round_corners: roundCornersTool,
   place_in_bounds: placeInBoundsTool,
+  recolor_palette: recolorPaletteTool,
+  preflight_check: preflightCheckTool,
 };
 
 const LAYER_IDS_SCHEMA = {
@@ -1277,6 +1381,15 @@ const STROKE_SCHEMA = {
     lineJoin: {
       type: 'string' as const,
       enum: ['miter', 'round', 'bevel'],
+    },
+    dashArray: {
+      type: 'array' as const,
+      items: { type: 'number' as const },
+      description: 'Пунктир: [штрих, пробел, ...]',
+    },
+    dashOffset: {
+      type: 'number' as const,
+      description: 'Сдвиг пунктира, px',
     },
   },
   required: ['color', 'width'],
@@ -1357,7 +1470,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         fontSize: { type: 'number', description: 'Кегль, px' },
         fontFamily: {
           type: 'string',
-          enum: FONT_FAMILIES,
+          description:
+            'Семейство шрифта (встроенное: Inter, Manrope, Golos Text, Playfair Display, JetBrains Mono, Unbounded или загруженное в проект)',
         },
         fontWeight: { type: 'integer', description: 'Жирность: 400 или 700' },
         lineHeight: { type: 'number', description: 'Межстрочный интервал, 0.6..4' },
@@ -1419,12 +1533,20 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             scaleX: { type: 'number' },
             scaleY: { type: 'number' },
             opacity: { type: 'number', description: '0..1' },
+            blendMode: {
+              type: 'string',
+              enum: BLEND_MODE_OPTIONS.map((o) => o.value),
+              description: 'Режим наложения слоя',
+            },
             fill: { type: 'string', description: 'hex или "none"' },
             stroke: STROKE_SCHEMA,
             fillRule: { type: 'string', enum: ['nonzero', 'evenodd'] },
             content: { type: 'string', description: 'Текст для TextLayer' },
             fontSize: { type: 'number' },
-            fontFamily: { type: 'string', enum: FONT_FAMILIES },
+            fontFamily: {
+              type: 'string',
+              description: 'Семейство шрифта (встроенное или загруженное в проект)',
+            },
             fontWeight: { type: 'integer', description: 'Жирность: 400 или 700' },
             lineHeight: { type: 'number' },
             letterSpacing: { type: 'number' },
@@ -1788,6 +1910,45 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         mode: { type: 'string', enum: ['fit', 'fill'] },
       },
       required: ['x', 'y', 'width', 'height'],
+    },
+  },
+  {
+    name: 'recolor_palette',
+    description:
+      'Перекрасить макет (фигуры, градиенты, фон и текст) в заданную hex-палитру с автоматической защитой контраста WCAG для текста.',
+    parameters: {
+      type: 'object',
+      properties: {
+        palette: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Массив hex-цветов референса (#rrggbb), 2–6 цветов',
+        },
+        layerIds: LAYER_IDS_SCHEMA,
+        includeBackground: {
+          type: 'boolean',
+          description: 'Обновлять ли цвет фона артборда (по умолчанию true для всей сцены)',
+        },
+        preserveContrast: {
+          type: 'boolean',
+          description: 'Гарантировать читаемый контраст текста WCAG >= 4.5 (по умолчанию true)',
+        },
+      },
+      required: ['palette'],
+    },
+  },
+  {
+    name: 'preflight_check',
+    description:
+      'Проверить макет (preflight): контраст текста WCAG, мелкий кегль для 300 dpi и слои, выходящие за края артборда.',
+    parameters: {
+      type: 'object',
+      properties: {
+        artboardId: {
+          type: 'string',
+          description: 'Опциональный ID артборда для проверки',
+        },
+      },
     },
   },
 ];

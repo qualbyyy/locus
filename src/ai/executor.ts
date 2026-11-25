@@ -67,6 +67,8 @@ export const SYSTEM_PROMPT = [
   '- combine_compound / split_compound / outline_stroke — собери контур с дырками, разбей слово,',
   '  преврати обводку в заливку перед булевыми операциями.',
   '- set_artboard — размер, DPI и цвет фона холста.',
+  '- recolor_palette — перекраска макета в гармоничную палитру с сохранением контраста текста.',
+  '- preflight_check — проверка контраста текста, кегля (для 300 dpi) и границ артборда.',
   '- Не меняй метаданные файла (название проекта/документа); менять имя документа запрещено.',
 ].join('\n');
 
@@ -130,10 +132,21 @@ export async function runAiCommand(options: AiRunOptions): Promise<AiRunResult> 
     if (issue) throw new Error(issue);
   }
 
+  const paletteHints = (attachments ?? [])
+    .filter((att) => att.extractedPalette && att.extractedPalette.length > 0)
+    .map(
+      (att) =>
+        `Палитра референса (${att.name}): ${att.extractedPalette!.join(', ')}`
+    );
+  const userText =
+    paletteHints.length > 0
+      ? `${trimmedPrompt}\n\n${paletteHints.join('\n')}`
+      : trimmedPrompt;
+
   const messages: AiConversationMessage[] = [
     {
       role: 'user',
-      text: trimmedPrompt,
+      text: userText,
       ...(attachments && attachments.length > 0 ? { images: attachments } : {}),
     },
   ];

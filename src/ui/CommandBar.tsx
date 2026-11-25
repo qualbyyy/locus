@@ -9,17 +9,27 @@ import {
   type ReactElement,
 } from 'react';
 import {
+  AlertCircle,
+  AlertTriangle,
   ArrowUp,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Loader2,
+  Palette,
   Paperclip,
   Settings2,
+  ShieldCheck,
   Sparkles,
   Square,
   Undo2,
   X,
 } from 'lucide-react';
+import {
+  extractPaletteFromDataUrl,
+  recolorSceneWithPalette,
+} from '../ai/palette';
+import { runPreflightCheck, type PreflightReport } from '../ai/preflight';
 import { getAiModelLabel, getAiProviderIssue } from '../ai/providers';
 import { useAiTaskStore } from '../ai/taskStore';
 import { bytesToDataUrl, inferImageMimeType } from '../core/assets';
@@ -30,12 +40,14 @@ import { useRotatingStatusWord } from './useRotatingStatusWord';
 
 export interface CommandBarProps {
   isOpen: boolean;
+  preflightTrigger?: number;
   onClose: () => void;
   onOpenSettings?: (tab?: 'ai') => void;
 }
 
 export function CommandBar({
   isOpen,
+  preflightTrigger = 0,
   onClose,
   onOpenSettings,
 }: CommandBarProps): ReactElement | null {
@@ -50,6 +62,9 @@ export function CommandBar({
   const canUndo = useAiTaskStore((s) => s.canUndo);
   const attachments = useAiTaskStore((s) => s.attachments);
   const addAttachment = useAiTaskStore((s) => s.addAttachment);
+  const updateAttachmentPalette = useAiTaskStore(
+    (s) => s.updateAttachmentPalette
+  );
   const removeAttachment = useAiTaskStore((s) => s.removeAttachment);
   const start = useAiTaskStore((s) => s.start);
   const stop = useAiTaskStore((s) => s.stop);
@@ -61,6 +76,10 @@ export function CommandBar({
   const [attachError, setAttachError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [logExpanded, setLogExpanded] = useState(false);
+  const [preflightReport, setPreflightReport] = useState<PreflightReport | null>(
+    null
+  );
+  const [recolorNotice, setRecolorNotice] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const isRunning = status === 'running';
@@ -130,17 +149,61 @@ export function CommandBar({
         setAttachError('Не удалось прочитать изображение');
         return false;
       }
+      const id = `att_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
       addAttachment({
-        id: `att_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+        id,
         name,
         mimeType,
         dataUrl,
         dataBase64,
       });
+      void extractPaletteFromDataUrl(dataUrl, 5).then((colors) => {
+        if (colors.length > 0) {
+          updateAttachmentPalette(
+            id,
+            colors.map((c) => c.hex)
+          );
+        }
+      });
       return true;
     },
-    [addAttachment]
+    [addAttachment, updateAttachmentPalette]
   );
+
+  const handleRunPreflight = useCallback(() => {
+    const st = useEditorStore.getState();
+    setPreflightReport(runPreflightCheck(st.scene, st.activeArtboardId));
+  }, []);
+
+  useEffect(() => {
+    if (isOpen && preflightTrigger > 0) {
+      handleRunPreflight();
+    }
+  }, [handleRunPreflight, isOpen, preflightTrigger]);
+
+  const activeReferencePalette = useMemo(
+    () =>
+      attachments.find((a) => a.extractedPalette && a.extractedPalette.length > 0)
+        ?.extractedPalette ?? null,
+    [attachments]
+  );
+
+  const handleRecolorFromReference = useCallback(() => {
+    if (!activeReferencePalette || activeReferencePalette.length === 0) return;
+    try {
+      const selected = useEditorStore.getState().selectedIds;
+      const res = recolorSceneWithPalette(activeReferencePalette, {
+        ...(selected.length > 0 ? { layerIds: selected } : {}),
+      });
+      setRecolorNotice(
+        `Перекрашено слоёв: ${res.updatedLayers}${res.updatedBackground && res.backgroundColor ? `, фон ${res.backgroundColor}` : ''}. Можно отменить (Ctrl+Z).`
+      );
+    } catch (err) {
+      setRecolorNotice(
+        err instanceof Error ? err.message : 'Не удалось применить палитру'
+      );
+    }
+  }, [activeReferencePalette]);
 
   const attachBrowserFiles = useCallback(
     async (files: File[]) => {
@@ -267,6 +330,16 @@ export function CommandBar({
             </span>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={isRunning}
+              onClick={handleRunPreflight}
+              title="Проверить контраст, кегль и границы артборда"
+              className="flex h-6 shrink-0 items-center gap-1 rounded border border-paper-border bg-paper-bg px-2 text-[11px] text-paper-ink hover:bg-paper-hover disabled:opacity-40"
+            >
+              <ShieldCheck className="h-3.5 w-3.5 text-paper-accent" strokeWidth={1.75} />
+              <span>Проверить макет</span>
+            </button>
             <span className="shrink-0 text-[11px] text-paper-muted">
               Выделено: {selectedCount}
             </span>
@@ -352,8 +425,101 @@ export function CommandBar({
                   </span>
                 </div>
               )}
+              {activeReferencePalette && activeReferencePalette.length > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-paper-border bg-paper-bg px-2.5 py-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] text-paper-muted">Палитра:</span>
+                    {activeReferencePalette.map((hex) => (
+                      <span
+                        key={hex}
+                        title={hex}
+                        style={{ backgroundColor: hex }}
+                        className="h-4 w-4 rounded-sm border border-paper-border"
+                      />
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={isRunning}
+                    onClick={handleRecolorFromReference}
+                    className="flex h-6 items-center gap-1 rounded border border-paper-accent/40 bg-paper-accent/10 px-2 text-[11px] font-medium text-paper-ink hover:bg-paper-accent/20 disabled:opacity-40"
+                  >
+                    <Palette className="h-3 w-3 text-paper-accent" strokeWidth={1.75} />
+                    <span>Перекрасить по референсу</span>
+                  </button>
+                </div>
+              )}
+              {recolorNotice && (
+                <div className="text-[11px] text-paper-ink">{recolorNotice}</div>
+              )}
               {attachError && (
                 <div className="text-[11px] text-paper-danger">{attachError}</div>
+              )}
+            </div>
+          )}
+
+          {preflightReport && (
+            <div className="flex flex-col gap-1.5 rounded border border-paper-border bg-paper-bg px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-1.5 text-[12px] font-medium text-paper-ink">
+                  {preflightReport.issues.length === 0 ? (
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600" strokeWidth={2} />
+                  ) : (
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0 text-paper-accent" strokeWidth={1.75} />
+                  )}
+                  <span className="truncate">{preflightReport.summary}</span>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {preflightReport.issues.length > 0 && !providerIssue && !isRunning && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const list = preflightReport.issues
+                          .slice(0, 6)
+                          .map((it) => `- ${it.message} (${it.suggestion})`)
+                          .join('\n');
+                        void start(`Исправь замечания проверки макета:\n${list}`);
+                      }}
+                      className="h-6 rounded border border-paper-accent/40 bg-paper-accent/10 px-2 text-[11px] font-medium text-paper-ink hover:bg-paper-accent/20"
+                    >
+                      Исправить с ИИ
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setPreflightReport(null)}
+                    title="Скрыть отчёт"
+                    className="flex h-5 w-5 items-center justify-center rounded text-paper-muted hover:bg-paper-hover hover:text-paper-ink"
+                  >
+                    <X className="h-3 w-3" strokeWidth={1.75} />
+                  </button>
+                </div>
+              </div>
+              {preflightReport.issues.length > 0 && (
+                <div className="flex max-h-36 flex-col gap-1 overflow-y-auto pt-1">
+                  {preflightReport.issues.map((issue) => (
+                    <button
+                      key={issue.id}
+                      type="button"
+                      onClick={() => {
+                        if (issue.layerId) {
+                          useEditorStore.getState().setSelectedIds([issue.layerId]);
+                          useEditorStore.getState().setSelectedNode(null);
+                        }
+                      }}
+                      className="flex items-start gap-1.5 rounded px-1.5 py-1 text-left text-[11px] hover:bg-paper-hover"
+                    >
+                      {issue.severity === 'error' ? (
+                        <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-paper-danger" strokeWidth={2} />
+                      ) : (
+                        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" strokeWidth={2} />
+                      )}
+                      <span className="min-w-0 flex-1 text-paper-ink">
+                        {issue.message}
+                      </span>
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
           )}

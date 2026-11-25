@@ -25,6 +25,7 @@ interface AiTaskState {
   canUndo: boolean;
   attachments: AiImageAttachment[];
   addAttachment: (attachment: AiImageAttachment) => void;
+  updateAttachmentPalette: (id: string, extractedPalette: string[]) => void;
   removeAttachment: (id: string) => void;
   clearAttachments: () => void;
   start: (rawPrompt: string) => Promise<void>;
@@ -57,6 +58,13 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
         ? state
         : { attachments: [...state.attachments, attachment] }
     ),
+
+  updateAttachmentPalette: (id, extractedPalette) =>
+    set((state) => ({
+      attachments: state.attachments.map((item) =>
+        item.id === id ? { ...item, extractedPalette } : item
+      ),
+    })),
 
   removeAttachment: (id) =>
     set((state) => ({

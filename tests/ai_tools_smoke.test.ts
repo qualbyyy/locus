@@ -29,7 +29,7 @@ describe('AI tools smoke scenario', () => {
     executed.clear();
   });
 
-  it('executes all 29 tools in one realistic composition', () => {
+  it('executes all 31 tools in one realistic composition', () => {
     run('report_plan', {
       steps: 10,
       summary: 'Морда кота: голова, уши, глаза, нос, усы и подпись',
@@ -237,6 +237,11 @@ describe('AI tools smoke scenario', () => {
 
     run('text_case', { layerIds: [id(label)], mode: 'title' });
     run('set_artboard', { background: '#fdf8ec', width: 1200, height: 1200 });
+    run('recolor_palette', {
+      palette: ['#fdf8ec', '#1e293b', '#da7756'],
+      includeBackground: true,
+    });
+    run('preflight_check', {});
     run('select_layers', { mode: 'all' });
     run('get_layer_geometry', { layerIds: [id(spark)] });
 

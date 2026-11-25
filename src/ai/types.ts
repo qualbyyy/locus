@@ -4,6 +4,7 @@ export interface AiImageAttachment {
   mimeType: string;
   dataUrl: string;
   dataBase64: string;
+  extractedPalette?: string[];
 }
 
 export interface AiToolCall {
