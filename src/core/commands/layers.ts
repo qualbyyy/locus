@@ -59,6 +59,27 @@ export function addLayer(layer: Layer, opts?: { select?: boolean }): Layer {
   return prepared;
 }
 
+export function addLayers(layers: Layer[], opts?: { select?: boolean }): Layer[] {
+  if (layers.length === 0) {
+    return [];
+  }
+  const prepared = layers.map((layer) =>
+    layer.type === 'path' ? normalizePathLayer(layer) : layer
+  );
+  commitScene((scene) => ({
+    ...scene,
+    layers: [...scene.layers, ...prepared],
+  }));
+
+  if (opts?.select !== false) {
+    useEditorStore.setState({
+      selectedIds: prepared.map((layer) => layer.id),
+      selectedNode: null,
+    });
+  }
+  return prepared;
+}
+
 export function createShapeLayer(params: {
   preset?: SmartShapePreset;
   x: number;

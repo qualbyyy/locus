@@ -27,6 +27,7 @@ export interface MenuBarActions {
   onOpenDocument: () => void;
   onSaveDocument: () => void;
   onImportImage: () => void;
+  onImportSvg: () => void;
   onQuickExportPng: () => void;
   onOpenRasterExport: (format?: 'png' | 'jpg') => void;
   onExportDocument: (format: ExportKind) => void;
@@ -225,6 +226,7 @@ export function MenuBar({
           { type: 'sep' },
           { label: 'Сохранить', shortcut: 'Ctrl+S', onClick: actions.onSaveDocument },
           { label: 'Импорт изображения…', onClick: actions.onImportImage },
+          { label: 'Импорт SVG (вектор)…', onClick: actions.onImportSvg },
           { type: 'sep' },
           {
             label: 'Экспорт',

@@ -23,6 +23,7 @@ import {
 } from './core/contextMenu';
 import {
   addLayer,
+  addLayers,
   alignLayers,
   booleanLayers,
   combineCompoundPathLayers,
@@ -70,6 +71,7 @@ import {
   type ExportKind,
 } from './core/documentFile';
 import { openLocusFromBytes } from './export/projectFile';
+import { parseSvgToLayers } from './export/importSvg';
 import { matchShortcut } from './core/shortcuts';
 import { useCanRedo, useCanUndo, useEditorStore } from './core/store';
 import type { ImageLayer, Scene } from './core/types';
@@ -475,7 +477,7 @@ export function App() {
     const file = await pickOpenFile({
       title: 'Вставить изображение',
       filters: [
-        { name: 'Изображения', extensions: ['png', 'jpg', 'jpeg', 'webp', 'svg'] },
+        { name: 'Изображения', extensions: ['png', 'jpg', 'jpeg', 'webp'] },
       ],
     });
     if (!file) return;
@@ -501,6 +503,70 @@ export function App() {
       );
     }
   }, [setActiveTool, showNotice]);
+
+  const insertSvgFiles = useCallback(
+    async (entries: Array<{ name: string; bytes: Uint8Array }>) => {
+      if (entries.length === 0) return;
+      const currentScene = useEditorStore.getState().scene;
+      const decoder = new TextDecoder('utf-8');
+      const collected: ReturnType<typeof addLayers> = [];
+      const allWarnings = new Set<string>();
+
+      for (const entry of entries) {
+        const svgText = decoder.decode(entry.bytes);
+        const result = await parseSvgToLayers(svgText, {
+          fileName: entry.name,
+          targetArtboard: {
+            width: currentScene.width,
+            height: currentScene.height,
+          },
+        });
+        collected.push(...result.layers);
+        for (const w of result.warnings) {
+          allWarnings.add(w);
+        }
+      }
+
+      if (collected.length === 0) {
+        showNotice(
+          entries.length === 1
+            ? `В SVG «${entries[0].name}» не найдено векторных объектов`
+            : 'В выбранных SVG не найдено векторных объектов'
+        );
+        return;
+      }
+
+      setIsStartModalOpen(false);
+      addLayers(collected);
+      setActiveTool('select');
+
+      const firstWarning = allWarnings.values().next().value;
+      const suffix = firstWarning ? ` (${firstWarning})` : '';
+      showNotice(
+        entries.length === 1
+          ? `Импортировано из «${entries[0].name}»: ${collected.length} сл.${suffix}`
+          : `Импортировано слоёв из SVG: ${collected.length}${suffix}`
+      );
+    },
+    [setActiveTool, showNotice]
+  );
+
+  const handleImportSvg = useCallback(async () => {
+    const file = await pickOpenFile({
+      title: 'Импорт SVG в векторные слои',
+      filters: [{ name: 'SVG Vector', extensions: ['svg'] }],
+    });
+    if (!file) return;
+    try {
+      await insertSvgFiles([file]);
+    } catch (err) {
+      showNotice(
+        err instanceof Error
+          ? err.message
+          : `Не удалось импортировать SVG «${file.name}»`
+      );
+    }
+  }, [insertSvgFiles, showNotice]);
 
   const handleReplaceImage = useCallback(
     async (layerId: string) => {
@@ -609,19 +675,31 @@ export function App() {
             );
             return;
           }
-          const imagePaths = paths.filter((p) =>
-            /\.(png|jpe?g|webp|svg)$/i.test(p)
+          const svgPaths = paths.filter((p) => /\.svg$/i.test(p));
+          const rasterPaths = paths.filter((p) =>
+            /\.(png|jpe?g|webp)$/i.test(p)
           );
-          if (imagePaths.length === 0) return;
+          if (svgPaths.length === 0 && rasterPaths.length === 0) return;
 
           try {
-            const entries = await Promise.all(
-              imagePaths.map(async (p) => ({
-                name: p.split(/[\\/]/).pop() || 'image.png',
-                bytes: await readFileBytes(p),
-              }))
-            );
-            await insertDroppedImages(entries);
+            if (svgPaths.length > 0) {
+              const svgEntries = await Promise.all(
+                svgPaths.map(async (p) => ({
+                  name: p.split(/[\\/]/).pop() || 'vector.svg',
+                  bytes: await readFileBytes(p),
+                }))
+              );
+              await insertSvgFiles(svgEntries);
+            }
+            if (rasterPaths.length > 0) {
+              const entries = await Promise.all(
+                rasterPaths.map(async (p) => ({
+                  name: p.split(/[\\/]/).pop() || 'image.png',
+                  bytes: await readFileBytes(p),
+                }))
+              );
+              await insertDroppedImages(entries);
+            }
           } catch (err) {
             showNotice(
               err instanceof Error
@@ -646,7 +724,7 @@ export function App() {
       disposed = true;
       unlisten?.();
     };
-  }, [handleOpenLocusPath, insertDroppedImages, showNotice]);
+  }, [handleOpenLocusPath, insertDroppedImages, insertSvgFiles, showNotice]);
 
   useEffect(() => {
     const preventWebviewZoom = (event: WheelEvent) => {
@@ -1162,6 +1240,7 @@ export function App() {
       onOpenDocument: requestOpenProject,
       onSaveDocument: () => void handleSaveProject(),
       onImportImage: () => void handlePlaceImage(),
+      onImportSvg: () => void handleImportSvg(),
       onQuickExportPng: handleQuickExportPng,
       onOpenRasterExport: (fmt = 'png') => {
         setRasterExportFormat(fmt);
@@ -1435,20 +1514,32 @@ export function App() {
           })();
           return;
         }
-        const imageFiles = files.filter((f) =>
-          /\.(png|jpe?g|webp|svg)$/i.test(f.name)
+        const svgFiles = files.filter((f) => /\.svg$/i.test(f.name));
+        const rasterFiles = files.filter((f) =>
+          /\.(png|jpe?g|webp)$/i.test(f.name)
         );
-        if (imageFiles.length === 0) return;
+        if (svgFiles.length === 0 && rasterFiles.length === 0) return;
 
         void (async () => {
           try {
-            const entries = await Promise.all(
-              imageFiles.map(async (file) => ({
-                name: file.name,
-                bytes: new Uint8Array(await file.arrayBuffer()),
-              }))
-            );
-            await insertDroppedImages(entries);
+            if (svgFiles.length > 0) {
+              const svgEntries = await Promise.all(
+                svgFiles.map(async (file) => ({
+                  name: file.name,
+                  bytes: new Uint8Array(await file.arrayBuffer()),
+                }))
+              );
+              await insertSvgFiles(svgEntries);
+            }
+            if (rasterFiles.length > 0) {
+              const entries = await Promise.all(
+                rasterFiles.map(async (file) => ({
+                  name: file.name,
+                  bytes: new Uint8Array(await file.arrayBuffer()),
+                }))
+              );
+              await insertDroppedImages(entries);
+            }
           } catch (err) {
             showNotice(
               err instanceof Error

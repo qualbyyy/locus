@@ -4,9 +4,9 @@
 
 Locus — локальный десктопный векторный редактор (Tauri v2 + React 19 + Paper.js) со светлой «бумажной» эстетикой, автоматизацией рутины и ИИ-оператором через tool calling (BYOK). Геометрия всегда остаётся редактируемым вектором, серия правок ИИ откатывается одним `Ctrl+Z`.
 
-**В MVP:** 1 артборд на документ; 6 встроенных статических шрифтов (400/700, кириллица); плоские заливки/обводки + `opacity`; Smart Shape (`blob`, `ellipse`, `rect`, `polygon`, `star`); инструменты `V`/`A`/`P`/`B`/`T`/`I`/`E`; булевы операции, Compound Path, Clipping Mask; экспорт `.locus` / `.ai` / `.svg` / `.psd`; ИИ через Gemini, OpenAI-compatible, Anthropic, Ollama.
+**В MVP:** 1 артборд на документ; 6 встроенных статических шрифтов (400/700, кириллица); плоские заливки/обводки + `opacity`; Smart Shape (`blob`, `ellipse`, `rect`, `polygon`, `star`); инструменты `V`/`A`/`P`/`B`/`T`/`I`/`E`; булевы операции, Compound Path, Clipping Mask; импорт `.svg` в редактируемые слои; экспорт `.locus` / `.ai` / `.svg` / `.psd` и PNG/JPG; ИИ через Gemini, OpenAI-compatible, Anthropic, Ollama.
 
-**Post-MVP:** несколько артбордов, системные шрифты, градиенты и режимы наложения, импорт SVG/AI в редактируемые слои, обучение этапы 2–3 (подсветка, песочница).
+**Post-MVP:** несколько артбордов, системные шрифты, градиенты и режимы наложения, импорт AI в редактируемые слои, обучение этапы 2–3 (подсветка, песочница).
 
 ## 2. Визуальный стиль и интерфейс (UI/UX)
 
@@ -123,7 +123,7 @@ Locus — локальный десктопный векторный редак�
 5. **Платформа и CORS:** весь HTTP — через `fetch` из `@tauri-apps/plugin-http`; файлы, диалоги, `settings.json`, drag&drop — в `src/platform/io.ts` с `isTauri()` и браузерным/тестовым фолбэком (`npm test` и `npm run dev` в браузере не падают).
 6. **Paper.js под React 19 StrictMode:** локальный `new paper.PaperScope()` в `PaperCanvas`, cleanup `scope.project.remove()`. Три внутренних слоя: `artboardLayer`, `sceneLayer`, `overlayLayer` (overlay масштабируется на `1/zoom`, не участвует в `hitTest` и экспорте). У элементов `applyMatrix = false`, `pivot = (0,0)`, матрица из `getLayerMatrix()`.
 7. **Clipping Mask (модель Illustrator):** `targetLayer.clipMaskId = mask.id`, `mask.isClipMask = true`; заливка/обводка маски не рисуется. Рендер — clipped-группа (`clipped` в Paper.js, `<clipPath>` в SVG, `W n`/`W* n` в PDF, clipping-группа в PSD). Циклы и самомаскирование запрещены; `releaseClipMask` возвращает контур в обычное состояние; удаление маски очищает зависимые `clipMaskId`.
-8. **Drag & Drop:** нативный `onDragDropEvent` (HTML5 `onDrop` перехвачен); PNG/JPEG/WebP/SVG → `ImageLayer`, `.locus` → открыть проект.
+8. **Drag & Drop:** нативный `onDragDropEvent` (HTML5 `onDrop` перехвачен); PNG/JPEG/WebP → `ImageLayer`, `.svg` → редактируемые векторные/текстовые/масочные слои, `.locus` → открыть проект.
 9. **Однонаправленная синхронизация:** `src/engine/sync.ts` строит `sceneLayer` из `Scene` + `AssetRegistry` без вызовов экшенов; `item.data.layerId` — mapping для `hitTest`.
 10. **Инварианты Paper.js/загрузки (накопленные):** headless-булевы операции — `new scope.Project(undefined as unknown as HTMLCanvasElement)`, для `evenodd` — `compound.reorient(false, true)`. В `loadScene` не очищать `AssetRegistry` до наполнения из `.locus`; очистка только в `clearAssets()` при `resetDocument()`/перед новой загрузкой.
 
@@ -147,7 +147,7 @@ src/
 │   ├── types.ts context.ts registry.ts executor.ts statusWords.ts taskStore.ts
 │   └── providers/                      # gemini, openai, anthropic, ollama, index
 ├── tutorial/                           # content, targets, progress, search, store
-├── export/                             # projectFile, toSvg, toAi, rasterize, toPsd
+├── export/                             # projectFile, importSvg, toSvg, toAi, rasterize, toPsd
 └── ui/                                 # TopBar, Toolbar, LayersPanel, Inspector(+inspector/*),
                                         # StartModal, CommandBar, SettingsModal, MenuBar,
                                         # controls.tsx, ContextMenu, UnsavedChangesModal,
@@ -158,7 +158,7 @@ src-tauri/
 └── src/main.rs, src/lib.rs             # регистрация плагинов http/fs/dialog
 scripts/install-linux-launcher.mjs      # per-user launcher: binary + icon + .desktop
 tests/                                  # math, commands, geometry, stage3, stage3_5, stage3_6,
-                                        # export, ai, ai_tools_smoke, tutorial_*, linuxLauncher
+                                        # export, importSvg, ai, ai_tools_smoke, tutorial_*, linuxLauncher
 public/fonts/*.ttf                      # 12 файлов
 ```
 
@@ -191,6 +191,7 @@ interface AIConfig { provider; geminiApiKey; geminiModel; openaiBaseUrl; openaiA
 ## 8. Форматы и экспорт
 
 - **`.locus`** (`src/export/projectFile.ts`): ZIP = `scene.json` + `assets/<assetId>.<ext>` только используемых картинок. Загрузка: `version === 1`, полная очистка старого реестра, восстановление Blob/ObjectURL/размеров, `temporal.clear()`.
+- **Импорт `.svg`** (`src/export/importSvg.ts`): инлайнинг `<style>`, нормализация цветов (`currentColor`, именованные, `hsl`), headless Paper.js (`applyMatrix: false`), конвертация контуров, `CompoundPath`, `<clipPath>` (маска над маскируемыми слоями), `<text>`/`<tspan>` и встроенных `data:image/*` в редактируемые слои через `addLayers` (1 шаг Undo); доступно из меню «Файл → Импорт SVG (вектор)…» и по Drag & Drop.
 - **`.svg`** (`toSvg.ts`): строится напрямую из `Scene` + `AssetRegistry` (не `paper.exportSVG`), `<svg viewBox="0 0 W H">`, фон, `<defs><clipPath>` для масок, `<g>` на слой с `opacity`/`clip-path`, path `M/C/L/Z`, text `<tspan>` по `baselineY`, image через data URL.
 - **`.ai`** (`toAi.ts`): PDF через `pdf-lib` + fontkit; `ptPerPx = 72/dpi`; `pdfX = w_x·ptPerPx`, `pdfY = (H − w_y)·ptPerPx`; opacity через `PDFExtGState` (`ca`/`CA`); кривые — `moveTo`/`appendBezierCurve`/`closePath`, заливка `f`/`f*`, обводка `S`, комбинированно `B`/`B*`; маски — `pushGraphicsState` + `W n`/`W* n` + `pop`; текст встраивается `.ttf` и остаётся редактируемым; WebP перекодируется в PNG.
 - **`.psd`** (`toPsd.ts` + `rasterize.ts`): offscreen-рендер каждого слоя и полного композита (`Psd.canvas`), дети с `name/hidden/opacity/canvas/left/top`, текстовая структура для Photoshop; запись `{ generateThumbnail: true, invalidateTextLayers: true }`.
@@ -219,7 +220,7 @@ interface AIConfig { provider; geminiApiKey; geminiModel; openaiBaseUrl; openaiA
 8. **Этап 6** — выполнено: собственные меню/контролы, «О приложении», фон рабочей области, защита несохранённого, реестр ИИ расширен до 29. Проверено tests (mirror/repeat/place/round corners, smoke 29), 93/93; ручная проверка UI — за пользователем.
 9. **Этап 7** — выполнено: обучение, этап 1 «Академия» (12 глав, 25 уроков, 75 шагов, поиск, прогресс, входы, `F1`; 28 тестов). Этапы 2 (подсветка через `data-tour`) и 3 (песочница) не начаты.
 
-Текущий прогон: `npx tsc --noEmit`, `npm test` (128/128, 23 файла), `npm run build` — зелёные. Git: ветка `master`, последние коммиты `010ef60` и `0b4c912`; в рабочей копии — интеграция Linux-лаунчера (`scripts/install-linux-launcher.mjs`, `tests/linuxLauncher.test.ts`, `tests/node-builtins.d.ts`, `tauri.conf.json`) и доработки ИИ-панели/запрета метаданных; remote не настроен, push не выполнялся.
+Текущий прогон: `npx tsc --noEmit`, `npm test` (139/139, 24 файла, Vitest `vmThreads`), `npm run build` — зелёные. Git: ветка `master`, последние коммиты `38b61b2` (Linux-лаунчер), `d0c45e9` (ИИ-панель и запрет метаданных), `07d86e7` (документация), `7cc2806` (`.gitignore` и `vmThreads`); remote не настроен, push не выполнялся.
 
 ## 11. Handoff и инварианты среды
 
