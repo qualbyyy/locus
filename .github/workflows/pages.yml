@@ -31,15 +31,10 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      - name: Package site artifact
-        run: tar -cf "${{ runner.temp }}/artifact.tar" -C site .
-
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-pages-artifact@v3
         with:
-          name: github-pages
-          path: ${{ runner.temp }}/artifact.tar
-          retention-days: 1
+          path: site
 
       - name: Deploy to GitHub Pages
         id: deployment
