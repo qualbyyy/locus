@@ -19,7 +19,10 @@ import {
   sanitizeSettings,
   useSettingsStore,
 } from '../src/core/settings';
-import { DEFAULT_TUTORIAL_PROGRESS } from '../src/tutorial/progress';
+import {
+  DEFAULT_TUTORIAL_PROGRESS,
+  dismissTutorialWelcome,
+} from '../src/tutorial/progress';
 
 function resetSettingsStore() {
   useSettingsStore.setState({
@@ -83,5 +86,35 @@ describe('settings load race', () => {
     const tutorial = useSettingsStore.getState().settings.tutorial;
     expect(tutorial.completedLessonIds).toEqual(['local.write']);
     expect(tutorial.lastLessonId).toBe('start.interface');
+  });
+
+  it('preserves welcomeDismissed written before loadSettings finishes', async () => {
+    let resolveRead: (value: string | null) => void = () => {};
+    ioMocks.read.mockImplementation(
+      () =>
+        new Promise<string | null>((resolve) => {
+          resolveRead = resolve;
+        })
+    );
+
+    const loading = useSettingsStore.getState().loadSettings();
+    const cur = useSettingsStore.getState().settings.tutorial;
+    useSettingsStore.getState().updateSettings({
+      tutorial: dismissTutorialWelcome(cur),
+    });
+
+    resolveRead(
+      JSON.stringify({
+        ...DEFAULT_SETTINGS,
+        tutorial: {
+          ...DEFAULT_TUTORIAL_PROGRESS,
+          welcomeDismissed: false,
+        },
+      })
+    );
+    await loading;
+
+    expect(useSettingsStore.getState().settings.tutorial.welcomeDismissed).toBe(true);
+    expect(ioMocks.write).toHaveBeenCalled();
   });
 });

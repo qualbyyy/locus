@@ -15,6 +15,8 @@ import {
   getEffectsPadding,
   hasRasterEffects,
 } from '../src/engine/effects';
+import { applyBoxBlurToCanvas } from '../src/export/rasterize';
+import { resolveEffectTargetPatch } from '../src/ui/inspector/EffectControls';
 
 const rectSubPaths: SubPath[] = [
   {
@@ -163,5 +165,44 @@ describe('effects engine and commands', () => {
     const count = selectSimilarLayers('fill');
     expect(count).toBe(2);
     expect(useEditorStore.getState().selectedIds).toEqual([a.id, c.id]);
+  });
+
+  it('resolves initial effect patch respecting existing layer effects and warp style', () => {
+    expect(resolveEffectTargetPatch({ kind: 'blur' })).toEqual({ blur: 8 });
+    expect(resolveEffectTargetPatch({ kind: 'blur' }, { blur: 24 })).toEqual({ blur: 24 });
+    expect(
+      resolveEffectTargetPatch({ kind: 'warp', initialWarpStyle: 'wave' })
+    ).toEqual({
+      warp: { style: 'wave', bend: 45, distortH: 0, distortV: 0 },
+    });
+  });
+
+  it('software box blur spreads opaque center pixel to neighbors without ctx.filter', () => {
+    const w = 15;
+    const h = 15;
+    const data = new Uint8ClampedArray(w * h * 4);
+    const center = (7 * w + 7) * 4;
+    data[center] = 220;
+    data[center + 1] = 120;
+    data[center + 2] = 80;
+    data[center + 3] = 255;
+
+    const fakeCanvas = {
+      width: w,
+      height: h,
+      getContext: () => ({
+        getImageData: () => ({ width: w, height: h, data }),
+        putImageData: (img: { data: Uint8ClampedArray }) => {
+          if (img.data !== data) data.set(img.data);
+        },
+      }),
+    } as unknown as HTMLCanvasElement;
+
+    applyBoxBlurToCanvas(fakeCanvas, 3);
+
+    const neighbor = (7 * w + 9) * 4;
+    expect(data[center + 3]).toBeLessThan(255);
+    expect(data[neighbor + 3]).toBeGreaterThan(0);
+    expect(data[neighbor]).toBeGreaterThan(150);
   });
 });

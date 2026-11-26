@@ -114,7 +114,8 @@ import {
 import { ContextMenu } from './ui/ContextMenu';
 import { AiTaskIndicator } from './ui/AiTaskIndicator';
 import { CommandBar } from './ui/CommandBar';
-import type { EffectTarget } from './ui/inspector/InspectorEffects';
+import { isVectorEffectKind, type EffectTarget } from './ui/inspector/EffectControls';
+import { EffectModal } from './ui/inspector/EffectModal';
 import { Inspector } from './ui/Inspector';
 import { LayersPanel } from './ui/LayersPanel';
 import type { MenuBarActions, MenuBarState } from './ui/MenuBar';
@@ -203,6 +204,7 @@ export function App() {
   const [rasterExportFormat, setRasterExportFormat] = useState<'png' | 'jpg'>('png');
   const [rasterExportScope, setRasterExportScope] = useState<'artboard' | 'selection'>('artboard');
   const [focusedEffect, setFocusedEffect] = useState<EffectTarget | null>(null);
+  const [effectModalTarget, setEffectModalTarget] = useState<EffectTarget | null>(null);
   const [showToolbar, setShowToolbar] = useState(true);
   const [showLayers, setShowLayers] = useState(true);
   const [showInspector, setShowInspector] = useState(true);
@@ -234,6 +236,13 @@ export function App() {
     setIsStartModalOpen(false);
     setIsSettingsModalOpen(false);
     setSettingsInitialTab(null);
+    setShowTutorialHint(false);
+    const st = useSettingsStore.getState();
+    if (!st.settings.tutorial.welcomeDismissed) {
+      st.updateSettings({
+        tutorial: dismissTutorialWelcome(st.settings.tutorial),
+      });
+    }
     useTutorialStore.getState().openAcademy();
   }, []);
 
@@ -1371,12 +1380,18 @@ export function App() {
     background: string;
   }) => {
     resetDocument(opts);
-    const settingsState = useSettingsStore.getState();
-    if (settingsState.loaded && !settingsState.settings.tutorial.welcomeDismissed) {
-      settingsState.updateSettings({
-        tutorial: dismissTutorialWelcome(settingsState.settings.tutorial),
+    const showWelcomeHintOnce = () => {
+      const st = useSettingsStore.getState();
+      if (st.settings.tutorial.welcomeDismissed) return;
+      st.updateSettings({
+        tutorial: dismissTutorialWelcome(st.settings.tutorial),
       });
       setShowTutorialHint(true);
+    };
+    if (useSettingsStore.getState().loaded) {
+      showWelcomeHintOnce();
+    } else {
+      void useSettingsStore.getState().loadSettings().then(showWelcomeHintOnce);
     }
     setIsStartModalOpen(false);
     requestAnimationFrame(() => {
@@ -1427,13 +1442,25 @@ export function App() {
 
   const handleOpenEffect = useCallback(
     (target: EffectTarget) => {
-      const ids = useEditorStore.getState().selectedIds;
-      if (ids.length === 0) {
+      const st = useEditorStore.getState();
+      if (st.selectedIds.length === 0) {
         showNotice('Сначала выберите слой для применения эффекта');
         return;
       }
-      setShowInspector(true);
-      setFocusedEffect(target);
+      const idSet = new Set(st.selectedIds);
+      const selected = flattenLayers(st.scene.layers).filter((l) => idSet.has(l.id));
+      if (selected.length === 0) {
+        showNotice('Сначала выберите слой для применения эффекта');
+        return;
+      }
+      if (
+        isVectorEffectKind(target.kind) &&
+        !selected.some((l) => l.type === 'path' || l.type === 'text')
+      ) {
+        showNotice('Векторные эффекты доступны только для фигур и текста');
+        return;
+      }
+      setEffectModalTarget(target);
     },
     [showNotice]
   );
@@ -1668,9 +1695,14 @@ export function App() {
     settings.snapToArtboard ||
     settings.snapToGuides;
 
-  const menuState: MenuBarState = useMemo(() => {
+  const selectedLayers = useMemo(() => {
+    if (selectedIds.length === 0) return [];
     const idSet = new Set(selectedIds);
-    const selected = flattenLayers(scene.layers).filter((l) => idSet.has(l.id));
+    return flattenLayers(scene.layers).filter((l) => idSet.has(l.id));
+  }, [scene.layers, selectedIds]);
+
+  const menuState: MenuBarState = useMemo(() => {
+    const selected = selectedLayers;
     const hasPairText = selected.some((l) => l.type === 'text' && !l.locked);
     const hasPairPath = selected.some((l) => l.type === 'path' && !l.locked);
     const selectedTexts = selected.filter(
@@ -1712,8 +1744,7 @@ export function App() {
     canUndo,
     outlineMode,
     scene.guides,
-    scene.layers,
-    selectedIds,
+    selectedLayers,
     settings.showGrid,
     settings.showGuides,
     settings.showRulers,
@@ -2323,17 +2354,22 @@ export function App() {
           <span className="whitespace-nowrap">Не знаете с чего начать?</span>
           <button
             type="button"
-            onClick={() => {
-              setShowTutorialHint(false);
-              openTutorial();
-            }}
+            onClick={openTutorial}
             className="shrink-0 font-medium text-paper-accent hover:underline"
           >
             Открыть обучение
           </button>
           <button
             type="button"
-            onClick={() => setShowTutorialHint(false)}
+            onClick={() => {
+              setShowTutorialHint(false);
+              const st = useSettingsStore.getState();
+              if (!st.settings.tutorial.welcomeDismissed) {
+                st.updateSettings({
+                  tutorial: dismissTutorialWelcome(st.settings.tutorial),
+                });
+              }
+            }}
             title="Скрыть"
             className="ml-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded text-paper-muted hover:bg-paper-hover hover:text-paper-ink"
           >
@@ -2412,6 +2448,15 @@ export function App() {
         onCancel={cancelUnsaved}
         onDiscard={() => void resolveUnsaved('discard')}
         onSave={() => void resolveUnsaved('save')}
+      />
+
+      <EffectModal
+        target={effectModalTarget}
+        layers={selectedLayers}
+        onClose={() => setEffectModalTarget(null)}
+        onApply={(ids, patch) => {
+          updateLayerEffects(ids, patch);
+        }}
       />
     </div>
   );

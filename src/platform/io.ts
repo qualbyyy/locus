@@ -206,17 +206,20 @@ export async function readAppConfigBytes(relPath: string): Promise<Uint8Array | 
   return MEMORY_BYTES_FALLBACK.get(relPath) ?? null;
 }
 
+async function ensureAppConfigDir(relPath: string): Promise<void> {
+  const { BaseDirectory, mkdir } = await import('@tauri-apps/plugin-fs');
+  const parts = relPath.split('/').filter(Boolean);
+  const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+  await mkdir(dir, { baseDir: BaseDirectory.AppConfig, recursive: true });
+}
+
 export async function writeAppConfigBytes(
   relPath: string,
   data: Uint8Array
 ): Promise<void> {
   if (isTauri()) {
-    const { BaseDirectory, mkdir, writeFile } = await import('@tauri-apps/plugin-fs');
-    const parts = relPath.split('/').filter(Boolean);
-    if (parts.length > 1) {
-      const dir = parts.slice(0, -1).join('/');
-      await mkdir(dir, { baseDir: BaseDirectory.AppConfig, recursive: true });
-    }
+    const { BaseDirectory, writeFile } = await import('@tauri-apps/plugin-fs');
+    await ensureAppConfigDir(relPath);
     await writeFile(relPath, data, { baseDir: BaseDirectory.AppConfig });
     return;
   }
@@ -249,12 +252,8 @@ export async function writeAppConfigText(
   content: string
 ): Promise<void> {
   if (isTauri()) {
-    const { BaseDirectory, mkdir, writeTextFile } = await import('@tauri-apps/plugin-fs');
-    const parts = relPath.split('/').filter(Boolean);
-    if (parts.length > 1) {
-      const dir = parts.slice(0, -1).join('/');
-      await mkdir(dir, { baseDir: BaseDirectory.AppConfig, recursive: true });
-    }
+    const { BaseDirectory, writeTextFile } = await import('@tauri-apps/plugin-fs');
+    await ensureAppConfigDir(relPath);
     await writeTextFile(relPath, content, { baseDir: BaseDirectory.AppConfig });
     return;
   }

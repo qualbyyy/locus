@@ -147,3 +147,46 @@ test('verifies HSV color wheel, M shortcut, W/H lock, Alt+Drag, Ctrl+L, Ctrl+2, 
 
   expect(pageErrors).toEqual([]);
 });
+
+test('opens EffectModal from top Effects menu and shows tutorial hint only once', async ({
+  page,
+}) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (err) => pageErrors.push(err.message));
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Создать документ' }).click();
+  await expect(page.getByText('Не знаете с чего начать?')).toBeVisible();
+
+  // Reload and create another document: hint must not appear again
+  await page.reload();
+  await page.getByRole('button', { name: 'Создать документ' }).click();
+  await expect(page.locator('[data-tour="canvas.root"]')).toBeVisible();
+  await expect(page.getByText('Не знаете с чего начать?')).toHaveCount(0);
+
+  // Draw a shape so a layer is selected
+  await page.locator('[data-tour="tool.blob"]').click();
+  const canvasBox = await page.locator('[data-tour="canvas.root"] canvas').boundingBox();
+  expect(canvasBox).not.toBeNull();
+  const cx = canvasBox!.x + canvasBox!.width / 2;
+  const cy = canvasBox!.y + canvasBox!.height / 2;
+  await page.mouse.move(cx - 60, cy - 50);
+  await page.mouse.down();
+  await page.mouse.move(cx + 60, cy + 50, { steps: 4 });
+  await page.mouse.up();
+  await expect(page.locator('[data-tour="layers.list"] li')).toHaveCount(1);
+
+  // Open top menu: Эффекты -> Размытие -> Размытие по Гауссу…
+  await page.locator('[data-tour="menu.effects"]').click();
+  await page.getByRole('button', { name: 'Размытие' }).hover();
+  await page.getByRole('button', { name: 'Размытие по Гауссу…' }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'Размытие по Гауссу' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Применить' }).click();
+  await expect(dialog).toHaveCount(0);
+
+  // Effect card is now present on the selected layer
+  await expect(page.locator('[data-tour="inspector.effects"]').getByText('Размытие по Гауссу')).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});

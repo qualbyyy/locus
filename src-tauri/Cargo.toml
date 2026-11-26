@@ -1,6 +1,6 @@
 [package]
 name = "locus"
-version = "1.0.0"
+version = "1.0.1"
 description = "Locus — automated vector editor"
 authors = ["qualbyy"]
 edition = "2021"
