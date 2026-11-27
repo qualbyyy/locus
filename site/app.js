@@ -179,10 +179,10 @@
         sw.classList.toggle("is-selected", sw.dataset.color === selected.fill);
       });
     } else {
-      statusSelection.textContent = "Выбрано: —";
+      statusSelection.textContent = "Выбрано: нет";
       propTitle.textContent = "Ничего не выбрано";
-      propX.textContent = "—";
-      propY.textContent = "—";
+      propX.textContent = "--";
+      propY.textContent = "--";
       btnDelete.disabled = true;
     }
   }
@@ -388,7 +388,7 @@
       await navigator.clipboard.writeText(svgCode);
       showFeedback("SVG скопирован в буфер");
     } catch {
-      showFeedback("Буфер недоступен — используйте скачивание");
+      showFeedback("Буфер недоступен, используйте скачивание");
     }
   });
 
@@ -404,12 +404,27 @@
   });
 
   document.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
-      if (document.activeElement?.tagName === "INPUT") return;
+    if (document.activeElement?.tagName === "INPUT") return;
+    const key = e.key.toLowerCase();
+
+    if ((e.ctrlKey || e.metaKey) && key === "z" && !e.shiftKey) {
       if (state.undoStack.length > 0) {
         e.preventDefault();
         undo();
       }
+      return;
+    }
+
+    if ((e.ctrlKey || e.metaKey) && key === "y") {
+      e.preventDefault();
+      state.wireframe = !state.wireframe;
+      render();
+      return;
+    }
+
+    if ((e.key === "Delete" || e.key === "Backspace") && state.selectedId) {
+      e.preventDefault();
+      btnDelete.click();
     }
   });
 
