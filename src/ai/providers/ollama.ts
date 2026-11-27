@@ -8,9 +8,11 @@ import type {
   AiToolCall,
 } from '../types';
 import {
+  extractPayloadError,
   isRecord,
   parseArgsObject,
   readHttpError,
+  readJsonResponse,
   type FetchLike,
 } from './http';
 
@@ -90,15 +92,18 @@ export function createOllamaSend(
       throw new Error(await readHttpError(response));
     }
 
-    const payload = (await response.json()) as unknown;
+    const payload = await readJsonResponse(response, 'Ollama');
     if (!isRecord(payload)) {
       throw new Error('Ollama вернул неожиданный ответ');
     }
-    if (isRecord(payload.error) && typeof payload.error.message === 'string') {
-      throw new Error(payload.error.message);
+    const payloadError = extractPayloadError(payload);
+    if (payloadError) {
+      throw new Error(payloadError);
     }
-    if (typeof payload.error === 'string') {
-      throw new Error(payload.error);
+    if (payload.done_reason === 'length') {
+      throw new Error(
+        'Ответ Ollama оборвался по лимиту токенов (max_tokens). Попробуйте упростить задачу.'
+      );
     }
 
     const message = isRecord(payload.message) ? payload.message : null;

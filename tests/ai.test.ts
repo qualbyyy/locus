@@ -676,7 +676,7 @@ describe('AI executor', () => {
 
     const stepEvents = events.filter((event) => event.type === 'step');
     expect(stepEvents[0]).toMatchObject({ maxSteps: 8 });
-    expect(stepEvents.at(-1)).toMatchObject({ maxSteps: 3 });
+    expect(stepEvents.at(-1)).toMatchObject({ maxSteps: 4 });
     expect(result.steps).toBe(3);
     expect(sceneLayers()).toHaveLength(1);
   });

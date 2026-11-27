@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { undoCommand } from '../core/commands';
 import { useSettingsStore } from '../core/settings';
 import { useEditorStore } from '../core/store';
+import type { Scene } from '../core/types';
 import { isAbortError, runAiCommand, type AiToolLogEntry } from './executor';
 import { getAiProviderIssue } from './providers';
 import type { AiImageAttachment, AiRunEvent } from './types';
@@ -38,6 +39,21 @@ interface AiTaskState {
 
 let currentController: AbortController | null = null;
 let runId = 0;
+let lastAiResultScene: Scene | null = null;
+let lastAiSessionId: number | null = null;
+
+useEditorStore.subscribe((state) => {
+  if (
+    lastAiResultScene !== null &&
+    (state.scene !== lastAiResultScene || state.documentSessionId !== lastAiSessionId)
+  ) {
+    lastAiResultScene = null;
+    lastAiSessionId = null;
+    if (useAiTaskStore.getState().canUndo) {
+      useAiTaskStore.setState({ canUndo: false });
+    }
+  }
+});
 
 export const useAiTaskStore = create<AiTaskState>((set, get) => ({
   status: 'idle',
@@ -79,7 +95,9 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
 
     const ai = useSettingsStore.getState().settings.ai;
     const attachments = [...get().attachments];
-    const sceneBefore = useEditorStore.getState().scene;
+    const initialEditorState = useEditorStore.getState();
+    const sceneBefore = initialEditorState.scene;
+    const sessionBefore = initialEditorState.documentSessionId;
     const issue = getAiProviderIssue(ai);
     if (issue) {
       set({
@@ -94,9 +112,27 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
     }
     runId += 1;
     const id = runId;
+    lastAiResultScene = null;
+    lastAiSessionId = null;
     currentController?.abort();
     const controller = new AbortController();
     currentController = controller;
+
+    let lastStepNumber = 0;
+    let needsStreamSeparator = false;
+
+    const computeCanUndo = (): boolean => {
+      const cur = useEditorStore.getState();
+      const ok =
+        cur.documentSessionId === sessionBefore &&
+        cur.scene !== sceneBefore &&
+        useEditorStore.temporal.getState().pastStates.length > 0;
+      if (ok) {
+        lastAiResultScene = cur.scene;
+        lastAiSessionId = cur.documentSessionId;
+      }
+      return ok;
+    };
 
     set({
       status: 'running',
@@ -120,6 +156,14 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
         onEvent: (event: AiRunEvent) => {
           if (runId !== id) return;
           if (event.type === 'step') {
+            if (
+              event.step > lastStepNumber &&
+              lastStepNumber > 0 &&
+              get().streamText.length > 0
+            ) {
+              needsStreamSeparator = true;
+            }
+            lastStepNumber = Math.max(lastStepNumber, event.step);
             set({ step: { step: event.step, maxSteps: event.maxSteps } });
           } else if (event.type === 'tool') {
             set((state) => ({
@@ -135,30 +179,41 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
               ],
             }));
           } else if (event.type === 'assistant-delta') {
-            set((state) => ({ streamText: state.streamText + event.text }));
+            if (!event.text) return;
+            const sep = needsStreamSeparator;
+            needsStreamSeparator = false;
+            set((state) => {
+              const prefix =
+                sep && state.streamText.trim().length > 0
+                  ? state.streamText.endsWith('\n')
+                    ? '\n'
+                    : '\n\n'
+                  : '';
+              return { streamText: state.streamText + prefix + event.text };
+            });
           } else if (event.type === 'assistant' && event.text.trim()) {
             set({ answer: event.text.trim() });
           }
         },
       });
       if (runId !== id) return;
-      const canUndo =
-        useEditorStore.getState().scene !== sceneBefore &&
-        useEditorStore.temporal.getState().pastStates.length > 0;
       set({
         answer: result.text,
         status: 'done',
         step: null,
         streamText: '',
-        canUndo,
+        canUndo: computeCanUndo(),
       });
     } catch (err) {
       if (runId !== id) return;
       if (controller.signal.aborted || isAbortError(err)) {
-        const canUndo =
-          useEditorStore.getState().scene !== sceneBefore &&
-          useEditorStore.temporal.getState().pastStates.length > 0;
-        set({ status: 'stopped', error: null, step: null, canUndo });
+        set({
+          status: 'stopped',
+          error: null,
+          step: null,
+          streamText: '',
+          canUndo: computeCanUndo(),
+        });
       } else {
         set((state) => ({
           status: 'error',
@@ -166,7 +221,8 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
             err instanceof Error ? err.message : 'Не удалось выполнить команду'
           ),
           step: null,
-          canUndo: false,
+          streamText: '',
+          canUndo: computeCanUndo(),
           attachments:
             state.attachments.length === 0 && attachments.length > 0
               ? attachments
@@ -188,7 +244,20 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
   },
 
   revertLastRun: () => {
-    if (!get().canUndo) return;
+    const cur = useEditorStore.getState();
+    if (
+      !get().canUndo ||
+      lastAiResultScene === null ||
+      cur.scene !== lastAiResultScene ||
+      cur.documentSessionId !== lastAiSessionId
+    ) {
+      lastAiResultScene = null;
+      lastAiSessionId = null;
+      set({ canUndo: false });
+      return;
+    }
+    lastAiResultScene = null;
+    lastAiSessionId = null;
     undoCommand();
     set({ canUndo: false });
   },
@@ -199,6 +268,8 @@ export const useAiTaskStore = create<AiTaskState>((set, get) => ({
 
   reset: () => {
     runId += 1;
+    lastAiResultScene = null;
+    lastAiSessionId = null;
     currentController?.abort();
     currentController = null;
     set({

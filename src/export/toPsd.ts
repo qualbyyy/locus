@@ -15,6 +15,7 @@ import {
   multiplyMatrices,
   type Matrix2D,
 } from '../core/math';
+import { getEffectsPadding } from '../engine/effects';
 import { getPrimaryColor } from '../core/paint';
 import type {
   BlendMode,
@@ -78,25 +79,44 @@ async function buildPsdLeafLayer(
   layer: Layer,
   scene: Scene,
   scale: number,
-  parentMatrix: Matrix2D
+  parentMatrix: Matrix2D,
+  isMaskLayer = false
 ): Promise<PsdLayer> {
+  const renderLayer: Layer =
+    isMaskLayer && layer.type === 'path' && !layer.fill && (!layer.stroke || layer.stroke.width <= 0)
+      ? { ...layer, fill: '#000000' }
+      : layer;
   const raster = await rasterizeLayer(
-    layer,
+    renderLayer,
     scene,
-    (l) => computeLayerBBoxWithMatrix(l, parentMatrix),
+    (l) => {
+      const box = computeLayerBBoxWithMatrix(l, parentMatrix);
+      const strokePad =
+        l.type === 'path' || l.type === 'text' ? (l.stroke?.width ?? 0) : 0;
+      const pad = getEffectsPadding(l.effects) + strokePad;
+      if (pad <= 0) return box;
+      return {
+        x: box.x - pad,
+        y: box.y - pad,
+        width: box.width + pad * 2,
+        height: box.height + pad * 2,
+      };
+    },
     scale,
     parentMatrix
   );
   const blendMode = toPsdBlendMode(layer.blendMode);
+  const leftPx = raster ? Math.round(raster.left * scale) : 0;
+  const topPx = raster ? Math.round(raster.top * scale) : 0;
   const psdLayer: PsdLayer = {
     name: layer.name,
     hidden: !layer.visible,
     opacity: layer.opacity,
     ...(blendMode ? { blendMode } : {}),
-    left: raster?.left ?? 0,
-    top: raster?.top ?? 0,
-    right: raster ? raster.left + raster.width : 0,
-    bottom: raster ? raster.top + raster.height : 0,
+    left: leftPx,
+    top: topPx,
+    right: raster ? leftPx + raster.canvas.width : 0,
+    bottom: raster ? topPx + raster.canvas.height : 0,
   };
   if (raster) {
     psdLayer.canvas = raster.canvas;
@@ -129,12 +149,13 @@ async function buildPsdNode(
   layer: Layer,
   scene: Scene,
   scale: number,
-  parentMatrix: Matrix2D
+  parentMatrix: Matrix2D,
+  isMaskLayer = false
 ): Promise<PsdLayer> {
   if (layer.type === 'group') {
     return buildPsdGroupLayer(layer, scene, scale, parentMatrix);
   }
-  return buildPsdLeafLayer(layer, scene, scale, parentMatrix);
+  return buildPsdLeafLayer(layer, scene, scale, parentMatrix, isMaskLayer);
 }
 
 /**
@@ -169,29 +190,38 @@ async function buildChildren(
 
   const children: PsdLayer[] = [];
   const emittedClipGroups = new Set<string>();
+  const emittedLayerIds = new Set<string>();
   const reversed = [...layers].reverse();
 
   for (const layer of reversed) {
+    if (emittedLayerIds.has(layer.id)) continue;
     const mask = layer.clipMaskId ? byId.get(layer.clipMaskId) : undefined;
 
     if (mask?.type === 'path' && !emittedClipGroups.has(mask.id)) {
       emittedClipGroups.add(mask.id);
       for (const member of [...(clipMembers.get(mask.id) ?? [])].reverse()) {
+        if (emittedLayerIds.has(member.id)) continue;
+        emittedLayerIds.add(member.id);
         const psdLayer = await buildPsdNode(member, scene, scale, parentMatrix);
         psdLayer.clipping = true;
         children.push(psdLayer);
       }
-      const maskLayer = await buildPsdNode(mask, scene, scale, parentMatrix);
-      children.push(maskLayer);
+      if (!emittedLayerIds.has(mask.id)) {
+        emittedLayerIds.add(mask.id);
+        const maskLayer = await buildPsdNode(mask, scene, scale, parentMatrix, true);
+        children.push(maskLayer);
+      }
       continue;
     }
 
     if (maskIds.has(layer.id)) {
       if (emittedClipGroups.has(layer.id)) continue;
-      children.push(await buildPsdNode(layer, scene, scale, parentMatrix));
+      emittedLayerIds.add(layer.id);
+      children.push(await buildPsdNode(layer, scene, scale, parentMatrix, true));
       continue;
     }
 
+    emittedLayerIds.add(layer.id);
     children.push(await buildPsdNode(layer, scene, scale, parentMatrix));
   }
 
@@ -218,12 +248,29 @@ export async function sceneToPsd(scene: Scene, options: PsdExportOptions = {}): 
   return psd;
 }
 
+function disposePsdCanvases(node: { canvas?: unknown; children?: Array<{ canvas?: unknown; children?: unknown }> }): void {
+  if (node.canvas && typeof (node.canvas as HTMLCanvasElement).width === 'number') {
+    const c = node.canvas as HTMLCanvasElement;
+    c.width = 0;
+    c.height = 0;
+  }
+  if (Array.isArray(node.children)) {
+    for (const child of node.children) {
+      disposePsdCanvases(child as typeof node);
+    }
+  }
+}
+
 export async function sceneToPsdBytes(
   scene: Scene,
   options: PsdExportOptions = {}
 ): Promise<Uint8Array> {
   const psd = await sceneToPsd(scene, options);
-  return writePsdUint8Array(psd, { generateThumbnail: true, invalidateTextLayers: true });
+  try {
+    return writePsdUint8Array(psd, { generateThumbnail: true, invalidateTextLayers: true });
+  } finally {
+    disposePsdCanvases(psd);
+  }
 }
 
 export { initializeCanvas, readPsd };

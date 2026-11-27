@@ -138,6 +138,8 @@ export function apply3DEffect(
 
   const shade = clamp(eff.shade, 0, 1);
   const rawFaces: Array<{ subpaths: SubPath[]; fill: string; z: number }> = [];
+  const backCaps: SubPath[] = [];
+  let maxBackCapZ = -Infinity;
 
   for (const sp of subpaths) {
     const pts = sampleSubPathPoints(sp, 14);
@@ -148,11 +150,8 @@ export function apply3DEffect(
 
     if (sp.closed && backProj.length >= 3) {
       const avgBackZ = backProj.reduce((acc, p) => acc + p.z, 0) / backProj.length;
-      rawFaces.push({
-        subpaths: [ptsToLinearSubPath(backProj, true)],
-        fill: shadeHexColor(baseFill, 1 - shade * 0.6),
-        z: avgBackZ - 1,
-      });
+      if (avgBackZ > maxBackCapZ) maxBackCapZ = avgBackZ;
+      backCaps.push(ptsToLinearSubPath(backProj, true));
     }
 
     const edgeCount = sp.closed ? pts.length : pts.length - 1;
@@ -179,6 +178,15 @@ export function apply3DEffect(
         z: avgZ,
       });
     }
+  }
+
+  if (backCaps.length > 0) {
+    // +z уходит вглубь экрана; back-cap должен иметь больший z, чтобы не перекрывать ближайшие грани
+    rawFaces.push({
+      subpaths: backCaps,
+      fill: shadeHexColor(baseFill, 1 - shade * 0.6),
+      z: maxBackCapZ + 0.5,
+    });
   }
 
   // Algorithm: painter's sort (largest z is furthest in our right-handed camera where +z goes into screen)

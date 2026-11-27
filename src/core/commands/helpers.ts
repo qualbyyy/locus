@@ -1,5 +1,10 @@
 import { getSceneArtboards } from '../artboards';
-import { flattenLayers, mapLayerTree } from '../layerTree';
+import {
+  flattenLayers,
+  getParentGroupId,
+  getScopeLayers,
+  reconcileLayerRefs,
+} from '../layerTree';
 import { useEditorStore } from '../store';
 import type { Layer, Scene, StrokeStyle, TextLayer } from '../types';
 
@@ -38,26 +43,30 @@ export function validateSelectionAgainstScene(scene: Scene): void {
   const layerMap = new Map(
     flattenLayers(scene.layers).map((layer) => [layer.id, layer])
   );
-  const nextSelectedIds = state.selectedIds.filter((id) => layerMap.has(id));
-
-  let nextSelectedNode = state.selectedNode;
-  if (nextSelectedNode) {
-    const target = layerMap.get(nextSelectedNode.layerId);
-    if (!target || target.type !== 'path') {
-      nextSelectedNode = null;
-    } else {
-      const sp = target.subpaths[nextSelectedNode.subpathIndex];
-      if (!sp || nextSelectedNode.anchorIndex >= sp.anchors.length) {
-        nextSelectedNode = null;
-      }
-    }
-  }
 
   let nextEditingGroupId = state.editingGroupId;
   if (nextEditingGroupId) {
     const groupTarget = layerMap.get(nextEditingGroupId);
     if (!groupTarget || groupTarget.type !== 'group') {
       nextEditingGroupId = null;
+    }
+  }
+
+  const scopeIds = new Set(
+    getScopeLayers(scene.layers, nextEditingGroupId).map((layer) => layer.id)
+  );
+  const nextSelectedIds = state.selectedIds.filter((id) => scopeIds.has(id));
+
+  let nextSelectedNode = state.selectedNode;
+  if (nextSelectedNode) {
+    const target = layerMap.get(nextSelectedNode.layerId);
+    if (!target || target.type !== 'path' || !scopeIds.has(target.id)) {
+      nextSelectedNode = null;
+    } else {
+      const sp = target.subpaths[nextSelectedNode.subpathIndex];
+      if (!sp || nextSelectedNode.anchorIndex >= sp.anchors.length) {
+        nextSelectedNode = null;
+      }
     }
   }
 
@@ -98,45 +107,6 @@ export function findSharedClipMaskId(
   return undefined;
 }
 
-function replaceInSiblingList(
-  layers: Layer[],
-  targetIds: Set<string>,
-  replacementLayers: Layer[]
-): { next: Layer[]; replaced: boolean } {
-  let highestIdx = -1;
-  layers.forEach((layer, idx) => {
-    if (targetIds.has(layer.id)) {
-      highestIdx = idx;
-    }
-  });
-
-  if (highestIdx !== -1) {
-    const next: Layer[] = [];
-    layers.forEach((layer, idx) => {
-      if (idx === highestIdx) {
-        next.push(...replacementLayers);
-      }
-      if (!targetIds.has(layer.id)) {
-        next.push(layer);
-      }
-    });
-    return { next, replaced: true };
-  }
-
-  for (let i = 0; i < layers.length; i += 1) {
-    const cur = layers[i];
-    if (cur.type !== 'group') continue;
-    const sub = replaceInSiblingList(cur.children, targetIds, replacementLayers);
-    if (sub.replaced) {
-      const next = [...layers];
-      next[i] = { ...cur, children: sub.next };
-      return { next, replaced: true };
-    }
-  }
-
-  return { next: layers, replaced: false };
-}
-
 export function clearTextPathProps(layer: TextLayer): TextLayer {
   if (
     layer.pathId === undefined &&
@@ -156,41 +126,107 @@ export function clearTextPathProps(layer: TextLayer): TextLayer {
   return copy;
 }
 
-/** Заменяет набор слоёв на месте самого верхнего из них, очищая ссылки на удалённые маски. */
+function removeTargetsEverywhere(
+  layers: Layer[],
+  targetIds: Set<string>,
+  anchorId: string,
+  replacementLayers: Layer[]
+): { next: Layer[]; inserted: boolean } {
+  let changed = false;
+  let inserted = false;
+  const next: Layer[] = [];
+  for (const raw of layers) {
+    let cur = raw;
+    if (cur.type === 'group') {
+      const sub = removeTargetsEverywhere(cur.children, targetIds, anchorId, replacementLayers);
+      if (sub.inserted) inserted = true;
+      if (sub.next !== cur.children) {
+        cur = { ...cur, children: sub.next };
+        changed = true;
+      }
+    }
+    if (cur.id === anchorId) {
+      next.push(...replacementLayers);
+      inserted = true;
+      changed = true;
+      continue;
+    }
+    if (targetIds.has(cur.id)) {
+      changed = true;
+      continue;
+    }
+    next.push(cur);
+  }
+  return { next: changed ? next : layers, inserted };
+}
+
+/** Заменяет набор слоёв (даже из разных групп) в точке верхнего/последнего якоря и очищает висячие ссылки. */
 export function replaceLayersAtHighestIndex(
   targetIds: Set<string>,
-  replacementLayers: Layer[]
+  replacementLayers: Layer[],
+  anchorLayerId?: string
 ): void {
   commitScene((scene) => {
-    const { next, replaced } = replaceInSiblingList(
+    const flat = flattenLayers(scene.layers);
+    let anchor = anchorLayerId && targetIds.has(anchorLayerId) ? anchorLayerId : '';
+    if (!anchor) {
+      for (let i = flat.length - 1; i >= 0; i -= 1) {
+        if (targetIds.has(flat[i].id)) {
+          anchor = flat[i].id;
+          break;
+        }
+      }
+    }
+    if (!anchor) return scene;
+
+    // Если среди удаляемых есть предок другого удаляемого, якорем не может быть удалённый потомок внутри не-удалённой? Нет, проверяем родителя:
+    const anchorParent = getParentGroupId(scene.layers, anchor);
+    const parentInDeleted = anchorParent !== null && targetIds.has(anchorParent);
+    if (parentInDeleted) {
+      const fallback = flat.find((l) => targetIds.has(l.id));
+      if (fallback) anchor = fallback.id;
+    }
+
+    const { next, inserted } = removeTargetsEverywhere(
       scene.layers,
       targetIds,
+      anchor,
       replacementLayers
     );
-    if (!replaced) return scene;
+    if (!inserted) return scene;
 
-    const cleaned = mapLayerTree(next, (layer) => {
-      let nextLayer = layer;
-      if (nextLayer.clipMaskId && targetIds.has(nextLayer.clipMaskId)) {
-        const copy = { ...nextLayer };
-        delete copy.clipMaskId;
-        nextLayer = copy;
-      }
-      if (
-        nextLayer.type === 'text' &&
-        nextLayer.pathId &&
-        targetIds.has(nextLayer.pathId)
-      ) {
-        nextLayer = clearTextPathProps(nextLayer);
-      }
-      return nextLayer;
-    });
-
-    return { ...scene, layers: cleaned };
+    const reconciled = reconcileLayerRefs(next, true);
+    return { ...scene, layers: reconciled };
   });
 
   useEditorStore.setState({
     selectedIds: replacementLayers.map((l) => l.id),
     selectedNode: null,
   });
+}
+
+export function replacePerIdInList(
+  layers: Layer[],
+  replacements: Map<string, Layer[]>
+): Layer[] {
+  let changed = false;
+  const next: Layer[] = [];
+  for (const rawLayer of layers) {
+    let layer = rawLayer;
+    if (layer.type === 'group') {
+      const nextChildren = replacePerIdInList(layer.children, replacements);
+      if (nextChildren !== layer.children) {
+        layer = { ...layer, children: nextChildren };
+        changed = true;
+      }
+    }
+    const items = replacements.get(layer.id);
+    if (items) {
+      changed = true;
+      next.push(...items);
+    } else {
+      next.push(layer);
+    }
+  }
+  return changed ? next : layers;
 }

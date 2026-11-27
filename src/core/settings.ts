@@ -4,6 +4,8 @@ import {
   removeAppConfigFile,
   writeAppConfigText,
 } from '../platform/io';
+import { getAsset } from './assets';
+import { flattenLayers } from './layerTree';
 import { useCanvasBackdropStore } from './canvasBackdrop';
 import { clamp } from './math';
 import { setUndoLimit } from './store';
@@ -306,6 +308,9 @@ export interface SettingsStoreState {
   resetSettings: () => AppSettings;
 }
 
+let inFlightLoadPromise: Promise<AppSettings> | null = null;
+const dirtyKeysBeforeLoad = new Set<string>();
+
 export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   settings: sanitizeSettings(DEFAULT_SETTINGS),
   loaded: false,
@@ -313,32 +318,59 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   lastAutosaveAt: null,
 
   loadSettings: async () => {
-    let parsed: unknown = null;
-    try {
-      const text = await readAppConfigText(SETTINGS_FILE_PATH);
-      if (text) {
-        parsed = JSON.parse(text) as unknown;
+    if (inFlightLoadPromise) {
+      return inFlightLoadPromise;
+    }
+    inFlightLoadPromise = (async () => {
+      let parsed: unknown = null;
+      try {
+        const text = await readAppConfigText(SETTINGS_FILE_PATH);
+        if (text) {
+          parsed = JSON.parse(text) as unknown;
+        }
+      } catch {
+        parsed = null;
       }
-    } catch {
-      parsed = null;
+      const currentSettings = get().settings;
+      const loadedSanitized = sanitizeSettings(parsed);
+      const next: AppSettings = { ...loadedSanitized };
+      for (const key of dirtyKeysBeforeLoad) {
+        if (key === 'ai') {
+          next.ai = currentSettings.ai;
+        } else {
+          (next as unknown as Record<string, unknown>)[key] = (
+            currentSettings as unknown as Record<string, unknown>
+          )[key];
+        }
+      }
+      if (get().tutorialTouchedBeforeLoad) {
+        next.tutorial = currentSettings.tutorial;
+      }
+      dirtyKeysBeforeLoad.clear();
+      set({ settings: next, loaded: true, tutorialTouchedBeforeLoad: false });
+      applyRuntimeSideEffects(next);
+      void useCustomFontStore
+        .getState()
+        .load()
+        .then(() => applyRuntimeSideEffects(useSettingsStore.getState().settings));
+      void useCanvasBackdropStore.getState().load();
+      return next;
+    })();
+    try {
+      return await inFlightLoadPromise;
+    } finally {
+      inFlightLoadPromise = null;
     }
-    const preserveTutorial = get().tutorialTouchedBeforeLoad;
-    const next = sanitizeSettings(parsed);
-    if (preserveTutorial) {
-      next.tutorial = get().settings.tutorial;
-    }
-    set({ settings: next, loaded: true, tutorialTouchedBeforeLoad: false });
-    applyRuntimeSideEffects(next);
-    void useCustomFontStore
-      .getState()
-      .load()
-      .then(() => applyRuntimeSideEffects(useSettingsStore.getState().settings));
-    void useCanvasBackdropStore.getState().load();
-    return next;
   },
 
   updateSettings: (patch) => {
     const current = get().settings;
+    const isLoaded = get().loaded;
+    if (!isLoaded) {
+      for (const k of Object.keys(patch)) {
+        dirtyKeysBeforeLoad.add(k);
+      }
+    }
     const merged = {
       ...current,
       ...patch,
@@ -399,6 +431,7 @@ export async function saveSceneDraft(scene: Scene): Promise<number | null> {
 export async function loadSceneDraft(): Promise<{
   savedAt: number;
   scene: Scene;
+  hasMissingAssets?: boolean;
 } | null> {
   try {
     const text = await readAppConfigText(AUTOSAVE_DRAFT_PATH);
@@ -421,9 +454,14 @@ export async function loadSceneDraft(): Promise<{
     ) {
       return null;
     }
+    const typedScene = scene as Scene;
+    const hasMissingAssets = flattenLayers(typedScene.layers).some(
+      (l) => l.type === 'image' && !getAsset(l.assetId)
+    );
     return {
       savedAt: parsed.savedAt,
-      scene: scene as Scene,
+      scene: typedScene,
+      ...(hasMissingAssets ? { hasMissingAssets } : {}),
     };
   } catch {
     return null;

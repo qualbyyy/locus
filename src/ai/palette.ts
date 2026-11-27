@@ -4,12 +4,30 @@ import {
   updateArtboardById,
   updateLayers,
 } from '../core/commands';
-import { flattenLayers, getParentWorldMatrix } from '../core/layerTree';
+import {
+  findLayerPath,
+  flattenLayers,
+  getParentWorldMatrix,
+} from '../core/layerTree';
 import { computeLayerBBoxWithMatrix } from '../core/math';
 import { isGradientPaint } from '../core/paint';
 import { useEditorStore } from '../core/store';
-import type { Paint, PathLayer, TextLayer } from '../core/types';
+import type { Layer, Paint, PathLayer, TextLayer } from '../core/types';
 import { quantizeRgbaPixels } from '../engine/imageTrace';
+
+function collectVisibleLayerIds(
+  layers: Layer[],
+  out = new Set<string>()
+): Set<string> {
+  for (const layer of layers) {
+    if (!layer.visible) continue;
+    out.add(layer.id);
+    if (layer.type === 'group') {
+      collectVisibleLayerIds(layer.children, out);
+    }
+  }
+  return out;
+}
 
 export interface ExtractedPaletteColor {
   hex: string;
@@ -224,6 +242,7 @@ export function recolorSceneWithPalette(
   const scene = state.scene;
   const activeAb = getActiveArtboard(scene, state.activeArtboardId);
   const allFlat = flattenLayers(scene.layers);
+  const visibleIds = collectVisibleLayerIds(scene.layers);
   const subsetSet =
     options.layerIds && options.layerIds.length > 0
       ? new Set(options.layerIds)
@@ -231,7 +250,7 @@ export function recolorSceneWithPalette(
 
   const targetLayers = allFlat.filter(
     (l) =>
-      !l.locked &&
+      !(findLayerPath(scene.layers, l.id) ?? []).some((node) => node.locked) &&
       (l.type === 'path' || l.type === 'text') &&
       (!subsetSet || subsetSet.has(l.id))
   );
@@ -283,15 +302,18 @@ export function recolorSceneWithPalette(
   // Track recolored path fills + bboxes in z-order so text contrast checks underlying fills
   const pathFillsById = new Map<string, { box: ReturnType<typeof computeLayerBBoxWithMatrix>; fillHex: string }>();
   for (const layer of allFlat) {
-    if (!layer.visible || layer.type !== 'path' || !layer.fill) continue;
+    if (!visibleIds.has(layer.id) || layer.type !== 'path' || !layer.fill) continue;
     const rawHex = typeof layer.fill === 'string'
       ? normalizeHexColor(layer.fill)
       : isGradientPaint(layer.fill) && layer.fill.stops.length > 0
         ? normalizeHexColor(layer.fill.stops[0].color)
         : null;
     if (!rawHex) continue;
+    const isLocked = (findLayerPath(scene.layers, layer.id) ?? []).some(
+      (node) => node.locked
+    );
     const mappedHex =
-      !layer.locked && (!subsetSet || subsetSet.has(layer.id))
+      !isLocked && (!subsetSet || subsetSet.has(layer.id))
         ? (colorMap.get(rawHex) ?? fgPalette[0])
         : rawHex;
     const box = computeLayerBBoxWithMatrix(
@@ -370,7 +392,9 @@ export function recolorSceneWithPalette(
           bgUnderText,
           preserveContrast
         );
-        updateLayers([txt.id], { fill: nextTextFill });
+        updateLayers([txt.id], (layer) =>
+          layer.type === 'text' ? { ...layer, fill: nextTextFill } : layer
+        );
         updatedLayers += 1;
       }
     }

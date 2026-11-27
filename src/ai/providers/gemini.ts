@@ -7,9 +7,11 @@ import type {
   AiToolCall,
 } from '../types';
 import {
+  extractPayloadError,
   isRecord,
   parseArgsObject,
   readHttpError,
+  readJsonResponse,
   type FetchLike,
 } from './http';
 
@@ -113,18 +115,27 @@ export function createGeminiSend(
       throw new Error(await readHttpError(response));
     }
 
-    const payload = (await response.json()) as unknown;
+    const payload = await readJsonResponse(response, 'Gemini');
     if (!isRecord(payload)) {
       throw new Error('Gemini вернул неожиданный ответ');
     }
 
-    const error = payload.error;
-    if (isRecord(error) && typeof error.message === 'string') {
-      throw new Error(error.message);
+    const payloadError = extractPayloadError(payload);
+    if (payloadError) {
+      throw new Error(payloadError);
     }
 
     const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
     const first = candidates[0];
+    const finishReason =
+      isRecord(first) && typeof first.finishReason === 'string'
+        ? first.finishReason
+        : null;
+    if (finishReason === 'MAX_TOKENS') {
+      throw new Error(
+        'Ответ Gemini оборвался по лимиту токенов (MAX_TOKENS). Попробуйте упростить задачу.'
+      );
+    }
     const content = isRecord(first) && isRecord(first.content) ? first.content : null;
     const parts = content && Array.isArray(content.parts) ? content.parts : [];
 
@@ -150,7 +161,9 @@ export function createGeminiSend(
       const reason =
         feedback && typeof feedback.blockReason === 'string'
           ? `Запрос заблокирован: ${feedback.blockReason}`
-          : 'Gemini вернул пустой ответ';
+          : finishReason && finishReason !== 'STOP'
+            ? `Ответ Gemini остановлен (${finishReason})`
+            : 'Gemini вернул пустой ответ';
       throw new Error(reason);
     }
 

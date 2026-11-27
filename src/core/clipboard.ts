@@ -1,8 +1,9 @@
 import { addLayer, createLayerId, runCommandBatch, updateLayers } from './commands';
 import {
-  cloneLayerSubtreeWithNewIds,
+  cloneLayersWithRemappedRefs,
   findLayerById,
   flattenLayers,
+  getScopeLayers,
 } from './layerTree';
 import { clonePaint, cloneStroke } from './paint';
 import { useEditorStore } from './store';
@@ -62,10 +63,20 @@ export function copySelectedLayers(layerIds?: string[]): number {
   if (ids.length === 0) return 0;
 
   const idSet = new Set(ids);
-  const targets = flattenLayers(state.scene.layers).filter((layer) =>
+  const rawTargets = flattenLayers(state.scene.layers).filter((layer) =>
     idSet.has(layer.id)
   );
-  if (targets.length === 0) return 0;
+  if (rawTargets.length === 0) return 0;
+
+  const descendantIds = new Set<string>();
+  for (const t of rawTargets) {
+    if (t.type === 'group') {
+      for (const sub of flattenLayers(t.children)) {
+        descendantIds.add(sub.id);
+      }
+    }
+  }
+  const targets = rawTargets.filter((t) => !descendantIds.has(t.id));
 
   copiedLayers = targets.map(cloneLayer);
   pasteStreak = 0;
@@ -99,38 +110,28 @@ export function pasteLayers(opts?: {
   const inPlace = Boolean(opts?.inPlace);
   const offset = inPlace ? 0 : (pasteStreak + 1) * (opts?.offsetStep ?? 16);
   const state = useEditorStore.getState();
-  const existingIds = new Set(flattenLayers(state.scene.layers).map((l) => l.id));
   const targetParentId = state.editingGroupId;
+  const scopePathIds = new Set(
+    flattenLayers(state.scene.layers).map((l) => l.id)
+  );
+  const scopeSiblingIds = new Set(
+    getScopeLayers(state.scene.layers, targetParentId).map((l) => l.id)
+  );
 
-  const rootIdMap = new Map<string, string>();
-  const referencedMaskNewIds = new Set<string>();
-  const prepared: Layer[] = copiedLayers.map((src) => {
-    const origMaskId = src.clipMaskId;
-    const copy = cloneLayerSubtreeWithNewIds(src, createLayerId, ' копия');
-    rootIdMap.set(src.id, copy.id);
-    copy.x += offset;
-    copy.y += offset;
-    if (origMaskId) {
-      copy.clipMaskId = origMaskId;
+  const { clones: prepared } = cloneLayersWithRemappedRefs(
+    copiedLayers,
+    createLayerId,
+    {
+      nameSuffix: ' копия',
+      offsetX: offset,
+      offsetY: offset,
+      existingLayerIds: scopePathIds,
     }
-    return copy;
-  });
-
-  for (const copy of prepared) {
-    if (copy.clipMaskId) {
-      const remappedMask = rootIdMap.get(copy.clipMaskId);
-      if (remappedMask) {
-        copy.clipMaskId = remappedMask;
-        referencedMaskNewIds.add(remappedMask);
-      } else if (!existingIds.has(copy.clipMaskId)) {
-        delete copy.clipMaskId;
-      }
-    }
-  }
-
+  );
+  // Для clipMaskId разрешаем ссылку только на маску в том же целевом скоупе
   for (const item of prepared) {
-    if (item.type === 'path' && item.isClipMask && !referencedMaskNewIds.has(item.id)) {
-      item.isClipMask = false;
+    if (item.clipMaskId && !scopeSiblingIds.has(item.clipMaskId) && !prepared.some((p) => p.id === item.clipMaskId)) {
+      delete item.clipMaskId;
     }
   }
 

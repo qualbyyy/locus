@@ -70,12 +70,18 @@ export function LayersPanel({
   onDeleteLayer,
   onReleaseMask,
 }: LayersPanelProps) {
-  const totalLayers = flattenLayers(layers).length;
+  const allLayersFlat = flattenLayers(layers);
+  const totalLayers = allLayersFlat.length;
+  const referencedMaskIds = new Set<string>();
+  for (const item of allLayersFlat) {
+    if (item.clipMaskId) referencedMaskIds.add(item.clipMaskId);
+  }
   const editingGroup = editingGroupId ? findLayerById(layers, editingGroupId) : undefined;
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
   const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const renameCancelledRef = useRef(false);
 
   useEffect(() => {
     if (editingId) {
@@ -102,10 +108,6 @@ export function LayersPanel({
 
   const renderRows = (list: Layer[], depth: number): ReactNode[] => {
     const ordered = [...list].reverse();
-    const referencedMaskIds = new Set<string>();
-    for (const item of list) {
-      if (item.clipMaskId) referencedMaskIds.add(item.clipMaskId);
-    }
 
     const rows: ReactNode[] = [];
     ordered.forEach((layer, viewIdx) => {
@@ -127,6 +129,7 @@ export function LayersPanel({
           onClick={(e) => onSelectLayer(layer.id, e.shiftKey)}
           onDoubleClick={(e) => {
             e.stopPropagation();
+            renameCancelledRef.current = false;
             setEditingId(layer.id);
             setDraftName(layer.name);
           }}
@@ -147,6 +150,7 @@ export function LayersPanel({
                   e.stopPropagation();
                   toggleCollapsed(layer.id);
                 }}
+                onDoubleClick={(e) => e.stopPropagation()}
                 title={isExpanded ? 'Свернуть группу' : 'Развернуть группу'}
                 className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-paper-muted hover:bg-paper-bg hover:text-paper-ink"
               >
@@ -172,12 +176,24 @@ export function LayersPanel({
                 type="text"
                 value={draftName}
                 onClick={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
                 onChange={(e) => setDraftName(e.target.value)}
-                onBlur={() => commitRename(layer)}
+                onBlur={() => {
+                  if (renameCancelledRef.current) {
+                    renameCancelledRef.current = false;
+                    return;
+                  }
+                  commitRename(layer);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.stopPropagation();
                     commitRename(layer);
                   } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    renameCancelledRef.current = true;
                     setEditingId(null);
                   }
                 }}
@@ -205,6 +221,7 @@ export function LayersPanel({
                     e.stopPropagation();
                     onReleaseMask(layer.id);
                   }}
+                  onDoubleClick={(e) => e.stopPropagation()}
                   title="Снять обтравочную маску"
                   className="flex shrink-0 items-center gap-0.5 rounded border border-paper-border bg-paper-bg px-1 font-display text-[9px] text-paper-muted hover:border-paper-accent hover:text-paper-accent"
                 >
@@ -218,7 +235,10 @@ export function LayersPanel({
               ))}
           </div>
 
-          <div className="flex shrink-0 items-center gap-0.5">
+          <div
+            onDoubleClick={(e) => e.stopPropagation()}
+            className="flex shrink-0 items-center gap-0.5"
+          >
             {isGroup && onEnterGroup && (
               <button
                 type="button"

@@ -199,13 +199,13 @@ async function syncBrowserFontFacesForFamily(familyKey: string): Promise<void> {
   }
 }
 
-export async function registerProjectFontFromBytes(params: {
+export function prepareProjectFontEntry(params: {
   bytes: Uint8Array;
   fileName: string;
   family?: string;
   weight?: 400 | 700;
   id?: string;
-}): Promise<ProjectFontEntry> {
+}): ProjectFontEntry {
   if (params.bytes.byteLength > PROJECT_FONT_MAX_BYTES) {
     throw new Error('Файл шрифта превышает ограничение 10 МБ');
   }
@@ -226,14 +226,7 @@ export async function registerProjectFontFromBytes(params: {
   const weight: 400 | 700 = params.weight ?? (inferredBold ? 700 : 400);
   const mimeType = inferFontMimeType(params.fileName, copy);
 
-  const familyKey = family.toLowerCase();
-  for (const [existingId, existing] of projectFonts.entries()) {
-    if (existing.family.toLowerCase() === familyKey && existing.weight === weight) {
-      projectFonts.delete(existingId);
-    }
-  }
-
-  const entry: ProjectFontEntry = {
+  return {
     id: params.id ?? createProjectFontId(),
     family,
     fileName: params.fileName,
@@ -241,6 +234,35 @@ export async function registerProjectFontFromBytes(params: {
     mimeType,
     bytes: copy,
   };
+}
+
+export async function commitLoadedProjectFonts(entries: ProjectFontEntry[]): Promise<void> {
+  clearProjectFonts();
+  const families = new Set<string>();
+  for (const entry of entries) {
+    projectFonts.set(entry.id, entry);
+    families.add(entry.family.toLowerCase());
+  }
+  for (const familyKey of families) {
+    await syncBrowserFontFacesForFamily(familyKey);
+  }
+  notifyFontListeners();
+}
+
+export async function registerProjectFontFromBytes(params: {
+  bytes: Uint8Array;
+  fileName: string;
+  family?: string;
+  weight?: 400 | 700;
+  id?: string;
+}): Promise<ProjectFontEntry> {
+  const entry = prepareProjectFontEntry(params);
+  const familyKey = entry.family.toLowerCase();
+  for (const [existingId, existing] of projectFonts.entries()) {
+    if (existing.family.toLowerCase() === familyKey && existing.weight === entry.weight) {
+      projectFonts.delete(existingId);
+    }
+  }
   projectFonts.set(entry.id, entry);
   await syncBrowserFontFacesForFamily(familyKey);
   notifyFontListeners();

@@ -21,7 +21,12 @@ function sampleCanvasPixelHex(ctx: ToolContext, point: Point2D): string | null {
   const canvas = ctx.scope.view.element as HTMLCanvasElement | null | undefined;
   if (!canvas) return null;
 
+  const prevOverlayVisible = ctx.overlayLayer.visible;
   try {
+    if (prevOverlayVisible) {
+      ctx.overlayLayer.visible = false;
+      ctx.scope.view.update();
+    }
     const viewPt = ctx.scope.view.projectToView(new ctx.scope.Point(point.x, point.y));
     const rect = canvas.getBoundingClientRect();
     const scaleX = rect.width > 0 ? canvas.width / rect.width : 1;
@@ -38,6 +43,11 @@ function sampleCanvasPixelHex(ctx: ToolContext, point: Point2D): string | null {
     return rgbToHex(data[0], data[1], data[2]);
   } catch {
     return null;
+  } finally {
+    if (prevOverlayVisible) {
+      ctx.overlayLayer.visible = true;
+      ctx.scope.view.update();
+    }
   }
 }
 

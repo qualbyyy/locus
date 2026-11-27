@@ -7,9 +7,11 @@ import type {
   AiToolCall,
 } from '../types';
 import {
+  extractPayloadError,
   isRecord,
   parseArgsObject,
   readHttpError,
+  readJsonResponse,
   type FetchLike,
 } from './http';
 
@@ -121,9 +123,18 @@ export function createAnthropicSend(
       throw new Error(await readHttpError(response));
     }
 
-    const payload = (await response.json()) as unknown;
+    const payload = await readJsonResponse(response, 'Anthropic');
     if (!isRecord(payload)) {
       throw new Error('Anthropic вернул неожиданный ответ');
+    }
+    const payloadError = extractPayloadError(payload);
+    if (payloadError) {
+      throw new Error(payloadError);
+    }
+    if (payload.stop_reason === 'max_tokens') {
+      throw new Error(
+        'Ответ Anthropic оборвался по лимиту токенов (max_tokens). Попробуйте упростить задачу.'
+      );
     }
     const blocks = Array.isArray(payload.content) ? payload.content : [];
 

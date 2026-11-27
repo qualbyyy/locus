@@ -70,7 +70,7 @@ export function resolveEffectivePathGeometry(layer: PathLayer): {
 export function colorWithOpacity(color: string, opacity: number): string {
   const rgba = parseColorToRgba(color);
   const a = clamp(opacity, 0, 1);
-  if (!rgba) return color;
+  if (!rgba) return `rgba(0, 0, 0, ${a.toFixed(3)})`;
   return `rgba(${Math.round(rgba[0])}, ${Math.round(rgba[1])}, ${Math.round(rgba[2])}, ${(rgba[3] * a).toFixed(3)})`;
 }
 

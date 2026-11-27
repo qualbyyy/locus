@@ -1,5 +1,5 @@
 import type { AIConfig } from '../core/types';
-import { useEditorStore } from '../core/store';
+import { pauseHistory, resumeHistory, useEditorStore } from '../core/store';
 import { buildSceneContext, sceneContextToText } from './context';
 import { createSendChat, getAiProviderIssue } from './providers';
 import { TOOL_DEFINITIONS, TOOL_LABELS, executeTool } from './registry';
@@ -155,14 +155,17 @@ export async function runAiCommand(options: AiRunOptions): Promise<AiRunResult> 
   let finalText = '';
   let steps = 0;
 
-  const temporal = useEditorStore.temporal.getState();
-  const initialScene = useEditorStore.getState().scene;
-  const wasTracking = temporal.isTracking;
-  if (wasTracking) temporal.pause();
+  const startState = useEditorStore.getState();
+  const initialScene = startState.scene;
+  const startSessionId = startState.documentSessionId;
+  const wasIdle = pauseHistory();
 
   try {
     while (steps < maxSteps) {
       throwIfAborted(signal);
+      if (useEditorStore.getState().documentSessionId !== startSessionId) {
+        throw new Error('Документ изменился во время выполнения ИИ');
+      }
       steps += 1;
       onEvent?.({ type: 'step', step: steps, maxSteps });
 
@@ -176,6 +179,9 @@ export async function runAiCommand(options: AiRunOptions): Promise<AiRunResult> 
         onToken: (delta) => onEvent?.({ type: 'assistant-delta', text: delta }),
       });
       throwIfAborted(signal);
+      if (useEditorStore.getState().documentSessionId !== startSessionId) {
+        throw new Error('Документ изменился во время выполнения ИИ');
+      }
 
       if (reply.text.trim()) {
         finalText = reply.text.trim();
@@ -200,7 +206,7 @@ export async function runAiCommand(options: AiRunOptions): Promise<AiRunResult> 
           if (Number.isFinite(planned)) {
             maxSteps = Math.min(
               MAX_PLANNED_STEPS,
-              Math.max(1, Math.round(planned))
+              Math.max(2, steps + 1, Math.round(planned) + 1)
             );
             onEvent?.({ type: 'step', step: steps, maxSteps });
           }
@@ -237,15 +243,14 @@ export async function runAiCommand(options: AiRunOptions): Promise<AiRunResult> 
       }
     }
   } finally {
-    const finalScene = useEditorStore.getState().scene;
-    if (wasTracking) {
-      if (finalScene !== initialScene) {
-        useEditorStore.setState({ scene: initialScene });
-        useEditorStore.temporal.getState().resume();
-        useEditorStore.setState({ scene: finalScene, isDirty: true });
-      } else {
-        useEditorStore.temporal.getState().resume();
-      }
+    const curState = useEditorStore.getState();
+    const finalScene = curState.scene;
+    if (curState.documentSessionId === startSessionId && wasIdle && finalScene !== initialScene) {
+      useEditorStore.setState({ scene: initialScene });
+      resumeHistory();
+      useEditorStore.setState({ scene: finalScene, isDirty: true });
+    } else {
+      resumeHistory();
     }
   }
 

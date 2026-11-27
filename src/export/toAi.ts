@@ -33,18 +33,19 @@ import type {
   TextLayer,
 } from '../core/types';
 import {
+  resolveEffectivePathGeometry,
+} from '../engine/effects';
+import {
   PDFDict,
+  PDFDocument,
+  PDFFont,
+  PDFImage,
   PDFName,
   PDFNumber,
   PDFOperator,
   PDFOperatorNames,
-  PDFRef,
-} from 'pdf-lib/cjs/core';
-import {
-  PDFDocument,
-  PDFFont,
-  PDFImage,
   PDFPage,
+  PDFRef,
   rgb,
   appendBezierCurve,
   clip,
@@ -81,15 +82,25 @@ export interface AiExportOptions {
   artboardId?: string | 'all';
 }
 
+function fmtNum(v: number): number {
+  return Number.isFinite(v) ? v : 0;
+}
+
 function ptPerPx(scene: Scene): number {
-  return 72 / Math.max(1, scene.dpi || 72);
+  const dpi = Number.isFinite(scene.dpi) && scene.dpi > 0 ? scene.dpi : 72;
+  return 72 / Math.max(1, dpi);
 }
 
 /** Локальная точка слоя → PDF-точки (Y снизу вверх) с учётом матрицы и ptPerPx. */
 function toPdf(worldMatrix: Matrix2D, sceneHeight: number, scale: number) {
   return (pt: { x: number; y: number }): MappedPoint => {
     const w = applyMatrixToPoint(worldMatrix, pt);
-    return { x: w.x * scale, y: (sceneHeight - w.y) * scale, lx: pt.x, ly: pt.y };
+    return {
+      x: fmtNum(w.x * scale),
+      y: fmtNum((sceneHeight - w.y) * scale),
+      lx: pt.x,
+      ly: pt.y,
+    };
   };
 }
 
@@ -131,10 +142,17 @@ const PDF_BLEND_MODES: Partial<Record<BlendMode, string>> = {
 };
 
 /** Регистрирует ExtGState с прозрачностью и/или blendMode и возвращает его имя (для `gs`). */
-function layerGraphicsState(page: PDFPage, layer: Layer): string | null {
-  const hasOpacity = layer.opacity < 1;
+function layerGraphicsState(
+  page: PDFPage,
+  layer: Layer,
+  effectiveOpacity = layer.opacity
+): string | null {
+  const clampedOpacity = clamp(effectiveOpacity, 0, 1);
+  const hasOpacity = clampedOpacity < 1;
   const pdfBm =
-    layer.blendMode && layer.blendMode !== 'normal'
+    layer.blendMode &&
+    layer.blendMode !== 'normal' &&
+    Object.prototype.hasOwnProperty.call(PDF_BLEND_MODES, layer.blendMode)
       ? PDF_BLEND_MODES[layer.blendMode]
       : undefined;
   if (!hasOpacity && !pdfBm) return null;
@@ -143,9 +161,8 @@ function layerGraphicsState(page: PDFPage, layer: Layer): string | null {
     Type: PDFName.of('ExtGState'),
   };
   if (hasOpacity) {
-    const op = clamp(layer.opacity, 0, 1);
-    entries.ca = op;
-    entries.CA = op;
+    entries.ca = clampedOpacity;
+    entries.CA = clampedOpacity;
   }
   if (pdfBm) {
     entries.BM = PDFName.of(pdfBm);
@@ -293,7 +310,41 @@ function fontResourceName(page: PDFPage, font: PDFFont): string {
 
 /** Числовой аргумент low-level оператора. */
 function num(value: number): PDFNumber {
-  return PDFNumber.of(value);
+  return PDFNumber.of(fmtNum(value));
+}
+
+function traceSubPaths(
+  page: PDFPage,
+  subpaths: PathLayer['subpaths'],
+  worldMatrix: Matrix2D,
+  sceneHeight: number,
+  scale: number
+): void {
+  const map = toPdf(worldMatrix, sceneHeight, scale);
+  for (const subpath of subpaths) {
+    const segments = subPathToCubicSegments(subpath, map);
+    if (segments.length === 0) continue;
+    page.pushOperators(moveTo(fmtNum(segments[0].start.x), fmtNum(segments[0].start.y)));
+    for (const seg of segments) {
+      if (isLinearCubic(seg)) {
+        page.pushOperators(PDFOperator.of(PDFOperatorNames.LineTo, [num(seg.end.x), num(seg.end.y)]));
+      } else {
+        page.pushOperators(
+          appendBezierCurve(
+            fmtNum(seg.cp1.x),
+            fmtNum(seg.cp1.y),
+            fmtNum(seg.cp2.x),
+            fmtNum(seg.cp2.y),
+            fmtNum(seg.end.x),
+            fmtNum(seg.end.y)
+          )
+        );
+      }
+    }
+    if (subpath.closed) {
+      page.pushOperators(closePath());
+    }
+  }
 }
 
 /** Обводит все subpath слоя операторами `m` / `l` / `c` (+ `h` для замкнутых). */
@@ -304,24 +355,7 @@ function tracePath(
   sceneHeight: number,
   scale: number
 ): void {
-  const map = toPdf(worldMatrix, sceneHeight, scale);
-  for (const subpath of layer.subpaths) {
-    const segments = subPathToCubicSegments(subpath, map);
-    if (segments.length === 0) continue;
-    page.pushOperators(moveTo(segments[0].start.x, segments[0].start.y));
-    for (const seg of segments) {
-      if (isLinearCubic(seg)) {
-        page.pushOperators(PDFOperator.of(PDFOperatorNames.LineTo, [num(seg.end.x), num(seg.end.y)]));
-      } else {
-        page.pushOperators(
-          appendBezierCurve(seg.cp1.x, seg.cp1.y, seg.cp2.x, seg.cp2.y, seg.end.x, seg.end.y)
-        );
-      }
-    }
-    if (subpath.closed) {
-      page.pushOperators(closePath());
-    }
-  }
+  traceSubPaths(page, layer.subpaths, worldMatrix, sceneHeight, scale);
 }
 
 /** Заливка/обводка: `f` / `f*` / `S` / `B` / `B*` / `n`. */
@@ -334,13 +368,21 @@ function paintPath(
   graphicsState: string | null,
   patternCounter: { value: number }
 ): void {
+  const { subpaths, extrudeFaces } = resolveEffectivePathGeometry(layer);
   const hasFill = Boolean(layer.fill);
   const hasStroke = Boolean(layer.stroke && layer.stroke.width > 0);
-  const localBox = computeSubPathsBBox(layer.subpaths);
+  const localBox = computeSubPathsBBox(subpaths);
 
   page.pushOperators(pushGraphicsState());
   if (graphicsState) {
     page.pushOperators(setGraphicsState(graphicsState));
+  }
+
+  for (const face of extrudeFaces) {
+    const fc = toRgb(face.fill);
+    page.pushOperators(setFillingRgbColor(fc.red, fc.green, fc.blue));
+    traceSubPaths(page, face.subpaths, worldMatrix, sceneHeight, scale);
+    page.pushOperators(fill());
   }
 
   if (hasFill) {
@@ -392,7 +434,7 @@ function paintPath(
       page.pushOperators(setStrokingRgbColor(c.red, c.green, c.blue));
     }
     page.pushOperators(
-      setLineWidth(s.width * scale),
+      setLineWidth(fmtNum(s.width * scale)),
       setLineCap(lineCapStyle(s.lineCap)),
       setLineJoin(lineJoinStyle(s.lineJoin))
     );
@@ -400,14 +442,14 @@ function paintPath(
     if (dash) {
       page.pushOperators(
         setDashPattern(
-          dash.map((v) => v * scale),
-          (s.dashOffset ?? 0) * scale
+          dash.map((v) => fmtNum(v * scale)),
+          fmtNum((s.dashOffset ?? 0) * scale)
         )
       );
     }
   }
 
-  tracePath(page, layer, worldMatrix, sceneHeight, scale);
+  traceSubPaths(page, subpaths, worldMatrix, sceneHeight, scale);
 
   const evenOdd = layer.fillRule === 'evenodd';
   if (hasFill && hasStroke) {
@@ -658,31 +700,66 @@ function transcodeToPng(bytes: Uint8Array, mimeType: string): Promise<Uint8Array
     });
     const url = URL.createObjectURL(blob);
     const img = new Image();
+    let settled = false;
+    const cleanup = (canvas?: HTMLCanvasElement) => {
+      clearTimeout(timer);
+      URL.revokeObjectURL(url);
+      if (canvas) {
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+    };
+    const timer = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error(`Таймаут декодирования изображения (${mimeType})`));
+    }, 10000);
     img.onload = () => {
+      if (settled) return;
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, img.naturalWidth);
       canvas.height = Math.max(1, img.naturalHeight);
       const ctx = canvas.getContext('2d');
       if (!ctx) {
-        URL.revokeObjectURL(url);
+        settled = true;
+        cleanup(canvas);
         reject(new Error('Не удалось создать canvas для перекодирования изображения'));
         return;
       }
       ctx.drawImage(img, 0, 0);
-      URL.revokeObjectURL(url);
       canvas.toBlob(
         (pngBlob) => {
+          if (settled) {
+            cleanup(canvas);
+            return;
+          }
           if (!pngBlob) {
+            settled = true;
+            cleanup(canvas);
             reject(new Error('Не удалось перекодировать изображение в PNG'));
             return;
           }
-          pngBlob.arrayBuffer().then((buf) => resolve(new Uint8Array(buf)), reject);
+          pngBlob.arrayBuffer().then(
+            (buf) => {
+              settled = true;
+              cleanup(canvas);
+              resolve(new Uint8Array(buf));
+            },
+            (err) => {
+              settled = true;
+              cleanup(canvas);
+              reject(err);
+            }
+          );
         },
         'image/png'
       );
     };
     img.onerror = () => {
-      URL.revokeObjectURL(url);
+      if (settled) return;
+      settled = true;
+      cleanup();
       reject(new Error(`Не удалось декодировать изображение (${mimeType})`));
     };
     img.src = url;
@@ -753,7 +830,8 @@ async function drawLayerList(
   parentMatrix: Matrix2D,
   fontCache: FontCache,
   patternCounter: { value: number },
-  sceneLayers: Layer[] = layers
+  sceneLayers: Layer[] = layers,
+  parentOpacity = 1
 ): Promise<void> {
   const maskLayers = collectMaskLayersInList(layers);
   const maskLayerIds = new Set(maskLayers.map((m) => m.id));
@@ -786,17 +864,23 @@ async function drawLayerList(
       );
       clipOpen = true;
       activeClip = mask;
-    } else if (!mask && clipOpen) {
+    } else if ((!mask || mask.type !== 'path') && clipOpen) {
       closeClip();
     }
 
     const worldMatrix = multiplyMatrices(parentMatrix, getLayerMatrix(layer));
-    const graphicsState = layerGraphicsState(page, layer);
+    const effectiveOpacity = clamp(parentOpacity * layer.opacity, 0, 1);
 
     if (layer.type === 'group') {
+      const groupBm =
+        layer.blendMode &&
+        layer.blendMode !== 'normal' &&
+        Object.prototype.hasOwnProperty.call(PDF_BLEND_MODES, layer.blendMode)
+          ? layerGraphicsState(page, layer, 1)
+          : null;
       page.pushOperators(pushGraphicsState());
-      if (graphicsState) {
-        page.pushOperators(setGraphicsState(graphicsState));
+      if (groupBm) {
+        page.pushOperators(setGraphicsState(groupBm));
       }
       await drawLayerList(
         page,
@@ -807,12 +891,15 @@ async function drawLayerList(
         worldMatrix,
         fontCache,
         patternCounter,
-        sceneLayers
+        sceneLayers,
+        effectiveOpacity
       );
       page.pushOperators(popGraphicsState());
     } else if (layer.type === 'path') {
+      const graphicsState = layerGraphicsState(page, layer, effectiveOpacity);
       paintPath(page, layer, worldMatrix, sceneHeight, scale, graphicsState, patternCounter);
     } else if (layer.type === 'text') {
+      const graphicsState = layerGraphicsState(page, layer, effectiveOpacity);
       const { font, resourceName } = await resolveFont(page, layer, fontCache);
       drawTextLayer(
         page,
@@ -827,6 +914,7 @@ async function drawLayerList(
         sceneLayers
       );
     } else {
+      const graphicsState = layerGraphicsState(page, layer, effectiveOpacity);
       await drawImageLayer(
         page,
         layer,
@@ -848,15 +936,22 @@ async function renderScenePage(
   fontCache: FontCache
 ): Promise<void> {
   const scale = ptPerPx(pageScene);
-  const page = doc.addPage([pageScene.width * scale, pageScene.height * scale]);
+  const page = doc.addPage([
+    Math.max(1, fmtNum(pageScene.width * scale)),
+    Math.max(1, fmtNum(pageScene.height * scale)),
+  ]);
 
-  if (options.includeBackground !== false) {
+  if (
+    options.includeBackground !== false &&
+    pageScene.background &&
+    pageScene.background !== 'transparent'
+  ) {
     const bg = toRgb(pageScene.background);
     page.drawRectangle({
       x: 0,
       y: 0,
-      width: pageScene.width * scale,
-      height: pageScene.height * scale,
+      width: fmtNum(pageScene.width * scale),
+      height: fmtNum(pageScene.height * scale),
       color: bg,
     });
   }

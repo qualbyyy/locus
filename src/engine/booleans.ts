@@ -1,12 +1,17 @@
 import paper from 'paper/dist/paper-core';
 import {
+  IDENTITY_MATRIX,
+  applyMatrixToPoint,
+  applyMatrixToVector,
   centerSubPathsAtOrigin,
   computeSubPathsBBox,
-  localToWorld,
-  localVectorToWorld,
+  getLayerMatrix,
+  multiplyMatrices,
+  type Matrix2D,
 } from '../core/math';
-import { getPrimaryColor } from '../core/paint';
-import type { AnchorPoint, PathLayer, SubPath } from '../core/types';
+import { getParentWorldMatrix } from '../core/layerTree';
+import { getPrimaryColor, sanitizeDashArray } from '../core/paint';
+import type { AnchorPoint, Layer, PathLayer, SubPath } from '../core/types';
 
 export type BooleanOp =
   | 'unite'
@@ -68,13 +73,15 @@ export function buildWorldSubPath(
   scope: paper.PaperScope,
   layer: Pick<PathLayer, 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY'>,
   sp: SubPath,
-  forceClosed: boolean
+  forceClosed: boolean,
+  parentMatrix: Matrix2D = IDENTITY_MATRIX
 ): paper.Path | null {
   if (sp.anchors.length < 2) return null;
+  const worldM = multiplyMatrices(parentMatrix, getLayerMatrix(layer));
   const segments = sp.anchors.map((anchor) => {
-    const wPt = localToWorld(layer, { x: anchor.x, y: anchor.y });
-    const wIn = localVectorToWorld(layer, anchor.handleIn);
-    const wOut = localVectorToWorld(layer, anchor.handleOut);
+    const wPt = applyMatrixToPoint(worldM, { x: anchor.x, y: anchor.y });
+    const wIn = applyMatrixToVector(worldM, anchor.handleIn);
+    const wOut = applyMatrixToVector(worldM, anchor.handleOut);
     return new scope.Segment(
       new scope.Point(wPt.x, wPt.y),
       new scope.Point(wIn.x, wIn.y),
@@ -93,12 +100,13 @@ export function buildWorldSubPath(
 export function buildWorldPathItem(
   scope: paper.PaperScope,
   layer: PathLayer,
-  forceClosed = true
+  forceClosed = true,
+  parentMatrix: Matrix2D = IDENTITY_MATRIX
 ): paper.PathItem | null {
   const paths: paper.Path[] = [];
 
   for (const sp of layer.subpaths) {
-    const path = buildWorldSubPath(scope, layer, sp, forceClosed);
+    const path = buildWorldSubPath(scope, layer, sp, forceClosed, parentMatrix);
     if (path) paths.push(path);
   }
 
@@ -117,7 +125,7 @@ export function buildWorldPathItem(
     applyMatrix: false,
     insert: false,
   });
-  if (forceClosed && layer.fillRule === 'evenodd') {
+  if (paths.every((p) => p.closed)) {
     compound.reorient(false, true);
   }
   return compound;
@@ -260,12 +268,14 @@ function splitPathObjectsIntoIslands(paths: paper.Path[]): paper.Path[][] {
   return Array.from(islandMap.values());
 }
 
+const MIN_PIECE_AREA = 1e-3;
+
 export function toPieceItems(
   scope: paper.PaperScope,
   item: paper.PathItem
 ): paper.PathItem[] {
   if (item instanceof scope.Path) {
-    return item.segments.length >= 2 && Math.abs(item.area) > 1 ? [item] : [];
+    return item.segments.length >= 2 && Math.abs(item.area) > MIN_PIECE_AREA ? [item] : [];
   }
 
   if (item instanceof scope.CompoundPath) {
@@ -277,7 +287,7 @@ export function toPieceItems(
     const pieces: paper.PathItem[] = [];
     for (const island of islands) {
       if (island.length === 1) {
-        if (Math.abs(island[0].area) > 1) {
+        if (Math.abs(island[0].area) > MIN_PIECE_AREA) {
           pieces.push(island[0]);
         }
       } else {
@@ -287,7 +297,8 @@ export function toPieceItems(
           applyMatrix: false,
           insert: false,
         });
-        if (Math.abs(cp.area) > 1) {
+        cp.reorient(false, true);
+        if (Math.abs(cp.area) > MIN_PIECE_AREA) {
           pieces.push(cp);
         }
       }
@@ -298,40 +309,63 @@ export function toPieceItems(
   return [];
 }
 
+function hasFiniteSubPaths(subpaths: SubPath[]): boolean {
+  return subpaths.every((sp) =>
+    sp.anchors.every(
+      (a) =>
+        Number.isFinite(a.x) &&
+        Number.isFinite(a.y) &&
+        Number.isFinite(a.handleIn.x) &&
+        Number.isFinite(a.handleIn.y) &&
+        Number.isFinite(a.handleOut.x) &&
+        Number.isFinite(a.handleOut.y)
+    )
+  );
+}
+
 export function computeBooleanOperation(
   layers: PathLayer[],
-  operation: Exclude<BooleanOp, 'divide'>
+  operation: Exclude<BooleanOp, 'divide'>,
+  sceneLayers?: Layer[]
 ): BooleanResult | null {
   if (layers.length < 2) {
     return null;
   }
 
   return withHeadlessProject((scope) => {
-    const worldItems: paper.PathItem[] = [];
-    for (const layer of layers) {
-      const item = buildWorldPathItem(scope, layer, true);
-      if (!item) {
-        return null;
+    try {
+      const worldItems: paper.PathItem[] = [];
+      for (const layer of layers) {
+        const parentM = sceneLayers
+          ? getParentWorldMatrix(sceneLayers, layer.id)
+          : IDENTITY_MATRIX;
+        const item = buildWorldPathItem(scope, layer, true, parentM);
+        if (!item) {
+          return null;
+        }
+        worldItems.push(item);
       }
-      worldItems.push(item);
-    }
 
-    let acc: paper.PathItem = worldItems[0];
-    for (let i = 1; i < worldItems.length; i++) {
-      const next = worldItems[i];
-      if (operation === 'unite') {
-        acc = acc.unite(next, { insert: false });
-      } else if (operation === 'subtract') {
-        acc = acc.subtract(next, { insert: false });
-      } else if (operation === 'exclude') {
-        acc = acc.exclude(next, { insert: false });
-      } else {
-        acc = acc.intersect(next, { insert: false });
+      let acc: paper.PathItem = worldItems[0];
+      for (let i = 1; i < worldItems.length; i++) {
+        const next = worldItems[i];
+        if (operation === 'unite') {
+          acc = acc.unite(next, { insert: false });
+        } else if (operation === 'subtract') {
+          acc = acc.subtract(next, { insert: false });
+        } else if (operation === 'exclude') {
+          acc = acc.exclude(next, { insert: false });
+        } else {
+          acc = acc.intersect(next, { insert: false });
+        }
       }
-    }
 
-    const worldSubpaths = extractSubPathsFromItem(scope, acc);
-    return normalizeResult(worldSubpaths);
+      const worldSubpaths = extractSubPathsFromItem(scope, acc);
+      if (!hasFiniteSubPaths(worldSubpaths)) return null;
+      return normalizeResult(worldSubpaths);
+    } catch {
+      return null;
+    }
   });
 }
 
@@ -381,61 +415,76 @@ export function uniteBooleanResults(pieces: BooleanResult[]): BooleanResult | nu
 }
 
 export function computeDivideOperation(
-  layers: PathLayer[]
+  layers: PathLayer[],
+  sceneLayers?: Layer[]
 ): Array<BooleanResult & { sourceIndex: number }> {
   if (layers.length < 2) {
     return [];
   }
 
   return withHeadlessProject((scope) => {
-    const worldItems: paper.PathItem[] = [];
-    for (const layer of layers) {
-      const item = buildWorldPathItem(scope, layer, true);
-      if (!item) return [];
-      worldItems.push(item);
-    }
+    try {
+      const worldItems: paper.PathItem[] = [];
+      for (const layer of layers) {
+        const parentM = sceneLayers
+          ? getParentWorldMatrix(sceneLayers, layer.id)
+          : IDENTITY_MATRIX;
+        const item = buildWorldPathItem(scope, layer, true, parentM);
+        if (!item) return [];
+        worldItems.push(item);
+      }
 
-    let pieces: Array<{ item: paper.PathItem; sourceIndex: number }> =
-      toPieceItems(scope, worldItems[0]).map((item) => ({
-        item,
-        sourceIndex: 0,
-      }));
+      let pieces: Array<{ item: paper.PathItem; sourceIndex: number }> =
+        toPieceItems(scope, worldItems[0]).map((item) => ({
+          item,
+          sourceIndex: 0,
+        }));
 
-    for (let i = 1; i < worldItems.length; i++) {
-      const nextSource = worldItems[i];
-      let remB: paper.PathItem = nextSource;
-      const nextPieces: Array<{ item: paper.PathItem; sourceIndex: number }> = [];
+      for (let i = 1; i < worldItems.length; i++) {
+        const nextSource = worldItems[i];
+        let remB: paper.PathItem = nextSource;
+        const nextPieces: Array<{ item: paper.PathItem; sourceIndex: number }> = [];
 
+        for (const piece of pieces) {
+          if (!piece.item.bounds.intersects(nextSource.bounds)) {
+            nextPieces.push(piece);
+            continue;
+          }
+          const diff = piece.item.subtract(nextSource, { insert: false });
+          for (const d of toPieceItems(scope, diff)) {
+            nextPieces.push({ item: d, sourceIndex: piece.sourceIndex });
+          }
+
+          const inter = piece.item.intersect(nextSource, { insert: false });
+          for (const k of toPieceItems(scope, inter)) {
+            nextPieces.push({ item: k, sourceIndex: i });
+          }
+
+          if (remB.bounds.intersects(piece.item.bounds)) {
+            remB = remB.subtract(piece.item, { insert: false });
+          }
+        }
+
+        for (const r of toPieceItems(scope, remB)) {
+          nextPieces.push({ item: r, sourceIndex: i });
+        }
+
+        pieces = nextPieces;
+      }
+
+      const out: Array<BooleanResult & { sourceIndex: number }> = [];
       for (const piece of pieces) {
-        const diff = piece.item.subtract(nextSource, { insert: false });
-        for (const d of toPieceItems(scope, diff)) {
-          nextPieces.push({ item: d, sourceIndex: piece.sourceIndex });
+        const worldSubpaths = extractSubPathsFromItem(scope, piece.item);
+        if (!hasFiniteSubPaths(worldSubpaths)) continue;
+        const norm = normalizeResult(worldSubpaths);
+        if (norm) {
+          out.push({ ...norm, sourceIndex: piece.sourceIndex });
         }
-
-        const inter = piece.item.intersect(nextSource, { insert: false });
-        for (const k of toPieceItems(scope, inter)) {
-          nextPieces.push({ item: k, sourceIndex: i });
-        }
-
-        remB = remB.subtract(piece.item, { insert: false });
       }
-
-      for (const r of toPieceItems(scope, remB)) {
-        nextPieces.push({ item: r, sourceIndex: i });
-      }
-
-      pieces = nextPieces;
+      return out;
+    } catch {
+      return [];
     }
-
-    const out: Array<BooleanResult & { sourceIndex: number }> = [];
-    for (const piece of pieces) {
-      const worldSubpaths = extractSubPathsFromItem(scope, piece.item);
-      const norm = normalizeResult(worldSubpaths);
-      if (norm) {
-        out.push({ ...norm, sourceIndex: piece.sourceIndex });
-      }
-    }
-    return out;
   });
 }
 
@@ -478,7 +527,8 @@ export function computeSplitCompoundPath(layer: PathLayer): BooleanResult[] {
 }
 
 export function computeCombineCompoundPath(
-  layers: PathLayer[]
+  layers: PathLayer[],
+  sceneLayers?: Layer[]
 ): BooleanResult | null {
   if (layers.length < 2) {
     return null;
@@ -487,8 +537,11 @@ export function computeCombineCompoundPath(
   return withHeadlessProject((scope) => {
     const worldSubpaths: SubPath[] = [];
     for (const layer of layers) {
+      const parentM = sceneLayers
+        ? getParentWorldMatrix(sceneLayers, layer.id)
+        : IDENTITY_MATRIX;
       for (const sp of layer.subpaths) {
-        const path = buildWorldSubPath(scope, layer, sp, false);
+        const path = buildWorldSubPath(scope, layer, sp, false, parentM);
         if (!path) continue;
         const extracted = extractSubPath(path);
         if (extracted) worldSubpaths.push(extracted);
@@ -552,6 +605,14 @@ export function computeOutlineStroke(layer: PathLayer): BooleanResult | null {
     item.strokeWidth = effectiveWidth;
     item.strokeJoin = join;
     item.strokeCap = cap;
+    const dash = sanitizeDashArray(stroke.dashArray);
+    if (dash) {
+      const strokeScale = (Math.abs(layer.scaleX) + Math.abs(layer.scaleY)) / 2;
+      item.dashArray = dash.map((d) => Math.max(0.25, d * strokeScale));
+      if (stroke.dashOffset) {
+        item.dashOffset = stroke.dashOffset * strokeScale;
+      }
+    }
 
     const res = item.outline({
       width: effectiveWidth,

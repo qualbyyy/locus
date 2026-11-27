@@ -12,6 +12,7 @@ import {
 
 export interface EditorState {
   scene: Scene;
+  documentSessionId: number;
   selectedIds: string[];
   selectedNode: SelectedNodeRef | null;
   editingGroupId: string | null;
@@ -61,6 +62,7 @@ export const useEditorStore = create<EditorState>()(
   temporal(
     (set) => ({
       scene: createDefaultScene(),
+      documentSessionId: 1,
       selectedIds: [],
       selectedNode: null,
       editingGroupId: null,
@@ -130,13 +132,62 @@ export function getUndoLimit(): number {
 }
 
 export function setUndoLimit(limit: number): void {
-  const clamped = Math.min(300, Math.max(20, Math.round(limit)));
+  const safeLimit = Number.isFinite(limit) ? Math.round(limit) : 100;
+  const clamped = Math.min(300, Math.max(20, safeLimit));
   temporalOptions.limit = clamped;
-  const past = useEditorStore.temporal.getState().pastStates;
+  const temporalState = useEditorStore.temporal.getState();
+  const past = temporalState.pastStates;
+  const future = temporalState.futureStates;
+  const patch: Partial<{ pastStates: typeof past; futureStates: typeof future }> = {};
   if (past.length > clamped) {
-    useEditorStore.temporal.setState({
-      pastStates: past.slice(past.length - clamped),
-    });
+    patch.pastStates = past.slice(past.length - clamped);
+  }
+  if (future.length > clamped) {
+    patch.futureStates = future.slice(0, clamped);
+  }
+  if (patch.pastStates || patch.futureStates) {
+    useEditorStore.temporal.setState(patch);
+  }
+}
+
+let historyPauseDepth = 0;
+
+/**
+ * Приостанавливает запись Undo-истории с подсчётом вложенности.
+ * Возвращает true, если именно этот вызов перевёл историю из активного состояния в паузу.
+ */
+export function pauseHistory(): boolean {
+  const temporalState = useEditorStore.temporal.getState();
+  const wasTracking = historyPauseDepth === 0 && temporalState.isTracking;
+  historyPauseDepth += 1;
+  if (temporalState.isTracking) {
+    temporalState.pause();
+  }
+  return wasTracking;
+}
+
+/** Возобновляет запись Undo-истории, когда все вложенные паузы сняты. */
+export function resumeHistory(): void {
+  if (historyPauseDepth > 0) {
+    historyPauseDepth -= 1;
+  }
+  if (historyPauseDepth === 0) {
+    useEditorStore.temporal.getState().resume();
+  }
+}
+
+/** Принудительно сбрасывает стек пауз (при смене или сбросе документа). */
+export function resetHistoryPause(): void {
+  historyPauseDepth = 0;
+  useEditorStore.temporal.getState().resume();
+}
+
+export function withHistoryPaused<T>(fn: () => T): T {
+  pauseHistory();
+  try {
+    return fn();
+  } finally {
+    resumeHistory();
   }
 }
 

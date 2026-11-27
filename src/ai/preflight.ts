@@ -1,6 +1,5 @@
 import { getActiveArtboard, getSceneArtboards } from '../core/artboards';
 import {
-  flattenLayers,
   getLayerWorldMatrix,
   getParentWorldMatrix,
 } from '../core/layerTree';
@@ -8,6 +7,17 @@ import { computeLayerBBoxWithMatrix, decomposeMatrix } from '../core/math';
 import { isGradientPaint } from '../core/paint';
 import type { Artboard, BBox, Layer, Paint, Scene } from '../core/types';
 import { contrastRatio, normalizeHexColor } from './palette';
+
+function collectVisibleLayers(layers: Layer[], out: Layer[] = []): Layer[] {
+  for (const layer of layers) {
+    if (!layer.visible) continue;
+    out.push(layer);
+    if (layer.type === 'group') {
+      collectVisibleLayers(layer.children, out);
+    }
+  }
+  return out;
+}
 
 export type PreflightSeverity = 'error' | 'warning';
 export type PreflightCategory = 'contrast' | 'typography' | 'bounds';
@@ -92,7 +102,7 @@ export function runPreflightCheck(
   const issues: PreflightIssue[] = [];
   const artboards = getSceneArtboards(scene);
   const fallbackAb = getActiveArtboard(scene, artboardId);
-  const allFlat = flattenLayers(scene.layers);
+  const allFlat = collectVisibleLayers(scene.layers);
 
   const boxById = new Map<string, BBox>();
   for (const layer of allFlat) {

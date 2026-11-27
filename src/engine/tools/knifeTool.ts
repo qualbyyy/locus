@@ -1,6 +1,6 @@
 import { cutPathAtPoint, slicePathLayers } from '../../core/commands';
 import { getScopeLayers, getScopeWorldMatrix } from '../../core/layerTree';
-import { applyMatrixToPoint, invertMatrix } from '../../core/math';
+import { applyMatrixToPoint, decomposeMatrix, invertMatrix } from '../../core/math';
 import { useEditorStore } from '../../core/store';
 import type { PathLayer, Point2D } from '../../core/types';
 import { findTopLayerAtPoint } from './selectTool';
@@ -77,7 +77,9 @@ export function createKnifeTool(): CanvasToolController {
       if (isScissorsMode || dragLength < 4 / zoom) {
         // Scissors click: cut or open nearest contour at point
         const scopePt = applyMatrixToPoint(invScope, event.point);
-        const tol = (isScissorsMode ? 14 : 10) / zoom;
+        const invDecomp = decomposeMatrix(invScope);
+        const scopeScale = Math.max(0.05, (Math.abs(invDecomp.scaleX) + Math.abs(invDecomp.scaleY)) / 2);
+        const tol = ((isScissorsMode ? 14 : 10) / zoom) * scopeScale;
         const hitLayer = findTopLayerAtPoint(
           ctx,
           event.point,

@@ -119,7 +119,7 @@ export function extractArtboardScene(scene: Scene, artboard: Artboard): Scene {
   const includedIds = new Set<string>();
 
   for (const layer of scene.layers) {
-    const box = computeLayerWorldBBox(layer);
+    const box = computeLayerWorldBBox(layer, scene.layers);
     const pad = getSubtreePadding(layer);
     const paddedBox: BBox = {
       x: box.x - pad,

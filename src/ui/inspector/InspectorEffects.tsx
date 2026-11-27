@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, Sparkles, X } from 'lucide-react';
 import { convertTextLayersToOutlines } from '../../core/commands';
 import { mapLayerTree } from '../../core/layerTree';
-import { useEditorStore } from '../../core/store';
+import { pauseHistory, resumeHistory, useEditorStore } from '../../core/store';
 import type {
   ColorAdjustEffect,
   DistortEffect,
@@ -164,6 +164,7 @@ export function InspectorEffects({
 
   const dragStateRef = useRef<{
     baseScene: Scene;
+    documentSessionId: number;
     ids: string[];
     latestPatch: Partial<LayerEffects> | null;
   } | null>(null);
@@ -173,7 +174,7 @@ export function InspectorEffects({
     return () => {
       if (dragStateRef.current) {
         dragStateRef.current = null;
-        useEditorStore.temporal.getState().resume();
+        resumeHistory();
       }
     };
   }, []);
@@ -233,9 +234,14 @@ export function InspectorEffects({
 
   const beginLiveDrag = useCallback(() => {
     if (dragStateRef.current || layerIds.length === 0) return;
-    const baseScene = useEditorStore.getState().scene;
-    useEditorStore.temporal.getState().pause();
-    dragStateRef.current = { baseScene, ids: [...layerIds], latestPatch: null };
+    const st = useEditorStore.getState();
+    pauseHistory();
+    dragStateRef.current = {
+      baseScene: st.scene,
+      documentSessionId: st.documentSessionId,
+      ids: [...layerIds],
+      latestPatch: null,
+    };
   }, [layerIds]);
 
   const applyLivePatch = useCallback(
@@ -264,9 +270,13 @@ export function InspectorEffects({
     const active = dragStateRef.current;
     if (!active) return;
     dragStateRef.current = null;
-    useEditorStore.setState({ scene: active.baseScene });
-    useEditorStore.temporal.getState().resume();
-    if (active.latestPatch) {
+    const sameSession =
+      useEditorStore.getState().documentSessionId === active.documentSessionId;
+    if (sameSession) {
+      useEditorStore.setState({ scene: active.baseScene });
+    }
+    resumeHistory();
+    if (sameSession && active.latestPatch) {
       onUpdateEffects(active.ids, active.latestPatch);
     }
   }, [onUpdateEffects]);

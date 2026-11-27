@@ -134,9 +134,9 @@ function mapWarpUV(u: number, v: number, warp: WarpEffect): [number, number] {
       const absB = Math.abs(bend);
       const maxTheta = absB * Math.PI * 0.45;
       const theta = nu * maxTheta;
-      const radius = 1 / Math.max(0.08, absB * 0.72);
+      const radius = 1 / Math.max(1e-4, absB * 0.72);
       const r = radius - s * nv * 0.45;
-      const normX = Math.max(0.15, radius * Math.sin(maxTheta));
+      const normX = Math.max(1e-4, radius * Math.sin(maxTheta));
       nu = (r * Math.sin(theta)) / normX;
       nv = s * (radius - Math.cos(theta) * r) + (1 - absB * 0.25) * nv * 0.45;
       break;

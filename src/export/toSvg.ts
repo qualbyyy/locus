@@ -7,8 +7,6 @@ import {
   clamp,
   computeLayerLocalBBox,
   computeSubPathsBBox,
-  localToWorld,
-  type LayerTransform,
 } from '../core/math';
 import {
   isGradientPaint,
@@ -60,12 +58,12 @@ export interface SvgExportOptions {
   padding?: number;
 }
 
-function toWorld(layer: LayerTransform) {
-  return (pt: { x: number; y: number }): MappedPoint => {
-    const w = localToWorld(layer, pt);
-    return { x: w.x, y: w.y, lx: pt.x, ly: pt.y };
-  };
-}
+const toLocal = (pt: { x: number; y: number }): MappedPoint => ({
+  x: pt.x,
+  y: pt.y,
+  lx: pt.x,
+  ly: pt.y,
+});
 
 /** Идентификатор слоя, безопасный для `id`/`url(#...)` в SVG. */
 export function safeSvgId(id: string): string {
@@ -244,15 +242,14 @@ function buildTextSvg(layer: TextLayer, allSceneLayers: Layer[]): string {
 
 function buildPathSvg(layer: PathLayer): string {
   const { subpaths, extrudeFaces } = resolveEffectivePathGeometry(layer);
-  const worldMap = toWorld(layer);
   const facePaths = extrudeFaces
     .map((face) => {
-      const fd = buildSvgPathData(face.subpaths, worldMap);
+      const fd = buildSvgPathData(face.subpaths, toLocal);
       return `<path d="${fd}" fill-rule="nonzero" fill="${colorToCssRgb(face.fill)}" stroke="none"/>`;
     })
     .join('');
 
-  const d = buildSvgPathData(subpaths, worldMap);
+  const d = buildSvgPathData(subpaths, toLocal);
   const attrs: string[] = [`d="${d}"`, `fill-rule="${layer.fillRule}"`];
   const sid = safeSvgId(layer.id);
   if (!layer.fill) {
@@ -286,9 +283,9 @@ function buildPathSvg(layer: PathLayer): string {
 
 async function buildImageSvg(layer: Layer & { type: 'image' }): Promise<string> {
   const dataUrl = await assetToDataUrl(layer.assetId);
-  if (!dataUrl) return '';
+  if (!dataUrl || !dataUrl.startsWith('data:image/')) return '';
   return (
-    `<image href="${dataUrl}" x="${formatNumber(-layer.width / 2)}" ` +
+    `<image href="${escapeXml(dataUrl)}" x="${formatNumber(-layer.width / 2)}" ` +
     `y="${formatNumber(-layer.height / 2)}" width="${formatNumber(layer.width)}" ` +
     `height="${formatNumber(layer.height)}" preserveAspectRatio="none"/>`
   );
@@ -313,7 +310,7 @@ function collectMaskLayers(scene: Scene): PathLayer[] {
 function buildMaskDefs(maskLayers: PathLayer[]): string {
   return maskLayers
     .map((mask) => {
-      const d = buildSvgPathData(mask.subpaths, toWorld(mask));
+      const d = buildSvgPathData(mask.subpaths, toLocal);
       const transform = layerMatrixAttr(mask);
       const tAttr = transform ? ` transform="${transform}"` : '';
       return `<clipPath id="clip-${safeSvgId(mask.id)}"><path d="${d}" clip-rule="${mask.fillRule}"${tAttr}/></clipPath>`;
@@ -377,8 +374,8 @@ function buildGradientDefs(visibleLayers: Layer[], allSceneLayers: Layer[]): str
           formatSvgGradientDef(
             `grad-fill-${sid}`,
             layer.fill,
-            localToWorld(layer, ep.origin),
-            localToWorld(layer, ep.destination)
+            ep.origin,
+            ep.destination
           )
         );
       }
@@ -388,8 +385,8 @@ function buildGradientDefs(visibleLayers: Layer[], allSceneLayers: Layer[]): str
           formatSvgGradientDef(
             `grad-stroke-${sid}`,
             layer.stroke.color,
-            localToWorld(layer, ep.origin),
-            localToWorld(layer, ep.destination)
+            ep.origin,
+            ep.destination
           )
         );
       }
@@ -550,6 +547,14 @@ function buildFilterDefs(visibleLayers: Layer[]): string {
     .join('');
 }
 
+function escapeCssString(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/[\r\n\0]/g, '')
+    .replace(/<\//g, '<\\/');
+}
+
 function buildCustomFontStyleDefs(visibleLayers: Layer[]): string {
   const rules: string[] = [];
   const seen = new Set<string>();
@@ -560,8 +565,14 @@ function buildCustomFontStyleDefs(visibleLayers: Layer[]): string {
     const key = `${entry.family.toLowerCase()}:${entry.weight}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const dataUrl = bytesToDataUrl(entry.bytes, entry.mimeType);
-    const escapedFamily = entry.family.replace(/'/g, "\\'");
+    const safeMime = /^font\/(woff2|woff|ttf|otf)$/i.test(entry.mimeType)
+      ? entry.mimeType.toLowerCase()
+      : 'font/ttf';
+    const dataUrl = bytesToDataUrl(entry.bytes, safeMime);
+    if (!/^data:font\/(?:woff2|woff|ttf|otf);base64,[A-Za-z0-9+/=]+$/i.test(dataUrl)) {
+      continue;
+    }
+    const escapedFamily = escapeCssString(entry.family);
     rules.push(
       `@font-face{font-family:'${escapedFamily}';font-weight:${entry.weight};src:url('${dataUrl}');}`
     );
@@ -572,14 +583,18 @@ function buildCustomFontStyleDefs(visibleLayers: Layer[]): string {
 async function buildGroupNodeSvg(
   group: GroupLayer,
   maskLayerIds: Set<string>,
-  allSceneLayers: Layer[]
+  allSceneLayers: Layer[],
+  clipId?: string | null
 ): Promise<string> {
   const attrs: string[] = [
     `id="${safeSvgId(group.id)}"`,
     `data-name="${escapeXml(group.name)}"`,
   ];
+  if (clipId) {
+    attrs.push(`clip-path="url(#clip-${safeSvgId(clipId)})"`);
+  }
   if (group.opacity < 1) {
-    attrs.push(`opacity="${formatNumber(group.opacity)}"`);
+    attrs.push(`opacity="${formatNumber(clamp(group.opacity, 0, 1))}"`);
   }
   const transform = layerMatrixAttr(group);
   if (transform) {
@@ -589,7 +604,7 @@ async function buildGroupNodeSvg(
     attrs.push(`filter="url(#fx-${safeSvgId(group.id)})"`);
   }
   if (group.blendMode && group.blendMode !== 'normal') {
-    attrs.push(`style="mix-blend-mode:${group.blendMode}"`);
+    attrs.push(`style="mix-blend-mode:${escapeXml(group.blendMode)}"`);
   }
   const body = await buildSvgBodyForList(group.children, maskLayerIds, allSceneLayers);
   return `<g ${attrs.join(' ')}>${body}</g>`;
@@ -598,7 +613,8 @@ async function buildGroupNodeSvg(
 async function buildLayerContent(
   layer: Layer,
   maskLayerIds: Set<string>,
-  allSceneLayers: Layer[]
+  allSceneLayers: Layer[],
+  includeOpacity = false
 ): Promise<string> {
   if (layer.type === 'group') {
     return buildGroupNodeSvg(layer, maskLayerIds, allSceneLayers);
@@ -607,11 +623,14 @@ async function buildLayerContent(
   const hasFx = hasRasterEffects(layer.effects);
   const wrap = (content: string) => {
     let out = transform ? `<g transform="${transform}">${content}</g>` : content;
+    if (includeOpacity && layer.opacity < 1) {
+      out = `<g opacity="${formatNumber(clamp(layer.opacity, 0, 1))}">${out}</g>`;
+    }
     if (hasFx) {
       out = `<g filter="url(#fx-${safeSvgId(layer.id)})">${out}</g>`;
     }
     if (layer.blendMode && layer.blendMode !== 'normal') {
-      out = `<g style="mix-blend-mode:${layer.blendMode}">${out}</g>`;
+      out = `<g style="mix-blend-mode:${escapeXml(layer.blendMode)}">${out}</g>`;
     }
     return out;
   };
@@ -627,21 +646,25 @@ async function buildLayerGroup(
   maskLayerIds: Set<string>,
   allSceneLayers: Layer[]
 ): Promise<string> {
-  if (group.length === 1 && group[0].type === 'group' && !clipId) {
-    return buildGroupNodeSvg(group[0], maskLayerIds, allSceneLayers);
+  if (group.length === 1 && group[0].type === 'group') {
+    return buildGroupNodeSvg(group[0], maskLayerIds, allSceneLayers, clipId);
   }
   const attrs: string[] = [];
   if (clipId) {
     attrs.push(`clip-path="url(#clip-${safeSvgId(clipId)})"`);
   }
   const first = group[0];
-  attrs.push(`id="${safeSvgId(first.id)}"`);
+  const groupId = group.length === 1 ? safeSvgId(first.id) : `clipwrap-${safeSvgId(first.id)}`;
+  attrs.push(`id="${groupId}"`);
   attrs.push(`data-name="${escapeXml(group.length === 1 ? first.name : `Группа (${group.length})`)}"`);
   if (group.length === 1 && first.type !== 'group' && first.opacity < 1) {
-    attrs.push(`opacity="${formatNumber(first.opacity)}"`);
+    attrs.push(`opacity="${formatNumber(clamp(first.opacity, 0, 1))}"`);
   }
+  const includeChildOpacity = group.length > 1;
   const inner = await Promise.all(
-    group.map((layer) => buildLayerContent(layer, maskLayerIds, allSceneLayers))
+    group.map((layer) =>
+      buildLayerContent(layer, maskLayerIds, allSceneLayers, includeChildOpacity)
+    )
   );
   return `<g ${attrs.join(' ')}>${inner.join('')}</g>`;
 }

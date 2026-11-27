@@ -74,20 +74,15 @@ export function resolvePathMatrixRelativeToText(
   textLayer: TextLayer,
   layers?: Layer[]
 ): Matrix2D {
-  if (!layers) {
-    return getLayerMatrix(pathLayer);
-  }
-  const pathWorld = getLayerWorldMatrix(layers, pathLayer.id);
-  const textParentWorld = getParentWorldMatrix(layers, textLayer.id);
-  const rel = multiplyMatrices(invertMatrix(textParentWorld), pathWorld);
-  // Also factor inverse of textLayer's own matrix if textLayer isn't identity,
-  // or keep placements in textLayer's own local frame when sync applies textLayer's transform.
-  // Actually placements are computed in textLayer's own local frame if we want textLayer.x/y/rot/scale
-  // to offset from path, so divide by textLayer's own transform only if non-identity?
-  // No! Wait: when attachTextToPath sets textLayer.x/y=0, rot=0, scale=1, textLayer.local === textLayer.parentLocal.
-  // If user subsequently drags/rotates/scales textLayer directly, applying getLayerMatrix(textLayer) shifts it cleanly
-  // IF placements are computed in relative scope (parent frame). Wait: if pathWorld != parent, rel puts curve in parent frame!
-  return rel;
+  const pathWorld = layers
+    ? getLayerWorldMatrix(layers, pathLayer.id)
+    : getLayerMatrix(pathLayer);
+  const textParentWorld = layers
+    ? getParentWorldMatrix(layers, textLayer.id)
+    : IDENTITY_MATRIX;
+  const relParent = multiplyMatrices(invertMatrix(textParentWorld), pathWorld);
+  // Компенсируем собственную матрицу textLayer, чтобы дальнейший applyLayerMatrixToItem(textLayer) оставлял кривую на месте без орбиты.
+  return multiplyMatrices(invertMatrix(getLayerMatrix(textLayer)), relParent);
 }
 
 export function pickPrimaryHostSubPath(subpaths: SubPath[]): SubPath | null {

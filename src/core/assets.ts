@@ -6,6 +6,7 @@ const blobUrls = new Set<string>();
 const listeners = new Set<() => void>();
 
 let assetFallbackCounter = 0;
+let registryGeneration = 0;
 
 function createAssetId(): string {
   if (
@@ -309,12 +310,17 @@ function decodeHtmlImage(src: string): Promise<HTMLImageElement | null> {
   });
 }
 
-export async function registerAssetFromBytes(params: {
+export interface PreparedAsset {
+  entry: AssetEntry;
+  decodedImg: HTMLImageElement | null;
+}
+
+export async function prepareAssetFromBytes(params: {
   bytes: Uint8Array;
   name: string;
   mimeType?: string;
   id?: string;
-}): Promise<AssetEntry> {
+}): Promise<PreparedAsset> {
   const copy = new Uint8Array(params.bytes.byteLength);
   copy.set(params.bytes);
 
@@ -343,19 +349,89 @@ export async function registerAssetFromBytes(params: {
   );
 
   const id = params.id ?? createAssetId();
-  const entry: AssetEntry = {
-    id,
-    name: params.name,
-    mimeType,
-    blob,
-    objectUrl,
-    naturalWidth,
-    naturalHeight,
+  return {
+    entry: {
+      id,
+      name: params.name,
+      mimeType,
+      blob,
+      objectUrl,
+      naturalWidth,
+      naturalHeight,
+    },
+    decodedImg,
   };
+}
 
-  assets.set(id, entry);
+export function disposePreparedAssets(prepared: PreparedAsset[]): void {
+  if (typeof URL === 'undefined' || typeof URL.revokeObjectURL !== 'function') return;
+  for (const item of prepared) {
+    if (blobUrls.has(item.entry.objectUrl)) {
+      URL.revokeObjectURL(item.entry.objectUrl);
+      blobUrls.delete(item.entry.objectUrl);
+    }
+  }
+}
+
+export function commitLoadedAssets(prepared: PreparedAsset[]): void {
+  registryGeneration += 1;
+  if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+    const keepUrls = new Set(prepared.map((p) => p.entry.objectUrl));
+    for (const url of Array.from(blobUrls)) {
+      if (!keepUrls.has(url)) {
+        URL.revokeObjectURL(url);
+        blobUrls.delete(url);
+      }
+    }
+  }
+  imageElements.clear();
+  assets.clear();
+  for (const item of prepared) {
+    assets.set(item.entry.id, item.entry);
+    if (item.decodedImg) {
+      imageElements.set(item.entry.id, item.decodedImg);
+    }
+  }
+  notifyAssetListeners();
+}
+
+export async function registerAssetFromBytes(params: {
+  bytes: Uint8Array;
+  name: string;
+  mimeType?: string;
+  id?: string;
+}): Promise<AssetEntry> {
+  const genAtStart = registryGeneration;
+  const { entry, decodedImg } = await prepareAssetFromBytes(params);
+
+  if (registryGeneration !== genAtStart) {
+    if (
+      typeof URL !== 'undefined' &&
+      typeof URL.revokeObjectURL === 'function' &&
+      blobUrls.has(entry.objectUrl)
+    ) {
+      URL.revokeObjectURL(entry.objectUrl);
+      blobUrls.delete(entry.objectUrl);
+    }
+    return entry;
+  }
+
+  const prev = assets.get(entry.id);
+  if (prev && prev.objectUrl !== entry.objectUrl) {
+    if (
+      typeof URL !== 'undefined' &&
+      typeof URL.revokeObjectURL === 'function' &&
+      blobUrls.has(prev.objectUrl)
+    ) {
+      URL.revokeObjectURL(prev.objectUrl);
+      blobUrls.delete(prev.objectUrl);
+    }
+    imageElements.delete(entry.id);
+  }
+
+  assets.set(entry.id, entry);
   if (decodedImg) {
-    imageElements.set(id, decodedImg);
+    imageElements.set(entry.id, decodedImg);
   }
   notifyAssetListeners();
   return entry;
@@ -384,6 +460,7 @@ export async function assetToDataUrl(assetId: string): Promise<string | null> {
 }
 
 export function clearAssets(): void {
+  registryGeneration += 1;
   if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
     for (const url of blobUrls) {
       URL.revokeObjectURL(url);

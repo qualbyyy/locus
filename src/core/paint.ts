@@ -153,38 +153,42 @@ export function createDefaultRadialGradient(baseHex = '#da7756'): GradientPaint 
 export function getGradientAngleDeg(grad: GradientPaint): number {
   const dx = grad.end.x - grad.start.x;
   const dy = grad.end.y - grad.start.y;
+  if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) {
+    return 0;
+  }
   const deg = radToDeg(Math.atan2(dy, dx));
-  return ((deg % 360) + 360) % 360;
+  return Number.isFinite(deg) ? ((deg % 360) + 360) % 360 : 0;
 }
 
 export function setGradientAngleDeg(
   grad: GradientPaint,
   angleDeg: number
 ): GradientPaint {
-  const rad = degToRad(angleDeg);
+  const safeAngle = Number.isFinite(angleDeg) ? angleDeg : 0;
+  const rad = degToRad(safeAngle);
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
 
+  const sx = Number.isFinite(grad.start.x) ? grad.start.x : 0;
+  const sy = Number.isFinite(grad.start.y) ? grad.start.y : 0.5;
+  const ex = Number.isFinite(grad.end.x) ? grad.end.x : 1;
+  const ey = Number.isFinite(grad.end.y) ? grad.end.y : 0.5;
+
   if (grad.kind === 'radial') {
-    const radius = Math.max(
-      0.1,
-      Math.hypot(grad.end.x - grad.start.x, grad.end.y - grad.start.y)
-    );
+    const radius = Math.max(0.1, Math.hypot(ex - sx, ey - sy));
     return {
       ...clonePaint(grad),
+      start: { x: sx, y: sy },
       end: {
-        x: grad.start.x + cos * radius,
-        y: grad.start.y + sin * radius,
+        x: sx + cos * radius,
+        y: sy + sin * radius,
       },
     };
   }
 
-  const cx = (grad.start.x + grad.end.x) / 2;
-  const cy = (grad.start.y + grad.end.y) / 2;
-  const halfLen = Math.max(
-    0.1,
-    Math.hypot(grad.end.x - grad.start.x, grad.end.y - grad.start.y) / 2
-  );
+  const cx = (sx + ex) / 2;
+  const cy = (sy + ey) / 2;
+  const halfLen = Math.max(0.1, Math.hypot(ex - sx, ey - sy) / 2);
   return {
     ...clonePaint(grad),
     start: { x: cx - cos * halfLen, y: cy - sin * halfLen },
@@ -196,15 +200,21 @@ export function resolveGradientEndpoints(
   grad: GradientPaint,
   box: BBox
 ): { origin: Point2D; destination: Point2D; radius: number } {
-  const w = Math.max(1, box.width);
-  const h = Math.max(1, box.height);
+  const w = Number.isFinite(box.width) ? Math.max(1, box.width) : 1;
+  const h = Number.isFinite(box.height) ? Math.max(1, box.height) : 1;
+  const bx = Number.isFinite(box.x) ? box.x : 0;
+  const by = Number.isFinite(box.y) ? box.y : 0;
+  const sx = Number.isFinite(grad.start.x) ? grad.start.x : 0;
+  const sy = Number.isFinite(grad.start.y) ? grad.start.y : 0.5;
+  const ex = Number.isFinite(grad.end.x) ? grad.end.x : 1;
+  const ey = Number.isFinite(grad.end.y) ? grad.end.y : 0.5;
   const origin = {
-    x: box.x + grad.start.x * w,
-    y: box.y + grad.start.y * h,
+    x: bx + sx * w,
+    y: by + sy * h,
   };
   const destination = {
-    x: box.x + grad.end.x * w,
-    y: box.y + grad.end.y * h,
+    x: bx + ex * w,
+    y: by + ey * h,
   };
   const radius = Math.max(
     0.001,

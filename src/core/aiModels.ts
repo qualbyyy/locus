@@ -174,9 +174,26 @@ async function readErrorMessage(response: Response): Promise<string> {
   }
 }
 
-async function fetchJsonWithTimeout(url: string, init?: RequestInit): Promise<unknown> {
+async function fetchJsonWithTimeout(
+  url: string,
+  init?: RequestInit,
+  externalSignal?: AbortSignal
+): Promise<unknown> {
+  if (externalSignal?.aborted) {
+    const abortErr = new Error('Запрос отменён');
+    abortErr.name = 'AbortError';
+    throw abortErr;
+  }
+
   const controller = new AbortController();
-  const timer = globalThis.setTimeout(() => controller.abort(), 10000);
+  let timedOut = false;
+  const onExternalAbort = () => controller.abort();
+  externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+  const timer = globalThis.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, 10000);
+
   try {
     const response = await httpFetch(url, {
       ...init,
@@ -185,25 +202,39 @@ async function fetchJsonWithTimeout(url: string, init?: RequestInit): Promise<un
     if (!response.ok) {
       throw new Error(await readErrorMessage(response));
     }
-    return await response.json();
+    const text = await response.text();
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new Error('Провайдер вернул некорректный JSON');
+    }
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error('Таймаут запроса (10 сек)');
+      if (timedOut) {
+        throw new Error('Таймаут запроса (10 сек)');
+      }
+      throw err;
     }
     throw err;
   } finally {
     globalThis.clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
   }
 }
 
-export async function fetchProviderModels(ai: AIConfig): Promise<string[]> {
+export async function fetchProviderModels(
+  ai: AIConfig,
+  signal?: AbortSignal
+): Promise<string[]> {
   if (ai.provider === 'gemini') {
     const key = ai.geminiApiKey.trim();
     if (!key) {
       throw new Error('Нет API-ключа для загрузки моделей');
     }
     const payload = await fetchJsonWithTimeout(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`
+      'https://generativelanguage.googleapis.com/v1beta/models',
+      { headers: { 'x-goog-api-key': key } },
+      signal
     );
     const models = parseGeminiModels(payload);
     if (models.length === 0) {
@@ -217,13 +248,17 @@ export async function fetchProviderModels(ai: AIConfig): Promise<string[]> {
     if (!key) {
       throw new Error('Нет API-ключа для загрузки моделей');
     }
-    const payload = await fetchJsonWithTimeout('https://api.anthropic.com/v1/models', {
-      headers: {
-        'x-api-key': key,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
+    const payload = await fetchJsonWithTimeout(
+      'https://api.anthropic.com/v1/models',
+      {
+        headers: {
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
       },
-    });
+      signal
+    );
     const models = parseOpenAIModels(payload);
     if (models.length === 0) {
       throw new Error('Anthropic не вернул список моделей');
@@ -233,7 +268,7 @@ export async function fetchProviderModels(ai: AIConfig): Promise<string[]> {
 
   if (ai.provider === 'ollama') {
     const base = normalizeOllamaBaseUrl(ai.ollamaBaseUrl);
-    const payload = await fetchJsonWithTimeout(`${base}/api/tags`);
+    const payload = await fetchJsonWithTimeout(`${base}/api/tags`, undefined, signal);
     const models = parseOllamaModels(payload);
     if (models.length === 0) {
       throw new Error('В Ollama не найдено установленных моделей');
@@ -250,7 +285,7 @@ export async function fetchProviderModels(ai: AIConfig): Promise<string[]> {
   if (key) {
     headers.Authorization = `Bearer ${key}`;
   }
-  const payload = await fetchJsonWithTimeout(`${base}/models`, { headers });
+  const payload = await fetchJsonWithTimeout(`${base}/models`, { headers }, signal);
   const models = parseOpenAIModels(payload);
   if (models.length === 0) {
     throw new Error('Провайдер не вернул доступных моделей');

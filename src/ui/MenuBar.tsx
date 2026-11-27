@@ -189,11 +189,13 @@ function MenuDropdown({
             </button>
 
             {subOpen && item.submenu && (
-              <MenuDropdown
-                items={item.submenu}
-                onSelectDone={onSelectDone}
-                className="animate-fade-in absolute left-full top-0 z-50 ml-0.5 min-w-52 rounded-md border border-paper-border bg-paper-panel py-1 text-[12px] shadow-xl"
-              />
+              <div className="absolute left-full top-0 z-50 pl-1">
+                <MenuDropdown
+                  items={item.submenu}
+                  onSelectDone={onSelectDone}
+                  className="animate-fade-in min-w-52 rounded-md border border-paper-border bg-paper-panel py-1 text-[12px] shadow-xl"
+                />
+              </div>
             )}
           </div>
         );
@@ -221,14 +223,16 @@ export function MenuBar({
     };
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
         setOpenMenuId(null);
       }
     };
     window.addEventListener('mousedown', onPointerDown);
-    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, true);
     return () => {
       window.removeEventListener('mousedown', onPointerDown);
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onKeyDown, true);
     };
   }, [openMenuId]);
 

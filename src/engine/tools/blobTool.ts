@@ -1,4 +1,4 @@
-import { createShapeLayer } from '../../core/commands';
+import { createShapeLayer, updateLayers } from '../../core/commands';
 import { getScopeWorldMatrix } from '../../core/layerTree';
 import {
   applyMatrixToPoint,
@@ -117,7 +117,7 @@ export function createBlobTool(): CanvasToolController {
         y: finalBox.cy,
       });
       const invDecomp = decomposeMatrix(invScope);
-      createShapeLayer({
+      const created = createShapeLayer({
         x: centerScope.x,
         y: centerScope.y,
         width: finalBox.width * Math.abs(invDecomp.scaleX),
@@ -126,6 +126,9 @@ export function createBlobTool(): CanvasToolController {
         seed: currentSeed,
         parentGroupId: state.editingGroupId,
       });
+      if (Math.abs(invDecomp.rotation) > 1e-4) {
+        updateLayers([created.id], { rotation: invDecomp.rotation });
+      }
     },
 
     cancel(ctx: ToolContext) {

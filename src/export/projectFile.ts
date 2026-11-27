@@ -1,21 +1,33 @@
 import JSZip from 'jszip';
 import { getSceneArtboards } from '../core/artboards';
-import { clearAssets, getAllAssets, registerAssetFromBytes } from '../core/assets';
+import {
+  commitLoadedAssets,
+  disposePreparedAssets,
+  getAllAssets,
+  prepareAssetFromBytes,
+  type PreparedAsset,
+} from '../core/assets';
 import { loadScene } from '../core/commands';
 import {
-  clearProjectFonts,
+  commitLoadedProjectFonts,
   extensionForFontMime,
   getProjectFonts,
-  registerProjectFontFromBytes,
+  prepareProjectFontEntry,
+  type ProjectFontEntry,
 } from '../core/fonts';
 import { flattenLayers } from '../core/layerTree';
 import { useEditorStore } from '../core/store';
-import type { Artboard, Scene } from '../core/types';
+import type { Artboard, Layer, Scene } from '../core/types';
 
 export const LOCUS_SCENE_ENTRY = 'scene.json';
 export const LOCUS_ASSET_DIR = 'assets';
 export const LOCUS_FONT_DIR = 'fonts';
 export const LOCUS_FONT_MANIFEST = 'fonts/manifest.json';
+
+const MAX_ZIP_ENTRIES = 2000;
+const MAX_SINGLE_ENTRY_BYTES = 64 * 1024 * 1024;
+const MAX_TOTAL_UNCOMPRESSED_BYTES = 256 * 1024 * 1024;
+const MAX_LAYER_DEPTH = 64;
 
 interface StoredFontManifestEntry {
   id: string;
@@ -104,6 +116,75 @@ function isValidArtboard(ab: unknown): ab is Artboard {
   );
 }
 
+function isSafeArchivePath(path: string): boolean {
+  if (!path || path.length > 260) return false;
+  if (path.startsWith('/') || path.includes('\\') || path.includes('\0')) return false;
+  const parts = path.split('/');
+  return parts.every((part) => part.length > 0 && part !== '.' && part !== '..');
+}
+
+function isSafeArchiveId(id: string): boolean {
+  return (
+    id.length > 0 &&
+    id.length <= 128 &&
+    !id.includes('/') &&
+    !id.includes('\\') &&
+    !id.includes('..') &&
+    !id.includes('\0')
+  );
+}
+
+function isFiniteNum(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
+function isValidLayerNode(value: unknown, depth: number): value is Layer {
+  if (depth > MAX_LAYER_DEPTH || !value || typeof value !== 'object') return false;
+  const l = value as Partial<Layer>;
+  if (
+    typeof l.id !== 'string' ||
+    l.id.length === 0 ||
+    typeof l.name !== 'string' ||
+    typeof l.visible !== 'boolean' ||
+    typeof l.locked !== 'boolean' ||
+    !isFiniteNum(l.x) ||
+    !isFiniteNum(l.y) ||
+    !isFiniteNum(l.rotation) ||
+    !isFiniteNum(l.scaleX) ||
+    !isFiniteNum(l.scaleY) ||
+    !isFiniteNum(l.opacity)
+  ) {
+    return false;
+  }
+  switch (l.type) {
+    case 'path':
+      return Array.isArray(l.subpaths);
+    case 'text':
+      return (
+        typeof l.content === 'string' &&
+        isFiniteNum(l.fontSize) &&
+        l.fontSize > 0 &&
+        typeof l.fontFamily === 'string'
+      );
+    case 'image':
+      return (
+        typeof l.assetId === 'string' &&
+        l.assetId.length > 0 &&
+        isFiniteNum(l.width) &&
+        l.width > 0 &&
+        isFiniteNum(l.height) &&
+        l.height > 0
+      );
+    case 'group':
+      return (
+        Array.isArray(l.children) &&
+        l.children.every((child) => isValidLayerNode(child, depth + 1))
+      );
+    default:
+      return false;
+  }
+}
+
 function isValidScene(value: unknown): value is Scene {
   if (!value || typeof value !== 'object') return false;
   const s = value as Partial<Scene>;
@@ -118,8 +199,10 @@ function isValidScene(value: unknown): value is Scene {
     s.height <= 0 ||
     typeof s.dpi !== 'number' ||
     !Number.isFinite(s.dpi) ||
+    s.dpi <= 0 ||
     typeof s.background !== 'string' ||
-    !Array.isArray(s.layers)
+    !Array.isArray(s.layers) ||
+    !s.layers.every((layer) => isValidLayerNode(layer, 0))
   ) {
     return false;
   }
@@ -198,31 +281,59 @@ export async function parseLocusArchive(bytes: Uint8Array): Promise<{
   }>;
 }> {
   const zip = await JSZip.loadAsync(bytes);
+  const allEntries = Object.values(zip.files);
+  if (allEntries.length > MAX_ZIP_ENTRIES) {
+    throw new Error('Архив .locus содержит слишком много записей');
+  }
+  for (const entry of allEntries) {
+    const cleanName = entry.dir ? entry.name.replace(/\/+$/, '') : entry.name;
+    if (cleanName && !isSafeArchivePath(cleanName)) {
+      throw new Error(`Небезопасный путь в архиве: ${entry.name}`);
+    }
+  }
+
+  let totalUncompressed = 0;
+  const readBoundedBytes = async (entry: JSZip.JSZipObject): Promise<Uint8Array> => {
+    const data = await entry.async('uint8array');
+    if (data.byteLength > MAX_SINGLE_ENTRY_BYTES) {
+      throw new Error(`Файл ${entry.name} превышает допустимый размер`);
+    }
+    totalUncompressed += data.byteLength;
+    if (totalUncompressed > MAX_TOTAL_UNCOMPRESSED_BYTES) {
+      throw new Error('Распакованный размер архива .locus превышает лимит 256 МБ');
+    }
+    return data;
+  };
+
   const sceneFile = zip.file(LOCUS_SCENE_ENTRY);
   if (!sceneFile) {
     throw new Error('Файл не является проектом Locus: отсутствует scene.json');
   }
 
-  const parsed = JSON.parse(await sceneFile.async('string')) as unknown;
+  const sceneBytes = await readBoundedBytes(sceneFile);
+  const parsed = JSON.parse(new TextDecoder('utf-8').decode(sceneBytes)) as unknown;
   if (!isValidScene(parsed)) {
     throw new Error('Файл не является проектом Locus: неверная версия или структура сцены');
   }
   const scene = parsed;
 
   const assets: Array<{ id: string; name: string; mimeType: string; bytes: Uint8Array }> = [];
-  const assetEntries = Object.values(zip.files).filter(
+  const assetEntries = allEntries.filter(
     (f) => !f.dir && f.name.startsWith(`${LOCUS_ASSET_DIR}/`)
   );
   for (const file of assetEntries) {
     const base = file.name.split('/').pop() ?? '';
     const dot = base.lastIndexOf('.');
     const id = dot > 0 ? base.slice(0, dot) : base;
+    if (!isSafeArchiveId(id)) {
+      throw new Error(`Некорректный идентификатор ассета: ${file.name}`);
+    }
     const ext = dot > 0 ? base.slice(dot + 1) : 'png';
     assets.push({
       id,
       name: base,
       mimeType: mimeForExtension(ext),
-      bytes: await file.async('uint8array'),
+      bytes: await readBoundedBytes(file),
     });
   }
 
@@ -237,7 +348,8 @@ export async function parseLocusArchive(bytes: Uint8Array): Promise<{
   const manifestFile = zip.file(LOCUS_FONT_MANIFEST);
   if (manifestFile) {
     try {
-      const manifest = JSON.parse(await manifestFile.async('string')) as unknown;
+      const manifestBytes = await readBoundedBytes(manifestFile);
+      const manifest = JSON.parse(new TextDecoder('utf-8').decode(manifestBytes)) as unknown;
       if (Array.isArray(manifest)) {
         for (const item of manifest) {
           if (!item || typeof item !== 'object') continue;
@@ -249,6 +361,12 @@ export async function parseLocusArchive(bytes: Uint8Array): Promise<{
           ) {
             continue;
           }
+          if (!isSafeArchiveId(meta.id) || !isSafeArchivePath(meta.entryName)) {
+            throw new Error(`Небезопасный путь шрифта в архиве: ${meta.entryName}`);
+          }
+          if (!meta.entryName.startsWith(`${LOCUS_FONT_DIR}/`)) {
+            continue;
+          }
           const fontFile = zip.file(meta.entryName);
           if (!fontFile) continue;
           fonts.push({
@@ -257,11 +375,14 @@ export async function parseLocusArchive(bytes: Uint8Array): Promise<{
             fileName: typeof meta.fileName === 'string' ? meta.fileName : `${meta.family}.ttf`,
             weight: meta.weight === 700 ? 700 : 400,
             mimeType: typeof meta.mimeType === 'string' ? meta.mimeType : 'font/ttf',
-            bytes: await fontFile.async('uint8array'),
+            bytes: await readBoundedBytes(fontFile),
           });
         }
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && /превышает|Небезопасный/i.test(err.message)) {
+        throw err;
+      }
       // Ignore malformed font manifest and continue loading scene.
     }
   }
@@ -270,8 +391,7 @@ export async function parseLocusArchive(bytes: Uint8Array): Promise<{
 }
 
 /**
- * Открывает `.locus`: очищает старые реестры ассетов и шрифтов, регистрирует ресурсы
- * из архива и загружает сцену с очисткой истории `zundo`.
+ * Открывает `.locus` транзакционно: валидирует и подготавливает все ресурсы до изменения стора.
  */
 export async function openLocusFromBytes(bytes: Uint8Array): Promise<Scene> {
   const { scene, assets, fonts } = await parseLocusArchive(bytes);
@@ -287,26 +407,38 @@ export async function openLocusFromBytes(bytes: Uint8Array): Promise<Scene> {
     );
   }
 
-  clearAssets();
-  for (const asset of assets) {
-    await registerAssetFromBytes({
-      id: asset.id,
-      name: asset.name,
-      mimeType: asset.mimeType,
-      bytes: asset.bytes,
-    });
+  const preparedAssets: PreparedAsset[] = [];
+  const preparedFonts: ProjectFontEntry[] = [];
+  try {
+    for (const asset of assets) {
+      preparedAssets.push(
+        await prepareAssetFromBytes({
+          id: asset.id,
+          name: asset.name,
+          mimeType: asset.mimeType,
+          bytes: asset.bytes,
+        })
+      );
+    }
+
+    for (const font of fonts) {
+      preparedFonts.push(
+        prepareProjectFontEntry({
+          id: font.id,
+          family: font.family,
+          fileName: font.fileName,
+          weight: font.weight,
+          bytes: font.bytes,
+        })
+      );
+    }
+  } catch (err) {
+    disposePreparedAssets(preparedAssets);
+    throw err;
   }
 
-  clearProjectFonts();
-  for (const font of fonts) {
-    await registerProjectFontFromBytes({
-      id: font.id,
-      family: font.family,
-      fileName: font.fileName,
-      weight: font.weight,
-      bytes: font.bytes,
-    });
-  }
+  commitLoadedAssets(preparedAssets);
+  await commitLoadedProjectFonts(preparedFonts);
 
   const loaded = loadScene(scene);
   useEditorStore.setState({

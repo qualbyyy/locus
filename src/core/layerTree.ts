@@ -9,7 +9,7 @@ import {
   normalizePathLayer,
   type Matrix2D,
 } from './math';
-import type { GroupLayer, Layer, SubPath } from './types';
+import type { GroupLayer, Layer, SubPath, TextLayer } from './types';
 
 export function isGroupLayer(layer: Layer): layer is GroupLayer {
   return layer.type === 'group';
@@ -229,12 +229,218 @@ export function cloneLayerSubtreeWithNewIds(
   return copy;
 }
 
+function clearTextPathFields(layer: TextLayer): TextLayer {
+  if (
+    layer.pathId === undefined &&
+    layer.pathOffset === undefined &&
+    layer.pathFlip === undefined &&
+    layer.pathBaselineOffset === undefined &&
+    layer.pathStretch === undefined
+  ) {
+    return layer;
+  }
+  const copy = { ...layer };
+  delete copy.pathId;
+  delete copy.pathOffset;
+  delete copy.pathFlip;
+  delete copy.pathBaselineOffset;
+  delete copy.pathStretch;
+  return copy;
+}
+
+/**
+ * Приводит ссылки `clipMaskId`, `isClipMask` и `TextLayer.pathId` к целостному состоянию:
+ * - `clipMaskId` должен указывать на `path`-слой в том же списке сиблингов (без циклов);
+ * - `isClipMask` остаётся только у тех `path`, на которые реально ссылается хотя бы один сиблинг;
+ * - `TextLayer.pathId` должен указывать на существующий `path` в дереве.
+ */
+export function reconcileLayerRefs(
+  layers: Layer[],
+  restoreEmptyMaskStroke = true
+): Layer[] {
+  const allPathIds = new Set(
+    flattenLayers(layers)
+      .filter((l) => l.type === 'path')
+      .map((l) => l.id)
+  );
+
+  const reconcileList = (list: Layer[]): Layer[] => {
+    const siblingPathIds = new Set(
+      list.filter((l) => l.type === 'path').map((l) => l.id)
+    );
+    let changed = false;
+
+    const pass1 = list.map((raw) => {
+      let cur = raw;
+      if (cur.type === 'group') {
+        const nextChildren = reconcileList(cur.children);
+        if (nextChildren !== cur.children) {
+          cur = { ...cur, children: nextChildren };
+          changed = true;
+        }
+      }
+      if (cur.clipMaskId && (!siblingPathIds.has(cur.clipMaskId) || cur.clipMaskId === cur.id)) {
+        const copy = { ...cur };
+        delete copy.clipMaskId;
+        cur = copy;
+        changed = true;
+      }
+      if (cur.type === 'text' && cur.pathId && !allPathIds.has(cur.pathId)) {
+        cur = clearTextPathFields(cur);
+        changed = true;
+      }
+      return cur;
+    });
+
+    const referencedMasks = new Set<string>();
+    for (const item of pass1) {
+      if (item.clipMaskId) referencedMasks.add(item.clipMaskId);
+    }
+
+    const pass2 = pass1.map((cur) => {
+      if (cur.type === 'path' && !cur.isClipMask && referencedMasks.has(cur.id)) {
+        changed = true;
+        return { ...cur, isClipMask: true };
+      }
+      if (cur.type === 'path' && cur.isClipMask && !referencedMasks.has(cur.id)) {
+        changed = true;
+        return {
+          ...cur,
+          isClipMask: false,
+          ...(restoreEmptyMaskStroke && cur.fill === null && cur.stroke === null
+            ? {
+                stroke: {
+                  color: '#1c1b1a',
+                  width: 1.5,
+                  lineCap: 'round' as const,
+                  lineJoin: 'round' as const,
+                },
+              }
+            : {}),
+        };
+      }
+      return cur;
+    });
+
+    return changed ? pass2 : list;
+  };
+
+  return reconcileList(layers);
+}
+
+/**
+ * Дедуплицирует выбранные узлы (убирает потомков уже выбранных групп) и клонирует их
+ * с согласованным ремапингом `id`, `clipMaskId`, `isClipMask` и `TextLayer.pathId`.
+ */
+export function cloneLayersWithRemappedRefs(
+  layersToClone: Layer[],
+  createId: (prefix: string) => string,
+  opts?: {
+    nameSuffix?: string;
+    offsetX?: number;
+    offsetY?: number;
+    existingLayerIds?: Set<string>;
+  }
+): { clones: Layer[]; rootIdMap: Map<string, string> } {
+  const requestedIds = new Set(layersToClone.map((l) => l.id));
+  const filteredRoots: Layer[] = [];
+  const rootIdMap = new Map<string, string>();
+  const fullIdMap = new Map<string, string>();
+
+  // Дедупликация: если выбрана и группа, и её потомок, берём только группу.
+  const collectFiltered = (srcs: Layer[]) => {
+    const idToDescendants = new Set<string>();
+    const markDesc = (node: Layer) => {
+      if (node.type === 'group') {
+        for (const c of node.children) {
+          idToDescendants.add(c.id);
+          markDesc(c);
+        }
+      }
+    };
+    for (const s of srcs) {
+      if (s.type === 'group') markDesc(s);
+    }
+    for (const s of srcs) {
+      if (!idToDescendants.has(s.id)) {
+        filteredRoots.push(s);
+      }
+    }
+  };
+  collectFiltered(layersToClone);
+
+  const clones = filteredRoots.map((src) => rawCloneLayer(src));
+  const collectIds = (node: Layer, isRoot: boolean) => {
+    const newId = createId(node.type);
+    fullIdMap.set(node.id, newId);
+    if (isRoot) rootIdMap.set(node.id, newId);
+    if (node.type === 'group') {
+      node.children.forEach((c) => collectIds(c, false));
+    }
+  };
+  clones.forEach((c) => collectIds(c, true));
+
+  const offsetX = opts?.offsetX ?? 0;
+  const offsetY = opts?.offsetY ?? 0;
+  const suffix = opts?.nameSuffix ?? '';
+  const referencedNewMasks = new Set<string>();
+
+  const applyRemap = (node: Layer, isRoot: boolean): Layer => {
+    node.id = fullIdMap.get(node.id)!;
+    if (isRoot) {
+      if (suffix) node.name = `${node.name}${suffix}`;
+      node.x += offsetX;
+      node.y += offsetY;
+    }
+    if (node.clipMaskId) {
+      const remappedMask = fullIdMap.get(node.clipMaskId);
+      if (remappedMask) {
+        node.clipMaskId = remappedMask;
+        referencedNewMasks.add(remappedMask);
+      } else if (!opts?.existingLayerIds?.has(node.clipMaskId)) {
+        delete node.clipMaskId;
+      }
+    }
+    if (node.type === 'text' && node.pathId) {
+      const remappedHost = fullIdMap.get(node.pathId);
+      if (remappedHost) {
+        node.pathId = remappedHost;
+      } else if (
+        opts?.existingLayerIds &&
+        !opts.existingLayerIds.has(node.pathId) &&
+        !requestedIds.has(node.pathId)
+      ) {
+        node = clearTextPathFields(node);
+      }
+    }
+    if (node.type === 'group') {
+      node.children = node.children.map((c) => applyRemap(c, false));
+    }
+    return node;
+  };
+
+  const remapped = clones.map((c) => applyRemap(c, true));
+
+  const clearOrphanMasks = (node: Layer) => {
+    if (node.type === 'path' && node.isClipMask && !referencedNewMasks.has(node.id)) {
+      node.isClipMask = false;
+    }
+    if (node.type === 'group') {
+      node.children.forEach(clearOrphanMasks);
+    }
+  };
+  remapped.forEach(clearOrphanMasks);
+
+  return { clones: remapped, rootIdMap };
+}
+
 export function applyGroupTransformToChild(
   group: GroupLayer,
   child: Layer
 ): Layer {
   const m = multiplyMatrices(getLayerMatrix(group), getLayerMatrix(child));
   const combinedOpacity = clamp(child.opacity * group.opacity, 0, 1);
+  const resolvedVisible = group.visible && child.visible;
   const resolvedBlendMode =
     child.blendMode && child.blendMode !== 'normal'
       ? child.blendMode
@@ -242,6 +448,7 @@ export function applyGroupTransformToChild(
   const resolvedClipMaskId = child.clipMaskId ?? group.clipMaskId;
 
   const basePatch = {
+    visible: resolvedVisible,
     opacity: combinedOpacity,
     ...(resolvedBlendMode ? { blendMode: resolvedBlendMode } : {}),
     ...(resolvedClipMaskId ? { clipMaskId: resolvedClipMaskId } : {}),

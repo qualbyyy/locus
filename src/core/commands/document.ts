@@ -5,15 +5,20 @@ import {
   getSceneArtboards,
 } from '../artboards';
 import { clearAssets } from '../assets';
+import { clearClipboard } from '../clipboard';
 import { clearProjectFonts } from '../fonts';
-import { cloneLayerSubtreeWithNewIds, mapLayerTree } from '../layerTree';
+import { cloneLayersWithRemappedRefs, mapLayerTree } from '../layerTree';
 import { clamp, computeLayerWorldBBox, normalizePathLayer } from '../math';
-import { useEditorStore } from '../store';
+import {
+  pauseHistory,
+  resetHistoryPause,
+  resumeHistory,
+  useEditorStore,
+} from '../store';
 import {
   createDefaultScene,
   type Artboard,
   type Guide,
-  type Layer,
   type Scene,
 } from '../types';
 import { commitScene, createLayerId, validateSelectionAgainstScene } from './helpers';
@@ -23,33 +28,39 @@ export function resetDocument(
 ): Scene {
   clearAssets();
   clearProjectFonts();
+  clearClipboard();
   const nextScene = createDefaultScene(init);
-  useEditorStore.setState({
+  useEditorStore.setState((state) => ({
     scene: nextScene,
+    documentSessionId: state.documentSessionId + 1,
     selectedIds: [],
     selectedNode: null,
     editingGroupId: null,
     activeArtboardId: PRIMARY_ARTBOARD_ID,
     isDirty: false,
-  });
+  }));
+  resetHistoryPause();
   useEditorStore.temporal.getState().clear();
   return nextScene;
 }
 
 export function loadScene(scene: Scene): Scene {
+  clearClipboard();
   const normalizedLayers = mapLayerTree(scene.layers, (layer) =>
     layer.type === 'path' ? normalizePathLayer(layer) : layer
   );
   const nextScene: Scene = { ...scene, layers: normalizedLayers };
   const firstArtboardId = getSceneArtboards(nextScene)[0].id;
-  useEditorStore.setState({
+  useEditorStore.setState((state) => ({
     scene: nextScene,
+    documentSessionId: state.documentSessionId + 1,
     selectedIds: [],
     selectedNode: null,
     editingGroupId: null,
     activeArtboardId: firstArtboardId,
     isDirty: false,
-  });
+  }));
+  resetHistoryPause();
   useEditorStore.temporal.getState().clear();
   return nextScene;
 }
@@ -196,7 +207,7 @@ export function duplicateArtboard(
     let nextLayers = scene.layers;
     if (includeLayers) {
       const topToClone = scene.layers.filter((layer) => {
-        const b = computeLayerWorldBBox(layer);
+        const b = computeLayerWorldBBox(layer, scene.layers);
         const cx = b.x + b.width / 2;
         const cy = b.y + b.height / 2;
         return (
@@ -207,37 +218,10 @@ export function duplicateArtboard(
         );
       });
       if (topToClone.length > 0) {
-        const cloned: Layer[] = [];
-        const rootIdMap = new Map<string, string>();
-        for (const layer of topToClone) {
-          const origClip = layer.clipMaskId;
-          const copy = cloneLayerSubtreeWithNewIds(layer, createLayerId);
-          copy.x += dx;
-          copy.y += dy;
-          if (origClip && copy.clipMaskId === undefined) {
-            // Retain original top-level clipMaskId temporarily for sibling remapping below.
-            copy.clipMaskId = origClip;
-          }
-          rootIdMap.set(layer.id, copy.id);
-          cloned.push(copy);
-        }
-        const finalizedWithRefs = cloned.map((layer) => {
-          if (!layer.clipMaskId) return layer;
-          const remapped = rootIdMap.get(layer.clipMaskId);
-          if (remapped) {
-            return { ...layer, clipMaskId: remapped };
-          }
-          const copy = { ...layer };
-          delete copy.clipMaskId;
-          return copy;
-        });
-        const referencedMasks = new Set(
-          finalizedWithRefs.map((l) => l.clipMaskId).filter(Boolean)
-        );
-        const finalized = finalizedWithRefs.map((layer) =>
-          layer.type === 'path' && referencedMasks.has(layer.id)
-            ? { ...layer, isClipMask: true }
-            : layer
+        const { clones: finalized } = cloneLayersWithRemappedRefs(
+          topToClone,
+          createLayerId,
+          { offsetX: dx, offsetY: dy }
         );
         nextLayers = [...scene.layers, ...finalized];
       }
@@ -421,37 +405,61 @@ export function clearGuides(): void {
 export function undoCommand(): void {
   const temporal = useEditorStore.temporal.getState();
   if (temporal.pastStates.length === 0) return;
+  const prevScene = useEditorStore.getState().scene;
   temporal.undo();
-  validateSelectionAgainstScene(useEditorStore.getState().scene);
+  const curScene = useEditorStore.getState().scene;
+  if (curScene !== prevScene) {
+    useEditorStore.setState({ isDirty: true });
+  }
+  validateSelectionAgainstScene(curScene);
 }
 
 export function redoCommand(): void {
   const temporal = useEditorStore.temporal.getState();
   if (temporal.futureStates.length === 0) return;
+  const prevScene = useEditorStore.getState().scene;
   temporal.redo();
-  validateSelectionAgainstScene(useEditorStore.getState().scene);
+  const curScene = useEditorStore.getState().scene;
+  if (curScene !== prevScene) {
+    useEditorStore.setState({ isDirty: true });
+  }
+  validateSelectionAgainstScene(curScene);
 }
 
 export function runCommandBatch(fn: () => void): void {
-  const temporal = useEditorStore.temporal.getState();
-  const initialScene = useEditorStore.getState().scene;
-  const wasTracking = temporal.isTracking;
-  if (wasTracking) {
-    temporal.pause();
-  }
+  const startState = useEditorStore.getState();
+  const initialScene = startState.scene;
+  const startSessionId = startState.documentSessionId;
+  const wasIdle = pauseHistory();
 
   try {
     fn();
-  } finally {
-    const finalScene = useEditorStore.getState().scene;
-    if (finalScene !== initialScene) {
-      useEditorStore.setState({ scene: initialScene });
-      if (wasTracking) {
-        temporal.resume();
-      }
-      useEditorStore.setState({ scene: finalScene, isDirty: true });
-    } else if (wasTracking) {
-      temporal.resume();
+  } catch (err) {
+    if (useEditorStore.getState().documentSessionId === startSessionId) {
+      useEditorStore.setState({
+        scene: initialScene,
+        selectedIds: startState.selectedIds,
+        selectedNode: startState.selectedNode,
+        editingGroupId: startState.editingGroupId,
+        activeArtboardId: startState.activeArtboardId,
+        isDirty: startState.isDirty,
+      });
     }
+    resumeHistory();
+    throw err;
+  }
+
+  const curState = useEditorStore.getState();
+  const finalScene = curState.scene;
+  if (
+    wasIdle &&
+    curState.documentSessionId === startSessionId &&
+    finalScene !== initialScene
+  ) {
+    useEditorStore.setState({ scene: initialScene });
+    resumeHistory();
+    useEditorStore.setState({ scene: finalScene, isDirty: true });
+  } else {
+    resumeHistory();
   }
 }

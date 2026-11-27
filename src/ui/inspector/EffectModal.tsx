@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SlidersHorizontal, X } from 'lucide-react';
 import { convertTextLayersToOutlines } from '../../core/commands';
 import { mapLayerTree } from '../../core/layerTree';
-import { useEditorStore } from '../../core/store';
+import { pauseHistory, resumeHistory, useEditorStore } from '../../core/store';
 import type { Layer, LayerEffects, Scene } from '../../core/types';
 import {
   BlurEffectFields,
@@ -34,6 +34,7 @@ export interface EffectModalProps {
 interface PreviewSession {
   baseScene: Scene;
   baseDirty: boolean;
+  documentSessionId: number;
   ids: string[];
   needsTextOutline: boolean;
 }
@@ -65,8 +66,10 @@ export function EffectModal({ target, layers, onClose, onApply }: EffectModalPro
     const active = sessionRef.current;
     if (!active) return null;
     sessionRef.current = null;
-    useEditorStore.setState({ scene: active.baseScene, isDirty: active.baseDirty });
-    useEditorStore.temporal.getState().resume();
+    if (useEditorStore.getState().documentSessionId === active.documentSessionId) {
+      useEditorStore.setState({ scene: active.baseScene, isDirty: active.baseDirty });
+    }
+    resumeHistory();
     return active;
   }, []);
 
@@ -74,7 +77,7 @@ export function EffectModal({ target, layers, onClose, onApply }: EffectModalPro
     if (!target || layerIds.length === 0) return;
 
     const state = useEditorStore.getState();
-    useEditorStore.temporal.getState().pause();
+    pauseHistory();
 
     const needsTextOutline =
       isVectorEffectKind(target.kind) && !hasPath && hasText;
@@ -83,6 +86,7 @@ export function EffectModal({ target, layers, onClose, onApply }: EffectModalPro
     sessionRef.current = {
       baseScene: state.scene,
       baseDirty: state.isDirty,
+      documentSessionId: state.documentSessionId,
       ids: [...layerIds],
       needsTextOutline,
     };

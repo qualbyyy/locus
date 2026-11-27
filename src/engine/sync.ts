@@ -213,7 +213,11 @@ function buildPathLayerItem(
   let item: paper.Item = frontItem;
   if (extrudeFaces.length > 0) {
     const faceItems = extrudeFaces.map((face) => {
-      const fItem = buildPaperPathFromSubPaths(scope, face.subpaths, 'nonzero');
+      const fItem = buildPaperPathFromSubPaths(
+        scope,
+        face.subpaths,
+        face.subpaths.length > 1 ? 'evenodd' : 'nonzero'
+      );
       fItem.fillColor = new scope.Color(face.fill);
       fItem.strokeColor = null;
       return fItem;
@@ -450,6 +454,7 @@ function buildImageLayerItem(
 
   if (!raster.loaded) {
     raster.onLoad = () => {
+      if (!raster.project) return;
       applyRasterScale(
         raster.width || entry.naturalWidth,
         raster.height || entry.naturalHeight
@@ -471,23 +476,33 @@ function wrapWithRasterEffects(
   scope: paper.PaperScope,
   layer: Layer,
   item: paper.Item,
-  isEditingText: boolean
+  isEditingText: boolean,
+  sceneLayers?: Layer[],
+  skipRasterize = false
 ): paper.Item {
   const eff = layer.effects;
   if (!eff || !hasRasterEffects(eff)) return item;
 
   const needsRasterize =
-    (eff.blur !== undefined && eff.blur > 0.1) ||
-    Boolean(eff.motionBlur && eff.motionBlur.amount > 0.1) ||
-    Boolean(eff.innerShadow) ||
-    hasActiveColorAdjust(eff.colorAdjust) ||
-    Boolean(eff.dropShadow && eff.outerGlow);
+    !skipRasterize &&
+    ((eff.blur !== undefined && eff.blur > 0.1) ||
+      Boolean(eff.motionBlur && eff.motionBlur.amount > 0.1) ||
+      Boolean(eff.innerShadow) ||
+      hasActiveColorAdjust(eff.colorAdjust) ||
+      Boolean(eff.dropShadow && eff.outerGlow));
 
   if (needsRasterize) {
-    const rendered = rasterizeLayerLocalWithEffects(layer);
+    const rendered = rasterizeLayerLocalWithEffects(layer, 2048, sceneLayers);
     if (rendered) {
-      item.remove();
-      const box = computeLayerLocalBBox(layer);
+      const box =
+        layer.type === 'text' && layer.pathId && sceneLayers
+          ? (() => {
+              const host = resolveHostPathLayer(sceneLayers, layer.pathId);
+              return host
+                ? computeTextOnPathLocalBBox(layer, host, sceneLayers)
+                : computeLayerLocalBBox(layer);
+            })()
+          : computeLayerLocalBBox(layer);
       const hitRect = new scope.Path.Rectangle(
         new scope.Rectangle(box.x, box.y, Math.max(1, box.width), Math.max(1, box.height))
       );
@@ -501,8 +516,18 @@ function wrapWithRasterEffects(
         raster.scaling = new scope.Point(1 / rendered.scale, 1 / rendered.scale);
       }
 
+      let children: paper.Item[];
+      if (layer.type === 'group') {
+        item.opacity = 0.0001;
+        item.matrix = new scope.Matrix();
+        children = [item, hitRect, raster];
+      } else {
+        item.remove();
+        children = [hitRect, raster];
+      }
+
       const group = new scope.Group({
-        children: [hitRect, raster],
+        children,
         applyMatrix: false,
       });
       group.opacity = clamp(layer.opacity, 0, 1);
@@ -567,9 +592,21 @@ function buildGroupLayerItem(
   group.visible = layer.visible;
   group.data = { layerId: layer.id };
   applyLayerMatrixToItem(scope, group, layer);
-  return options.outlineMode
-    ? group
-    : wrapWithRasterEffects(scope, layer, group, false);
+  if (options.outlineMode) return group;
+  const isEditingBranch =
+    layer.id === options.editingGroupId || editingAncestorIds.has(layer.id);
+  const wrapped = wrapWithRasterEffects(
+    scope,
+    layer,
+    group,
+    false,
+    sceneLayers,
+    isEditingBranch
+  );
+  if (wrapped !== group && dimmed) {
+    wrapped.opacity = clamp(layer.opacity, 0, 1) * 0.35;
+  }
+  return wrapped;
 }
 
 function buildPaperItemForLayer(
@@ -610,7 +647,7 @@ function buildPaperItemForLayer(
     item =
       isActiveMask || outlineMode
         ? built
-        : wrapWithRasterEffects(scope, layer, built, false);
+        : wrapWithRasterEffects(scope, layer, built, false, sceneLayers);
   } else if (layer.type === 'text') {
     const isLivePathEditing =
       Boolean(layer.pathId) &&
@@ -630,7 +667,7 @@ function buildPaperItemForLayer(
       }
       item = built;
     } else {
-      item = wrapWithRasterEffects(scope, layer, built, isEditing);
+      item = wrapWithRasterEffects(scope, renderLayer, built, isEditing, sceneLayers);
     }
   } else {
     const built = buildImageLayerItem(scope, layer);

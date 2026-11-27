@@ -41,6 +41,7 @@ import { useRotatingStatusWord } from './useRotatingStatusWord';
 export interface CommandBarProps {
   isOpen: boolean;
   preflightTrigger?: number;
+  onPreflightConsumed?: () => void;
   onClose: () => void;
   onOpenSettings?: (tab?: 'ai') => void;
 }
@@ -48,6 +49,7 @@ export interface CommandBarProps {
 export function CommandBar({
   isOpen,
   preflightTrigger = 0,
+  onPreflightConsumed,
   onClose,
   onOpenSettings,
 }: CommandBarProps): ReactElement | null {
@@ -82,7 +84,16 @@ export function CommandBar({
   const [recolorNotice, setRecolorNotice] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const mountedRef = useRef(true);
+  const lastPreflightTriggerRef = useRef(0);
   const isRunning = status === 'running';
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const statusWord = useRotatingStatusWord(isRunning);
   const planText = useMemo(
     () => log.find((entry) => entry.name === 'report_plan' && entry.ok)?.summary,
@@ -149,6 +160,9 @@ export function CommandBar({
         setAttachError('Не удалось прочитать изображение');
         return false;
       }
+      if (useAiTaskStore.getState().attachments.length >= 4) {
+        return false;
+      }
       const id = `att_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
       addAttachment({
         id,
@@ -158,7 +172,7 @@ export function CommandBar({
         dataBase64,
       });
       void extractPaletteFromDataUrl(dataUrl, 5).then((colors) => {
-        if (colors.length > 0) {
+        if (mountedRef.current && colors.length > 0) {
           updateAttachmentPalette(
             id,
             colors.map((c) => c.hex)
@@ -176,10 +190,20 @@ export function CommandBar({
   }, []);
 
   useEffect(() => {
-    if (isOpen && preflightTrigger > 0) {
-      handleRunPreflight();
+    if (preflightTrigger === 0) {
+      lastPreflightTriggerRef.current = 0;
+      return;
     }
-  }, [handleRunPreflight, isOpen, preflightTrigger]);
+    if (
+      isOpen &&
+      preflightTrigger > 0 &&
+      preflightTrigger !== lastPreflightTriggerRef.current
+    ) {
+      lastPreflightTriggerRef.current = preflightTrigger;
+      handleRunPreflight();
+      onPreflightConsumed?.();
+    }
+  }, [handleRunPreflight, isOpen, onPreflightConsumed, preflightTrigger]);
 
   const activeReferencePalette = useMemo(
     () =>
@@ -209,22 +233,25 @@ export function CommandBar({
     async (files: File[]) => {
       if (files.length === 0 || isRunning) return;
       setAttachError(null);
-      let count = attachments.length;
       for (const file of files) {
-        if (count >= 4) break;
+        if (!mountedRef.current) return;
+        const taskState = useAiTaskStore.getState();
+        if (taskState.status === 'running' || taskState.attachments.length >= 4) break;
         try {
           const bytes = new Uint8Array(await file.arrayBuffer());
-          if (attachImageBytes(file.name || 'image.png', bytes)) {
-            count += 1;
-          }
+          if (!mountedRef.current) return;
+          const postState = useAiTaskStore.getState();
+          if (postState.status === 'running' || postState.attachments.length >= 4) break;
+          attachImageBytes(file.name || 'image.png', bytes);
         } catch (err) {
+          if (!mountedRef.current) return;
           setAttachError(
             err instanceof Error ? err.message : 'Не удалось прочитать изображение'
           );
         }
       }
     },
-    [attachImageBytes, attachments.length, isRunning]
+    [attachImageBytes, isRunning]
   );
 
   const handleAttach = useCallback(async () => {
@@ -237,9 +264,12 @@ export function CommandBar({
           { name: 'Изображения', extensions: ['png', 'jpg', 'jpeg', 'webp'] },
         ],
       });
-      if (!file) return;
+      if (!mountedRef.current || !file) return;
+      const taskState = useAiTaskStore.getState();
+      if (taskState.status === 'running' || taskState.attachments.length >= 4) return;
       attachImageBytes(file.name, file.bytes);
     } catch (err) {
+      if (!mountedRef.current) return;
       setAttachError(
         err instanceof Error ? err.message : 'Не удалось прикрепить изображение'
       );
@@ -622,6 +652,16 @@ export function CommandBar({
           {error && (
             <div className="flex flex-wrap items-center gap-2 rounded border border-paper-danger/40 bg-paper-danger/5 px-3 py-2 text-[12px] text-paper-danger">
               <span className="min-w-0 flex-1">{error}</span>
+              {canUndo && (
+                <button
+                  type="button"
+                  onClick={revertLastRun}
+                  className="flex shrink-0 items-center gap-1 rounded border border-paper-border bg-paper-panel px-2 py-1 text-[11px] text-paper-ink hover:bg-paper-hover"
+                >
+                  <Undo2 className="h-3 w-3" strokeWidth={1.75} />
+                  Откатить
+                </button>
+              )}
               {(providerIssue || error.includes('настройк')) && onOpenSettings && (
                 <button
                   type="button"

@@ -203,6 +203,10 @@ export function createPenTool(): CanvasToolController {
     },
 
     cancel(ctx: ToolContext) {
+      if (anchors.length >= 2) {
+        commitPath(ctx, false);
+        return;
+      }
       reset(ctx);
     },
   };

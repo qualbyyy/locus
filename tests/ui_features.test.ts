@@ -135,7 +135,7 @@ describe('UI features: context menu and canvas zoom', () => {
 
   it('exposes identity-only about data without a capabilities list', () => {
     expect(APP_INFO.name).toBe('Locus');
-    expect(APP_INFO.version).toBe('1.0.1');
+    expect(APP_INFO.version).toBe('1.1.0');
     expect(Object.keys(APP_INFO)).not.toContain('capabilities');
     expect(Object.keys(APP_INFO)).not.toContain('features');
   });

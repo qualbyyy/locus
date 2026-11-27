@@ -59,11 +59,12 @@ export function subPathToCubicSegments(
   return segments;
 }
 
-/** Признак «обе контрольные точки лежат на хорде» — для записи `L` вместо `C`. */
+/** Признак «обе контрольные точки лежат на отрезке хорды [0, 1]» — для записи `L` вместо `C`. */
 export function isLinearCubic(seg: CubicSegment): boolean {
   const dx = seg.end.x - seg.start.x;
   const dy = seg.end.y - seg.start.y;
-  const len = Math.hypot(dx, dy);
+  const lenSq = dx * dx + dy * dy;
+  const len = Math.sqrt(lenSq);
   if (len < 1e-9) {
     return false;
   }
@@ -72,7 +73,13 @@ export function isLinearCubic(seg: CubicSegment): boolean {
   const ny = dx / len;
   const d1 = Math.abs((seg.cp1.x - seg.start.x) * nx + (seg.cp1.y - seg.start.y) * ny);
   const d2 = Math.abs((seg.cp2.x - seg.start.x) * nx + (seg.cp2.y - seg.start.y) * ny);
-  return d1 < 1e-6 && d2 < 1e-6;
+  if (d1 >= 1e-6 || d2 >= 1e-6) {
+    return false;
+  }
+  // Если контрольная точка выходит за пределы [start, end] на прямой, кривая даёт петлю/выступ — сохраняем `C`.
+  const t1 = ((seg.cp1.x - seg.start.x) * dx + (seg.cp1.y - seg.start.y) * dy) / lenSq;
+  const t2 = ((seg.cp2.x - seg.start.x) * dx + (seg.cp2.y - seg.start.y) * dy) / lenSq;
+  return t1 >= -1e-6 && t1 <= 1 + 1e-6 && t2 >= -1e-6 && t2 <= 1 + 1e-6;
 }
 
 export function formatNumber(n: number): string {
@@ -169,7 +176,11 @@ export function parseColorToRgba(color: string): [number, number, number, number
     const nums = fnMatch[1]
       .split(/[\s,\/]+/)
       .filter(Boolean)
-      .map((part) => (part.endsWith('%') ? (parseFloat(part) / 100) * 255 : parseFloat(part)));
+      .map((part, idx) => {
+        if (!part.endsWith('%')) return parseFloat(part);
+        const pct = parseFloat(part) / 100;
+        return idx < 3 ? pct * 255 : pct;
+      });
     if (nums.length >= 3 && nums.every((n) => Number.isFinite(n))) {
       const a = nums.length >= 4 ? Math.min(1, Math.max(0, nums[3])) : 1;
       return [
@@ -185,9 +196,13 @@ export function parseColorToRgba(color: string): [number, number, number, number
 }
 
 export function colorToCssRgb(color: string): string {
+  const trimmed = color.trim().toLowerCase();
+  if (trimmed === 'none' || trimmed === 'transparent') {
+    return 'none';
+  }
   const rgba = parseColorToRgba(color);
   if (!rgba) {
-    return color;
+    return '#000000';
   }
   const [r, g, b] = rgba;
   return `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;

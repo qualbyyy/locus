@@ -29,6 +29,7 @@ export type ShortcutActionId =
   | 'view.toggleGrid'
   | 'view.toggleRulers'
   | 'view.toggleSnap'
+  | 'view.toggleOutline'
   | 'app.openSettings'
   | 'app.commandBar'
   | 'app.openTutorial'
@@ -150,7 +151,6 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     label: 'Повторить действие',
     category: 'edit',
     defaultCombo: 'Ctrl+Shift+KeyZ',
-    altCombos: ['Ctrl+KeyY'],
   },
   {
     id: 'edit.copy',
@@ -229,6 +229,12 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     label: 'Включить / выключить привязку',
     category: 'view',
     defaultCombo: 'Ctrl+Shift+Quote',
+  },
+  {
+    id: 'view.toggleOutline',
+    label: 'Режим каркаса (Outline)',
+    category: 'view',
+    defaultCombo: 'Ctrl+KeyY',
   },
   {
     id: 'app.openSettings',

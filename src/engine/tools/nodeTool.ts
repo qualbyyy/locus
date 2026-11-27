@@ -18,9 +18,14 @@ import {
   type Matrix2D,
 } from '../../core/math';
 import { isGradientPaint } from '../../core/paint';
-import { useEditorStore } from '../../core/store';
-import type { PathLayer, Point2D, SubPath, TextLayer } from '../../core/types';
-import { applyPathStyleToPaperItem, buildTextLayerItem } from '../sync';
+import { pauseHistory, resumeHistory, useEditorStore } from '../../core/store';
+import type { PathLayer, Point2D, Scene, SubPath, TextLayer } from '../../core/types';
+import {
+  applyLayerMatrixToItem,
+  applyPathStyleToPaperItem,
+  buildPaperPathFromSubPaths,
+  buildTextLayerItem,
+} from '../sync';
 import { findTopLayerAtPoint } from './selectTool';
 import type { CanvasToolController, ToolContext, ToolPointerEvent } from './types';
 
@@ -43,6 +48,7 @@ type NodeDragState =
       initialAnchorWorld: Point2D;
       draftSubpaths: SubPath[];
       hasMoved: boolean;
+      insertedFromScene?: Scene;
     }
   | {
       kind: 'handleIn' | 'handleOut';
@@ -54,6 +60,7 @@ type NodeDragState =
       initialOppositeLength: number;
       draftSubpaths: SubPath[];
       hasMoved: boolean;
+      insertedFromScene?: Scene;
     };
 
 function findNodeHitInOverlay(
@@ -130,6 +137,25 @@ function applyDraftSubpathsToPaperItem(
 
   if (isGradientPaint(layer.fill) || isGradientPaint(layer.stroke?.color)) {
     applyPathStyleToPaperItem(ctx.scope, item, { ...layer, subpaths });
+  }
+
+  const parentItem = item.parent;
+  if (parentItem) {
+    for (const sibling of parentItem.children) {
+      if (sibling.data?.isClipGroup && sibling.data?.maskId === layer.id) {
+        const clipMaskItem = sibling.children[0];
+        if (clipMaskItem) {
+          const rebuiltMask = buildPaperPathFromSubPaths(
+            ctx.scope,
+            subpaths,
+            layer.fillRule
+          );
+          rebuiltMask.data = { isInternalClipMask: true, maskLayerId: layer.id };
+          applyLayerMatrixToItem(ctx.scope, rebuiltMask, layer);
+          clipMaskItem.replaceWith(rebuiltMask);
+        }
+      }
+    }
   }
 
   const sceneLayers = useEditorStore.getState().scene.layers;
@@ -231,53 +257,79 @@ export function createNodeTool(): CanvasToolController {
           }
         }
 
-        const paperItem = ctx.getItemMap().get(targetLayer.id);
-        if (paperItem) {
-          const tolerance = 6 / Math.max(0.05, ctx.scope.view.zoom);
-          const curveHit = paperItem.hitTest(
-            new ctx.scope.Point(event.point.x, event.point.y),
-            { curves: true, tolerance }
+        const worldM = getLayerWorldMatrix(state.scene.layers, targetLayer.id);
+        const tolerance = 6 / Math.max(0.05, ctx.scope.view.zoom);
+        const rawProbe = buildPaperPathFromSubPaths(
+          ctx.scope,
+          targetLayer.subpaths,
+          targetLayer.fillRule,
+          targetLayer.id
+        );
+        rawProbe.applyMatrix = false;
+        rawProbe.matrix = new ctx.scope.Matrix(
+          worldM.a,
+          worldM.b,
+          worldM.c,
+          worldM.d,
+          worldM.tx,
+          worldM.ty
+        );
+        rawProbe.strokeColor = new ctx.scope.Color('#000000');
+        rawProbe.strokeWidth = 1;
+        const curveHit = rawProbe.hitTest(
+          new ctx.scope.Point(event.point.x, event.point.y),
+          { curves: true, tolerance }
+        );
+        const curveMeta =
+          curveHit?.type === 'curve' && curveHit.location
+            ? {
+                subpathIndex: Number(curveHit.item.data?.subpathIndex ?? 0),
+                segmentIndex: curveHit.location.index,
+                t: curveHit.location.time,
+              }
+            : null;
+        rawProbe.remove();
+
+        if (curveMeta) {
+          const baseSceneBeforeInsert = state.scene;
+          pauseHistory();
+          const inserted = insertAnchorOnSegment(
+            targetLayer.id,
+            curveMeta.subpathIndex,
+            curveMeta.segmentIndex,
+            curveMeta.t
           );
 
-          if (curveHit?.type === 'curve' && curveHit.location) {
-            const subpathIndex = Number(curveHit.item.data?.subpathIndex ?? 0);
-            const segmentIndex = curveHit.location.index;
-            const t = curveHit.location.time;
-            const inserted = insertAnchorOnSegment(
-              targetLayer.id,
-              subpathIndex,
-              segmentIndex,
-              t
-            );
-
-            if (inserted) {
-              const nextLayers = useEditorStore.getState().scene.layers;
-              const rawUpdated = findLayerById(nextLayers, targetLayer.id);
-              const updatedLayer =
-                rawUpdated?.type === 'path' ? rawUpdated : undefined;
-              const insertedAnchor =
-                updatedLayer?.subpaths[inserted.subpathIndex]?.anchors[
-                  inserted.anchorIndex
-                ];
-              if (updatedLayer && insertedAnchor) {
-                const worldM = getLayerWorldMatrix(nextLayers, updatedLayer.id);
-                drag = {
-                  kind: 'anchor',
-                  layer: updatedLayer,
-                  invWorldM: invertMatrix(worldM),
-                  subpathIndex: inserted.subpathIndex,
-                  anchorIndex: inserted.anchorIndex,
-                  initialAnchorWorld: applyMatrixToPoint(worldM, {
-                    x: insertedAnchor.x,
-                    y: insertedAnchor.y,
-                  }),
-                  draftSubpaths: cloneSubPaths(updatedLayer.subpaths),
-                  hasMoved: false,
-                };
-              }
+          if (inserted) {
+            const nextLayers = useEditorStore.getState().scene.layers;
+            const rawUpdated = findLayerById(nextLayers, targetLayer.id);
+            const updatedLayer =
+              rawUpdated?.type === 'path' ? rawUpdated : undefined;
+            const insertedAnchor =
+              updatedLayer?.subpaths[inserted.subpathIndex]?.anchors[
+                inserted.anchorIndex
+              ];
+            if (updatedLayer && insertedAnchor) {
+              const nextWorldM = getLayerWorldMatrix(nextLayers, updatedLayer.id);
+              drag = {
+                kind: 'anchor',
+                layer: updatedLayer,
+                invWorldM: invertMatrix(nextWorldM),
+                subpathIndex: inserted.subpathIndex,
+                anchorIndex: inserted.anchorIndex,
+                initialAnchorWorld: applyMatrixToPoint(nextWorldM, {
+                  x: insertedAnchor.x,
+                  y: insertedAnchor.y,
+                }),
+                draftSubpaths: cloneSubPaths(updatedLayer.subpaths),
+                hasMoved: false,
+                insertedFromScene: baseSceneBeforeInsert,
+              };
               return;
             }
           }
+          useEditorStore.setState({ scene: baseSceneBeforeInsert });
+          resumeHistory();
         }
       }
 
@@ -374,14 +426,28 @@ export function createNodeTool(): CanvasToolController {
       const shouldCommit = drag.hasMoved;
       const layerId = drag.layer.id;
       const committedSubpaths = drag.draftSubpaths;
+      const insertedFromScene = drag.insertedFromScene;
       reset(ctx);
 
-      if (shouldCommit) {
+      if (insertedFromScene) {
+        useEditorStore.setState({ scene: insertedFromScene });
+        resumeHistory();
+        updatePathSubpaths(layerId, committedSubpaths);
+      } else if (shouldCommit) {
         updatePathSubpaths(layerId, committedSubpaths);
       }
     },
 
     cancel(ctx: ToolContext) {
+      if (drag?.insertedFromScene) {
+        useEditorStore.setState({ scene: drag.insertedFromScene, selectedNode: null });
+        resumeHistory();
+      } else if (drag) {
+        const orig = findLayerById(useEditorStore.getState().scene.layers, drag.layer.id);
+        if (orig?.type === 'path') {
+          applyDraftSubpathsToPaperItem(ctx, orig, orig.subpaths);
+        }
+      }
       reset(ctx);
     },
   };

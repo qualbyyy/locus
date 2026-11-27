@@ -50,6 +50,8 @@ export function NumberField({
 
   const [draft, setDraft] = useState(() => format(value));
   const [focused, setFocused] = useState(false);
+  const cancelledRef = useRef(false);
+  const committedOnEnterRef = useRef(false);
 
   useEffect(() => {
     if (!focused) {
@@ -66,7 +68,9 @@ export function NumberField({
     const lo = min ?? -Infinity;
     const hi = max ?? Infinity;
     const clamped = clamp(parsed, lo, hi);
-    onCommit(clamped);
+    if (Math.abs(clamped - value) > 1e-9) {
+      onCommit(clamped);
+    }
     setDraft(format(clamped));
   };
 
@@ -76,27 +80,37 @@ export function NumberField({
       inputMode="decimal"
       value={draft}
       onFocus={(e) => {
+        cancelledRef.current = false;
+        committedOnEnterRef.current = false;
         setFocused(true);
         e.currentTarget.select();
       }}
       onChange={(e) => {
         setDraft(e.target.value);
-        const parsed = Number.parseFloat(e.target.value);
-        if (Number.isFinite(parsed)) {
-          const lo = min ?? -Infinity;
-          const hi = max ?? Infinity;
-          onCommit(clamp(parsed, lo, hi));
-        }
       }}
       onBlur={() => {
         setFocused(false);
+        if (cancelledRef.current) {
+          cancelledRef.current = false;
+          return;
+        }
+        if (committedOnEnterRef.current) {
+          committedOnEnterRef.current = false;
+          return;
+        }
         commit(draft);
       }}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
+          e.preventDefault();
+          e.stopPropagation();
+          committedOnEnterRef.current = true;
           commit(draft);
           e.currentTarget.blur();
         } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          cancelledRef.current = true;
           setDraft(format(value));
           e.currentTarget.blur();
         } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
@@ -135,6 +149,8 @@ export function HexColorRow({
 }) {
   const [draft, setDraft] = useState(value);
   const [focused, setFocused] = useState(false);
+  const cancelledRef = useRef(false);
+  const committedOnEnterRef = useRef(false);
 
   useEffect(() => {
     if (!focused) {
@@ -142,28 +158,55 @@ export function HexColorRow({
     }
   }, [value, focused]);
 
+  const commit = (raw: string) => {
+    const val = raw.trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+      if (val.toLowerCase() !== value.toLowerCase()) {
+        onChange(val);
+      }
+      setDraft(val);
+    } else {
+      setDraft(value);
+    }
+  };
+
   return (
     <div className="flex items-center gap-2">
       <ColorField value={value} onChange={onChange} />
       <input
         type="text"
         value={draft}
-        onFocus={() => setFocused(true)}
+        onFocus={() => {
+          cancelledRef.current = false;
+          committedOnEnterRef.current = false;
+          setFocused(true);
+        }}
         onChange={(e) => {
           setDraft(e.target.value);
-          const val = e.target.value.trim();
-          if (/^#[0-9a-fA-F]{6}$/.test(val)) {
-            onChange(val);
-          }
         }}
         onBlur={() => {
           setFocused(false);
-          setDraft(value);
+          if (cancelledRef.current) {
+            cancelledRef.current = false;
+            return;
+          }
+          if (committedOnEnterRef.current) {
+            committedOnEnterRef.current = false;
+            return;
+          }
+          commit(draft);
         }}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            committedOnEnterRef.current = true;
+            commit(draft);
             e.currentTarget.blur();
           } else if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            cancelledRef.current = true;
             setDraft(value);
             e.currentTarget.blur();
           }
@@ -363,6 +406,8 @@ export function TextContentField({
 }) {
   const [draft, setDraft] = useState(value);
   const [focused, setFocused] = useState(false);
+  const cancelledRef = useRef(false);
+  const committedOnEnterRef = useRef(false);
 
   useEffect(() => {
     if (!focused) {
@@ -382,19 +427,35 @@ export function TextContentField({
     <textarea
       rows={3}
       value={draft}
-      onFocus={() => setFocused(true)}
+      onFocus={() => {
+        cancelledRef.current = false;
+        committedOnEnterRef.current = false;
+        setFocused(true);
+      }}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => {
         setFocused(false);
+        if (cancelledRef.current) {
+          cancelledRef.current = false;
+          return;
+        }
+        if (committedOnEnterRef.current) {
+          committedOnEnterRef.current = false;
+          return;
+        }
         commit();
       }}
       onKeyDown={(e) => {
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
           e.preventDefault();
+          e.stopPropagation();
+          committedOnEnterRef.current = true;
           commit();
           e.currentTarget.blur();
         } else if (e.key === 'Escape') {
+          e.preventDefault();
           e.stopPropagation();
+          cancelledRef.current = true;
           setDraft(value);
           e.currentTarget.blur();
         }

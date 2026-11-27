@@ -11,10 +11,17 @@ import { getActiveArtboard } from '../artboards';
 import {
   findLayerById,
   flattenLayers,
+  getLayerWorldMatrix,
   getParentGroupId,
   mapLayerTree,
 } from '../layerTree';
-import { applyMatrixToPoint, clamp, degToRad, getLayerMatrix } from '../math';
+import {
+  applyMatrixToPoint,
+  clamp,
+  degToRad,
+  getLayerMatrix,
+  invertMatrix,
+} from '../math';
 import { clonePaint, cloneStroke } from '../paint';
 import { useEditorStore } from '../store';
 import type {
@@ -28,7 +35,7 @@ import type {
 } from '../types';
 import { runCommandBatch } from './document';
 import { clearTextPathProps, commitScene, createLayerId } from './helpers';
-import { addLayer, createShapeLayer } from './layers';
+import { addLayer, createShapeLayer } from './layerCrud';
 
 export type TextCaseMode = 'upper' | 'lower' | 'title';
 
@@ -233,10 +240,20 @@ export function createCircleTextPreset(): TextLayer {
   let createdText!: TextLayer;
   runCommandBatch(() => {
     const ab = getActiveArtboard(state.scene, state.activeArtboardId);
-    const circle = createShapeLayer({
-      preset: 'ellipse',
+    const worldCenter = {
       x: Math.round(ab.x + ab.width / 2),
       y: Math.round(ab.y + ab.height / 2),
+    };
+    const localCenter = state.editingGroupId
+      ? applyMatrixToPoint(
+          invertMatrix(getLayerWorldMatrix(state.scene.layers, state.editingGroupId)),
+          worldCenter
+        )
+      : worldCenter;
+    const circle = createShapeLayer({
+      preset: 'ellipse',
+      x: localCenter.x,
+      y: localCenter.y,
       width: 260,
       height: 260,
       fill: null,
@@ -521,6 +538,7 @@ export async function convertTextLayersToOutlines(
 ): Promise<PathLayer[]> {
   if (layerIds.length === 0) return [];
   const state = useEditorStore.getState();
+  const startSessionId = state.documentSessionId;
   const idSet = new Set(layerIds);
   const targets = flattenLayers(state.scene.layers).filter(
     (l): l is TextLayer => idSet.has(l.id) && l.type === 'text' && !l.locked
@@ -536,6 +554,10 @@ export async function convertTextLayersToOutlines(
       };
     })
   );
+
+  if (useEditorStore.getState().documentSessionId !== startSessionId) {
+    return [];
+  }
 
   const replacements = new Map<string, PathLayer>();
   const created: PathLayer[] = [];
@@ -560,12 +582,12 @@ export async function convertTextLayersToOutlines(
       fill: clonePaint(layer.fill),
       stroke: cloneStroke(layer.stroke ?? null),
       ...(layer.clipMaskId ? { clipMaskId: layer.clipMaskId } : {}),
+      ...(layer.effects ? { effects: cloneEffectsValue(layer.effects) } : {}),
     };
     replacements.set(layer.id, pathLayer);
-    created.push(pathLayer);
   }
 
-  if (created.length === 0) return [];
+  if (replacements.size === 0) return [];
 
   commitScene((scene) => {
     let changed = false;
@@ -573,10 +595,13 @@ export async function convertTextLayersToOutlines(
       const replacement = replacements.get(layer.id);
       if (!replacement) return layer;
       changed = true;
+      created.push(replacement);
       return replacement;
     });
     return changed ? { ...scene, layers: nextLayers } : scene;
   });
+
+  if (created.length === 0) return [];
 
   useEditorStore.setState({
     selectedIds: created.map((l) => l.id),

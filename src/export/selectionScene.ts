@@ -4,14 +4,18 @@ import {
   getParentWorldMatrix,
 } from '../core/layerTree';
 import {
+  applyMatrixToPoint,
+  applyMatrixToVector,
+  clamp,
   computeLayerBBoxWithMatrix,
   decomposeMatrix,
   getLayerMatrix,
   IDENTITY_MATRIX,
   multiplyMatrices,
+  normalizePathLayer,
   type Matrix2D,
 } from '../core/math';
-import type { BBox, Layer, Scene } from '../core/types';
+import type { BBox, BlendMode, Layer, Scene, SubPath } from '../core/types';
 import { getEffectsPadding } from '../engine/effects';
 
 function cloneLayer<T extends Layer>(layer: T): T {
@@ -29,11 +33,22 @@ function collectLayerIdsInSubtree(layer: Layer, out: Set<string>): void {
   }
 }
 
-function collectMaxEffectsPadding(layer: Layer): number {
+function collectMaxEffectsAndStrokePadding(
+  layer: Layer,
+  parentScale = 1
+): number {
   let pad = getEffectsPadding(layer.effects);
+  if (layer.type === 'path' || layer.type === 'text') {
+    const sw = layer.stroke?.width ?? 0;
+    if (sw > 0) {
+      const layerScale = Math.max(Math.abs(layer.scaleX), Math.abs(layer.scaleY), 1);
+      pad = Math.max(pad, sw * layerScale * parentScale * 0.6);
+    }
+  }
   if (layer.type === 'group') {
+    const groupScale = Math.max(Math.abs(layer.scaleX), Math.abs(layer.scaleY), 1) * parentScale;
     for (const child of layer.children) {
-      pad = Math.max(pad, collectMaxEffectsPadding(child));
+      pad = Math.max(pad, collectMaxEffectsAndStrokePadding(child, groupScale));
     }
   }
   return pad;
@@ -76,7 +91,9 @@ function rebaseLayerWithWorldOffset(
   parentMatrix: Matrix2D,
   ox: number,
   oy: number,
-  forceVisible?: boolean
+  forceVisible?: boolean,
+  parentOpacity = 1,
+  parentBlendMode?: BlendMode
 ): Layer {
   const cloned = cloneLayer(layer);
   const world = multiplyMatrices(parentMatrix, getLayerMatrix(layer));
@@ -85,6 +102,37 @@ function rebaseLayerWithWorldOffset(
     tx: world.tx - ox,
     ty: world.ty - oy,
   };
+  cloned.opacity = clamp(cloned.opacity * parentOpacity, 0, 1);
+  if ((!cloned.blendMode || cloned.blendMode === 'normal') && parentBlendMode && parentBlendMode !== 'normal') {
+    cloned.blendMode = parentBlendMode;
+  }
+  const shear = Math.abs(shifted.a * shifted.c + shifted.b * shifted.d);
+  if (cloned.type === 'path' && shear > 1e-4) {
+    const transformedSubpaths: SubPath[] = cloned.subpaths.map((sp) => ({
+      closed: sp.closed,
+      anchors: sp.anchors.map((a) => {
+        const pt = applyMatrixToPoint(shifted, { x: a.x, y: a.y });
+        return {
+          x: pt.x,
+          y: pt.y,
+          handleIn: applyMatrixToVector(shifted, a.handleIn),
+          handleOut: applyMatrixToVector(shifted, a.handleOut),
+          smooth: a.smooth,
+        };
+      }),
+    }));
+    const normalized = normalizePathLayer({
+      ...cloned,
+      x: 0,
+      y: 0,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+      subpaths: transformedSubpaths,
+    });
+    if (forceVisible !== undefined) normalized.visible = forceVisible;
+    return normalized;
+  }
   const decomp = decomposeMatrix(shifted);
   cloned.x = decomp.x;
   cloned.y = decomp.y;
@@ -118,17 +166,29 @@ export function extractSelectionScene(
   }
   if (topSelectedIds.size === 0) return null;
 
-  const selectedNodes: Array<{ layer: Layer; parentMatrix: Matrix2D }> = [];
-  const collectSelected = (layers: Layer[], parentMatrix: Matrix2D) => {
+  const selectedNodes: Array<{
+    layer: Layer;
+    parentMatrix: Matrix2D;
+    parentOpacity: number;
+    parentBlendMode?: BlendMode;
+  }> = [];
+  const collectSelected = (
+    layers: Layer[],
+    parentMatrix: Matrix2D,
+    parentOpacity = 1,
+    parentBlendMode?: BlendMode
+  ) => {
     for (const layer of layers) {
       if (topSelectedIds.has(layer.id)) {
-        selectedNodes.push({ layer, parentMatrix });
+        selectedNodes.push({ layer, parentMatrix, parentOpacity, parentBlendMode });
         continue;
       }
       if (layer.type === 'group') {
         collectSelected(
           layer.children,
-          multiplyMatrices(parentMatrix, getLayerMatrix(layer))
+          multiplyMatrices(parentMatrix, getLayerMatrix(layer)),
+          clamp(parentOpacity * layer.opacity, 0, 1),
+          layer.blendMode && layer.blendMode !== 'normal' ? layer.blendMode : parentBlendMode
         );
       }
     }
@@ -147,7 +207,12 @@ export function extractSelectionScene(
   let maxY = -Infinity;
   for (const { layer, parentMatrix } of selectedNodes) {
     const box: BBox = computeLayerBBoxWithMatrix(layer, parentMatrix);
-    const pad = collectMaxEffectsPadding(layer);
+    const parentScale = Math.max(
+      Math.hypot(parentMatrix.a, parentMatrix.b),
+      Math.hypot(parentMatrix.c, parentMatrix.d),
+      1
+    );
+    const pad = collectMaxEffectsAndStrokePadding(layer, parentScale);
     minX = Math.min(minX, box.x - pad);
     minY = Math.min(minY, box.y - pad);
     maxX = Math.max(maxX, box.x + box.width + pad);
@@ -177,10 +242,25 @@ export function extractSelectionScene(
 
   const depIds = new Set<string>([...clipMaskDeps, ...hostPathDeps]);
   const rebasedLayers: Layer[] = [];
-  const emitOrdered = (layers: Layer[], parentMatrix: Matrix2D) => {
+  const emitOrdered = (
+    layers: Layer[],
+    parentMatrix: Matrix2D,
+    parentOpacity = 1,
+    parentBlendMode?: BlendMode
+  ) => {
     for (const layer of layers) {
       if (topSelectedIds.has(layer.id)) {
-        rebasedLayers.push(rebaseLayerWithWorldOffset(layer, parentMatrix, ox, oy));
+        rebasedLayers.push(
+          rebaseLayerWithWorldOffset(
+            layer,
+            parentMatrix,
+            ox,
+            oy,
+            undefined,
+            parentOpacity,
+            parentBlendMode
+          )
+        );
         continue;
       }
       if (depIds.has(layer.id)) {
@@ -192,14 +272,18 @@ export function extractSelectionScene(
             parentMatrix,
             ox,
             oy,
-            isOnlyHiddenHost ? false : undefined
+            isOnlyHiddenHost ? false : undefined,
+            parentOpacity,
+            parentBlendMode
           )
         );
       }
       if (layer.type === 'group') {
         emitOrdered(
           layer.children,
-          multiplyMatrices(parentMatrix, getLayerMatrix(layer))
+          multiplyMatrices(parentMatrix, getLayerMatrix(layer)),
+          clamp(parentOpacity * layer.opacity, 0, 1),
+          layer.blendMode && layer.blendMode !== 'normal' ? layer.blendMode : parentBlendMode
         );
       }
     }

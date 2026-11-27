@@ -8,9 +8,11 @@ import type {
   AiToolCall,
 } from '../types';
 import {
+  extractPayloadError,
   isRecord,
   parseArgsObject,
   readHttpError,
+  readJsonResponse,
   type FetchLike,
 } from './http';
 
@@ -79,16 +81,81 @@ function toOpenAIMessages(
   return out;
 }
 
+function parseOpenAIJsonPayload(
+  payload: unknown,
+  onToken?: (delta: string) => void
+): AiProviderReply {
+  if (!isRecord(payload)) {
+    throw new Error('Провайдер вернул неожиданный ответ');
+  }
+  const payloadError = extractPayloadError(payload);
+  if (payloadError) {
+    throw new Error(payloadError);
+  }
+  const choices = Array.isArray(payload.choices) ? payload.choices : [];
+  const first = choices[0];
+  const finishReason =
+    isRecord(first) && typeof first.finish_reason === 'string'
+      ? first.finish_reason
+      : null;
+  if (finishReason === 'length' || finishReason === 'max_tokens') {
+    throw new Error(
+      'Ответ модели оборвался по лимиту токенов (max_tokens). Попробуйте упростить задачу.'
+    );
+  }
+  const message = isRecord(first) && isRecord(first.message) ? first.message : null;
+  if (!message) {
+    throw new Error('Провайдер вернул пустой ответ');
+  }
+
+  const text = typeof message.content === 'string' ? message.content : '';
+  const rawCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  const toolCalls: AiToolCall[] = [];
+  rawCalls.forEach((rawCall, index) => {
+    if (!isRecord(rawCall)) return;
+    const fn = isRecord(rawCall.function) ? rawCall.function : null;
+    if (!fn || typeof fn.name !== 'string') return;
+    toolCalls.push({
+      id:
+        typeof rawCall.id === 'string' && rawCall.id
+          ? rawCall.id
+          : `openai_call_${index}`,
+      name: fn.name,
+      args: parseArgsObject(fn.arguments, fn.name),
+    });
+  });
+
+  const trimmed = text.trim();
+  if (trimmed === '' && toolCalls.length === 0) {
+    throw new Error('Провайдер вернул пустой ответ');
+  }
+  if (onToken && trimmed) {
+    onToken(text);
+  }
+
+  return { text: trimmed, toolCalls } satisfies AiProviderReply;
+}
+
 async function readOpenAIStream(
   response: Response,
   onToken: (delta: string) => void
 ): Promise<AiProviderReply> {
   const textParts: string[] = [];
   const calls = new Map<number, { id: string; name: string; args: string }>();
+  let sawSseData = false;
+  const nonSseLines: string[] = [];
+  let finishReason: string | null = null;
 
   const consumeLine = (line: string) => {
     const trimmed = line.trim();
-    if (!trimmed.startsWith('data:')) return;
+    if (!trimmed) return;
+    if (!trimmed.startsWith('data:')) {
+      if (!sawSseData && !/^(event:|id:|retry:|:)/.test(trimmed)) {
+        nonSseLines.push(line);
+      }
+      return;
+    }
+    sawSseData = true;
     const data = trimmed.slice(5).trim();
     if (!data || data === '[DONE]') return;
     let payload: unknown;
@@ -98,9 +165,16 @@ async function readOpenAIStream(
       return;
     }
     if (!isRecord(payload)) return;
+    const streamError = extractPayloadError(payload);
+    if (streamError) {
+      throw new Error(streamError);
+    }
     const choices = Array.isArray(payload.choices) ? payload.choices : [];
     const first = choices[0];
     if (!isRecord(first)) return;
+    if (typeof first.finish_reason === 'string' && first.finish_reason) {
+      finishReason = first.finish_reason;
+    }
     const delta = isRecord(first.delta) ? first.delta : null;
     if (!delta) return;
 
@@ -131,22 +205,48 @@ async function readOpenAIStream(
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let newline = buffer.indexOf('\n');
-      while (newline >= 0) {
-        const line = buffer.slice(0, newline).replace(/\r$/, '');
-        buffer = buffer.slice(newline + 1);
-        consumeLine(line);
-        newline = buffer.indexOf('\n');
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newline = buffer.indexOf('\n');
+        while (newline >= 0) {
+          const line = buffer.slice(0, newline).replace(/\r$/, '');
+          buffer = buffer.slice(newline + 1);
+          consumeLine(line);
+          newline = buffer.indexOf('\n');
+        }
       }
+      buffer += decoder.decode();
+      if (buffer) {
+        for (const line of buffer.split(/\r?\n/)) {
+          consumeLine(line);
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
     }
-    if (buffer) consumeLine(buffer);
   } else {
     const raw = await response.text();
     raw.split(/\r?\n/).forEach(consumeLine);
+  }
+
+  if (!sawSseData && nonSseLines.length > 0) {
+    const rawFallback = nonSseLines.join('\n').trim();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawFallback);
+    } catch {
+      throw new Error('Провайдер вернул некорректный ответ потока');
+    }
+    return parseOpenAIJsonPayload(parsed, onToken);
+  }
+
+  if (finishReason === 'length' || finishReason === 'max_tokens') {
+    throw new Error(
+      'Ответ модели оборвался по лимиту токенов (max_tokens). Попробуйте упростить задачу.'
+    );
   }
 
   const text = textParts.join('').trim();
@@ -209,41 +309,18 @@ export function createOpenAISend(
     }
 
     if (onToken) {
+      const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+      if (
+        contentType.includes('application/json') &&
+        !contentType.includes('text/event-stream')
+      ) {
+        const payload = await readJsonResponse(response, 'Провайдер');
+        return parseOpenAIJsonPayload(payload, onToken);
+      }
       return readOpenAIStream(response, onToken);
     }
 
-    const payload = (await response.json()) as unknown;
-    if (!isRecord(payload)) {
-      throw new Error('Провайдер вернул неожиданный ответ');
-    }
-    const choices = Array.isArray(payload.choices) ? payload.choices : [];
-    const first = choices[0];
-    const message = isRecord(first) && isRecord(first.message) ? first.message : null;
-    if (!message) {
-      throw new Error('Провайдер вернул пустой ответ');
-    }
-
-    const text = typeof message.content === 'string' ? message.content : '';
-    const rawCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-    const toolCalls: AiToolCall[] = [];
-    rawCalls.forEach((rawCall, index) => {
-      if (!isRecord(rawCall)) return;
-      const fn = isRecord(rawCall.function) ? rawCall.function : null;
-      if (!fn || typeof fn.name !== 'string') return;
-      toolCalls.push({
-        id:
-          typeof rawCall.id === 'string' && rawCall.id
-            ? rawCall.id
-            : `openai_call_${index}`,
-        name: fn.name,
-        args: parseArgsObject(fn.arguments, fn.name),
-      });
-    });
-
-    if (text.trim() === '' && toolCalls.length === 0) {
-      throw new Error('Провайдер вернул пустой ответ');
-    }
-
-    return { text: text.trim(), toolCalls } satisfies AiProviderReply;
+    const payload = await readJsonResponse(response, 'Провайдер');
+    return parseOpenAIJsonPayload(payload);
   };
 }

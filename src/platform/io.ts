@@ -101,19 +101,27 @@ async function pickOpenFileViaInput(options?: {
     }
 
     let settled = false;
+    let cancelTimer: number | null = null;
     const finish = (value: OpenedFile | null) => {
       if (settled) return;
       settled = true;
+      if (cancelTimer !== null) {
+        window.clearTimeout(cancelTimer);
+        cancelTimer = null;
+      }
       window.removeEventListener('focus', handleFocusBack);
+      input.removeEventListener('cancel', handleCancel);
       resolve(value);
     };
 
+    const handleCancel = () => finish(null);
+
     const handleFocusBack = () => {
-      setTimeout(() => {
+      cancelTimer = window.setTimeout(() => {
         if (!settled && !input.files?.length) {
           finish(null);
         }
-      }, 300);
+      }, 1500);
     };
 
     input.onchange = async () => {
@@ -122,10 +130,15 @@ async function pickOpenFileViaInput(options?: {
         finish(null);
         return;
       }
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      finish({ name: file.name, bytes });
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        finish({ name: file.name, bytes });
+      } catch {
+        finish(null);
+      }
     };
 
+    input.addEventListener('cancel', handleCancel, { once: true });
     window.addEventListener('focus', handleFocusBack, { once: true });
     input.click();
   });
@@ -225,8 +238,12 @@ export async function writeAppConfigBytes(
   }
 
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(`locus-bytes:${relPath}`, bytesToBase64(data));
-    return;
+    try {
+      localStorage.setItem(`locus-bytes:${relPath}`, bytesToBase64(data));
+      return;
+    } catch {
+      // Fallback to memory cache on QuotaExceededError
+    }
   }
   MEMORY_BYTES_FALLBACK.set(relPath, data);
 }
@@ -259,8 +276,12 @@ export async function writeAppConfigText(
   }
 
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(`locus:${relPath}`, content);
-    return;
+    try {
+      localStorage.setItem(`locus:${relPath}`, content);
+      return;
+    } catch {
+      // Fallback to memory cache on QuotaExceededError
+    }
   }
   MEMORY_CONFIG_FALLBACK.set(relPath, content);
 }

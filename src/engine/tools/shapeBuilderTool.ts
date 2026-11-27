@@ -93,7 +93,10 @@ export function createShapeBuilderTool(): CanvasToolController {
     ctx.scope.view.update();
   };
 
+  let lastMode: 'merge' | 'erase' = 'merge';
+
   const reset = (ctx?: ToolContext) => {
+    cache = null;
     isDragging = false;
     dragMode = 'merge';
     hoveredRegionId = null;
@@ -132,7 +135,7 @@ export function createShapeBuilderTool(): CanvasToolController {
     onMouseDrag(event: ToolPointerEvent, ctx: ToolContext) {
       if (!isDragging) return;
       const current = ensureRegions();
-      dragMode = event.altKey ? 'erase' : dragMode;
+      dragMode = event.altKey ? 'erase' : 'merge';
 
       const prev = lastWorldPt ?? event.point;
       const dist = Math.hypot(event.point.x - prev.x, event.point.y - prev.y);
@@ -164,6 +167,7 @@ export function createShapeBuilderTool(): CanvasToolController {
 
     onMouseMove(event: ToolPointerEvent, ctx: ToolContext) {
       if (isDragging) return;
+      const hadRegions = Boolean(cache && cache.regions.length > 0);
       const current = ensureRegions();
       const mode: 'merge' | 'erase' = event.altKey ? 'erase' : 'merge';
       const scopePt = applyMatrixToPoint(current.invScopeMatrix, event.point);
@@ -171,10 +175,11 @@ export function createShapeBuilderTool(): CanvasToolController {
         current.regions.length > 0
           ? hitTestShapeBuilderRegions(ctx.scope, current.regions, scopePt)
           : null;
-      if (nextHover !== hoveredRegionId || current.regions.length > 0) {
+      if (nextHover !== hoveredRegionId || mode !== lastMode || (!hadRegions && current.regions.length > 0)) {
         hoveredRegionId = nextHover;
+        lastMode = mode;
         syncOverlay(ctx, current, mode);
-      } else {
+      } else if (current.regions.length === 0) {
         ctx.redrawOverlay({ shapeBuilder: null });
       }
     },

@@ -7,6 +7,40 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+export function extractPayloadError(payload: Record<string, unknown>): string | null {
+  const error = payload.error;
+  if (typeof error === 'string' && error.trim()) return error.trim();
+  if (isRecord(error) && typeof error.message === 'string' && error.message.trim()) {
+    return error.message.trim();
+  }
+  if (
+    payload.type === 'error' &&
+    typeof payload.message === 'string' &&
+    payload.message.trim()
+  ) {
+    return payload.message.trim();
+  }
+  return null;
+}
+
+export async function readJsonResponse(
+  response: Response,
+  providerLabel: string
+): Promise<unknown> {
+  const text = await response.text();
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error(`${providerLabel} вернул пустой ответ`);
+  }
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    throw new Error(
+      `${providerLabel} вернул некорректный JSON: ${trimmed.slice(0, 160)}`
+    );
+  }
+}
+
 export async function readHttpError(response: Response): Promise<string> {
   let text = '';
   try {

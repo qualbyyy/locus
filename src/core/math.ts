@@ -44,12 +44,15 @@ export function radToDeg(rad: number): number {
 }
 
 export function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
   return Math.min(max, Math.max(min, value));
 }
 
-function safeScale(scale: number): number {
-  if (Math.abs(scale) < ZERO_EPS) {
-    return scale < 0 ? -ZERO_EPS : ZERO_EPS;
+export function safeScale(scale: number): number {
+  if (!Number.isFinite(scale) || Math.abs(scale) < 1e-4) {
+    return scale < 0 ? -1e-4 : 1e-4;
   }
   return scale;
 }
@@ -101,16 +104,28 @@ function clampDecomposedScale(val: number): number {
 
 export function decomposeMatrix(m: Matrix2D): LayerTransform {
   const rawSx = Math.hypot(m.a, m.b);
+  const rawSyMag = Math.hypot(m.c, m.d);
   const det = m.a * m.d - m.b * m.c;
-  const safeSx = rawSx > ZERO_EPS ? rawSx : ZERO_EPS;
-  const rawSy = det / safeSx;
-  const rot = rawSx > ZERO_EPS ? radToDeg(Math.atan2(m.b, m.a)) : 0;
+  const sign = det < 0 ? -1 : 1;
+
+  let rot = 0;
+  let scaleX = rawSx;
+  let scaleY = rawSx > ZERO_EPS ? det / rawSx : rawSyMag * sign;
+
+  if (rawSx > ZERO_EPS) {
+    rot = radToDeg(Math.atan2(m.b, m.a));
+  } else if (rawSyMag > ZERO_EPS) {
+    rot = radToDeg(Math.atan2(-m.c, m.d));
+    scaleX = 0.02;
+    scaleY = rawSyMag;
+  }
+
   return {
-    x: m.tx,
-    y: m.ty,
-    rotation: Math.abs(rot) < 1e-9 ? 0 : rot,
-    scaleX: clampDecomposedScale(rawSx),
-    scaleY: clampDecomposedScale(rawSy),
+    x: Number.isFinite(m.tx) ? m.tx : 0,
+    y: Number.isFinite(m.ty) ? m.ty : 0,
+    rotation: Math.abs(rot) < 1e-9 || !Number.isFinite(rot) ? 0 : rot,
+    scaleX: clampDecomposedScale(scaleX),
+    scaleY: clampDecomposedScale(scaleY),
   };
 }
 
@@ -501,7 +516,28 @@ function estimateTextLocalBBox(layer: TextLayer): BBox {
   };
 }
 
-export function computeLayerLocalBBox(layer: Layer): BBox {
+function findHostPathAndParentMatrix(
+  layers: Layer[],
+  pathId: string,
+  parentM: Matrix2D = IDENTITY_MATRIX
+): { host: PathLayer; parentMatrix: Matrix2D } | null {
+  for (const layer of layers) {
+    if (layer.id === pathId && layer.type === 'path') {
+      return { host: layer, parentMatrix: parentM };
+    }
+    if (layer.type === 'group') {
+      const found = findHostPathAndParentMatrix(
+        layer.children,
+        pathId,
+        multiplyMatrices(parentM, getLayerMatrix(layer))
+      );
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+export function computeLayerLocalBBox(layer: Layer, sceneLayers?: Layer[]): BBox {
   if (layer.type === 'path') {
     return computeSubPathsBBox(layer.subpaths);
   }
@@ -509,7 +545,7 @@ export function computeLayerLocalBBox(layer: Layer): BBox {
     if (layer.children.length === 0) {
       return { x: 0, y: 0, width: 0, height: 0 };
     }
-    return computeCombinedWorldBBox(layer.children);
+    return computeCombinedWorldBBox(layer.children, sceneLayers ?? layer.children);
   }
   if (layer.type === 'image') {
     return {
@@ -518,6 +554,21 @@ export function computeLayerLocalBBox(layer: Layer): BBox {
       width: layer.width,
       height: layer.height,
     };
+  }
+  if (layer.type === 'text' && layer.pathId && sceneLayers) {
+    const found = findHostPathAndParentMatrix(sceneLayers, layer.pathId);
+    if (found) {
+      const hostWorldBox = computeLayerBBoxWithMatrix(found.host, found.parentMatrix, sceneLayers);
+      const pad = Math.max(4, layer.fontSize + Math.abs(layer.pathBaselineOffset ?? 0));
+      const invSelf = invertMatrix(getLayerMatrix(layer));
+      const shiftedBox = bboxFromMatrixRect(invSelf, {
+        x: hostWorldBox.x - pad,
+        y: hostWorldBox.y - pad,
+        width: hostWorldBox.width + pad * 2,
+        height: hostWorldBox.height + pad * 2,
+      });
+      return shiftedBox;
+    }
   }
   return estimateTextLocalBBox(layer);
 }
@@ -553,7 +604,8 @@ function bboxFromMatrixRect(m: Matrix2D, localBox: BBox): BBox {
 
 export function computeLayerBBoxWithMatrix(
   layer: Layer,
-  parentMatrix: Matrix2D
+  parentMatrix: Matrix2D,
+  sceneLayers?: Layer[]
 ): BBox {
   const worldM = multiplyMatrices(parentMatrix, getLayerMatrix(layer));
   if (layer.type === 'group') {
@@ -565,7 +617,7 @@ export function computeLayerBBoxWithMatrix(
     let maxX = -Infinity;
     let maxY = -Infinity;
     for (const child of layer.children) {
-      const b = computeLayerBBoxWithMatrix(child, worldM);
+      const b = computeLayerBBoxWithMatrix(child, worldM, sceneLayers);
       if (b.x < minX) minX = b.x;
       if (b.y < minY) minY = b.y;
       if (b.x + b.width > maxX) maxX = b.x + b.width;
@@ -582,14 +634,39 @@ export function computeLayerBBoxWithMatrix(
     }
     return computeSubPathsBBoxWithMatrix(layer.subpaths, worldM);
   }
-  return bboxFromMatrixRect(worldM, computeLayerLocalBBox(layer));
+  if (layer.type === 'text' && layer.pathId && sceneLayers) {
+    const found = findHostPathAndParentMatrix(sceneLayers, layer.pathId);
+    if (found) {
+      const hostWorldBox = computeLayerBBoxWithMatrix(found.host, found.parentMatrix, sceneLayers);
+      const pad = Math.max(4, layer.fontSize + Math.abs(layer.pathBaselineOffset ?? 0));
+      return {
+        x: hostWorldBox.x - pad,
+        y: hostWorldBox.y - pad,
+        width: hostWorldBox.width + pad * 2,
+        height: hostWorldBox.height + pad * 2,
+      };
+    }
+  }
+  return bboxFromMatrixRect(worldM, estimateTextOrImageLocal(layer));
 }
 
-export function computeLayerWorldBBox(layer: Layer): BBox {
-  return computeLayerBBoxWithMatrix(layer, IDENTITY_MATRIX);
+function estimateTextOrImageLocal(layer: Exclude<Layer, { type: 'path' | 'group' }>): BBox {
+  if (layer.type === 'image') {
+    return {
+      x: -layer.width / 2,
+      y: -layer.height / 2,
+      width: layer.width,
+      height: layer.height,
+    };
+  }
+  return estimateTextLocalBBox(layer);
 }
 
-export function computeCombinedWorldBBox(layers: Layer[]): BBox {
+export function computeLayerWorldBBox(layer: Layer, sceneLayers?: Layer[]): BBox {
+  return computeLayerBBoxWithMatrix(layer, IDENTITY_MATRIX, sceneLayers);
+}
+
+export function computeCombinedWorldBBox(layers: Layer[], sceneLayers?: Layer[]): BBox {
   if (layers.length === 0) {
     return { x: 0, y: 0, width: 0, height: 0 };
   }
@@ -600,7 +677,7 @@ export function computeCombinedWorldBBox(layers: Layer[]): BBox {
   let maxY = -Infinity;
 
   for (const layer of layers) {
-    const b = computeLayerWorldBBox(layer);
+    const b = computeLayerWorldBBox(layer, sceneLayers ?? layers);
     if (b.x < minX) minX = b.x;
     if (b.y < minY) minY = b.y;
     if (b.x + b.width > maxX) maxX = b.x + b.width;

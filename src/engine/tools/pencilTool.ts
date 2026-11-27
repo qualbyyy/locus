@@ -3,6 +3,7 @@ import { flattenLayers, getScopeWorldMatrix } from '../../core/layerTree';
 import {
   applyMatrixToPoint,
   centerSubPathsAtOrigin,
+  decomposeMatrix,
   invertMatrix,
 } from '../../core/math';
 import { clonePaint, cloneStroke } from '../../core/paint';
@@ -83,9 +84,11 @@ export function createPencilTool(): CanvasToolController {
         getScopeWorldMatrix(state.scene.layers, state.editingGroupId)
       );
       const scopedPoints = rawPoints.map((p) => applyMatrixToPoint(invScope, p));
+      const invDecomp = decomposeMatrix(invScope);
+      const scopeScale = Math.max(0.05, (Math.abs(invDecomp.scaleX) + Math.abs(invDecomp.scaleY)) / 2);
 
       const fitted = fitFreehandSubPath(scopedPoints, {
-        tolerance: state.pencilSmoothness,
+        tolerance: state.pencilSmoothness * scopeScale,
         closed,
       });
       if (!fitted) return;
